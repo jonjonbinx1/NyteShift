@@ -1,0 +1,66 @@
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import matter from "gray-matter";
+
+import type { Skill, SkillFrontmatter } from "../../types/index.js";
+import { skillsDir, readTextFile, pathExists } from "../../utils/index.js";
+
+/**
+ * Scans ~/.solix/skills for skill.md files.
+ *
+ * Expected layout:
+ *   ~/.solix/skills/<contributor>/<skill-name>/skill.md
+ */
+export async function loadSkills(): Promise<Skill[]> {
+  const root = skillsDir();
+  if (!(await pathExists(root))) return [];
+
+  const skills: Skill[] = [];
+  const contributors = await readdir(root);
+
+  for (const contributor of contributors) {
+    const contributorDir = join(root, contributor);
+    const cStat = await stat(contributorDir);
+    if (!cStat.isDirectory()) continue;
+
+    const skillDirs = await readdir(contributorDir);
+    for (const skillDir of skillDirs) {
+      const skillPath = join(contributorDir, skillDir, "skill.md");
+      if (!(await pathExists(skillPath))) continue;
+
+      try {
+        const raw = await readTextFile(skillPath);
+        const parsed = matter(raw);
+        const fm = parsed.data as SkillFrontmatter;
+
+        if (!fm.name || !fm.version || !fm.contributor) {
+          console.warn(`[SkillLoader] Invalid frontmatter in ${skillPath}, skipping.`);
+          continue;
+        }
+
+        skills.push({
+          frontmatter: {
+            name: fm.name,
+            version: fm.version,
+            contributor: fm.contributor,
+            description: fm.description ?? "",
+          },
+          body: parsed.content.trim(),
+          filePath: skillPath,
+        });
+      } catch (err) {
+        console.warn(`[SkillLoader] Failed to parse ${skillPath}:`, err);
+      }
+    }
+  }
+
+  return skills;
+}
+
+/** Look up a single skill by `<contributor>/<skill-name>`. */
+export async function getSkill(qualifiedName: string): Promise<Skill | undefined> {
+  const skills = await loadSkills();
+  return skills.find(
+    (s) => `${s.frontmatter.contributor}/${s.frontmatter.name}` === qualifiedName,
+  );
+}
