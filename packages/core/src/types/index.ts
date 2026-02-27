@@ -48,6 +48,13 @@ export interface SkillFrontmatter {
   version: string;
   contributor: string;
   description: string;
+  tags?: string[];
+  /**
+   * Optional JSON-Schema-compatible object describing the inputs, outputs and
+   * post-action verify hints for this skill.  Consumed by the core runtime
+   * for documentation and validation purposes.
+   */
+  schema?: Record<string, unknown>;
 }
 
 export interface Skill {
@@ -64,11 +71,38 @@ export interface ToolRunContext {
   context: Record<string, unknown>;
 }
 
+/**
+ * Lightweight interface contract published by each tool so the runtime can
+ * validate calls before execution and verify outcomes afterwards.
+ */
+export interface ToolSpec {
+  /**
+   * JSON Schema object (draft-07 compatible) describing the expected shape of
+   * the `input` parameter passed to `run()`.  At minimum, declare `required`
+   * fields and `properties` with `type` / `enum` constraints.
+   */
+  inputSchema?: Record<string, unknown>;
+  /** JSON Schema object describing the shape of the resolved return value. */
+  outputSchema?: Record<string, unknown>;
+  /**
+   * Qualified tool names (e.g. `"base/filesystem"`) to invoke after a
+   * successful call for post-action verification.  Each verify tool is called
+   * with the same input so side-effects can be confirmed without extra model
+   * reasoning.
+   */
+  verify?: string[];
+}
+
 export interface ToolContract {
   name: string;
   version: string;
   contributor: string;
   description: string;
+  /**
+   * Optional interface spec.  Tools that omit this will still load but will
+   * generate a warning and forfeit input validation.
+   */
+  spec?: ToolSpec;
   run(ctx: ToolRunContext): Promise<unknown>;
 }
 
@@ -112,6 +146,8 @@ export interface AutonomousTaskOptions {
   maxSteps?: number;
   signal?: AbortSignal;
   onStep?: (step: PipelineStep) => void;
+  /** Prior conversation turns to prepend so the agent retains context. */
+  chatHistory?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
 export interface PipelineStep {

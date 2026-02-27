@@ -39,6 +39,13 @@ export async function loadTools(): Promise<ToolContract[]> {
           continue;
         }
 
+        if (!contract.spec) {
+          console.warn(
+            `[ToolLoader] Tool "${contract.contributor}/${contract.name}" has no spec — ` +
+            `input validation will be skipped.  Add a spec.inputSchema to enable it.`,
+          );
+        }
+
         tools.push(contract);
       } catch (err) {
         console.warn(`[ToolLoader] Failed to import ${toolPath}:`, err);

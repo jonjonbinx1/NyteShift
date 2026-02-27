@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { useChatStore } from "../stores/ChatStore.js";
 import type { ChatMessageInfo, ChatSessionSummaryInfo } from "../global.js";
+import { AgentSettingsModal } from "../components/AgentSettingsModal.js";
 
 // ── Catppuccin Mocha palette tokens ────────────────────────────────────────
 const C = {
@@ -243,6 +244,7 @@ export function AgentDetail(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [soulOpen, setSoulOpen] = useState(false);
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
 
   // Provider / model
   const [providers, setProviders] = useState<Array<{ id: string }>>([]);
@@ -382,12 +384,20 @@ export function AgentDetail(): React.JSX.Element {
     chatStore.setRunning(name, sessionId, true);
 
     try {
+      // Build history from prior messages in the session (exclude the user
+      // message we just pushed — it becomes the `task` arg itself).
+      const priorMessages = chatStore.getMessages(name, sessionId).slice(0, -1);
+      const chatHistory = priorMessages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
       const res = await window.solixApi!.runAutonomous(name, taskText, {
         provider: selProvider || undefined,
         model: selModel || undefined,
         temperature: parseFloat(temperature) || undefined,
         maxTokens: parseInt(maxTokens, 10) || undefined,
         sessionId,
+        chatHistory: chatHistory.length > 0 ? chatHistory : undefined,
       });
       const assistantMsg: ChatMessageInfo = {
         id: crypto.randomUUID(),
@@ -424,11 +434,19 @@ export function AgentDetail(): React.JSX.Element {
 
   return (
     <>
-      {/* Inject keyframe animation for typing dots */}
+      {/* Inject keyframe animations */}
       <style>{`
         @keyframes solixBounce {
           0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
           30% { transform: translateY(-6px); opacity: 1; }
+        }
+        @keyframes solixSpin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+        @keyframes solixPulse {
+          0%, 100% { opacity: 0.15; }
+          50%       { opacity: 0.45; }
         }
       `}</style>
 
@@ -557,13 +575,24 @@ export function AgentDetail(): React.JSX.Element {
               </div>
             </div>
 
-            {/* Save button */}
-            <div style={{ padding: "10px 14px", borderTop: `1px solid ${C.surface0}`, flexShrink: 0 }}>
+            {/* Save button + Configure button */}
+            <div style={{ padding: "10px 14px", borderTop: `1px solid ${C.surface0}`, flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
               <button
                 onClick={handleSaveSettings}
                 style={{ ...primaryBtn, width: "100%", opacity: savedSettings ? 0.85 : 1 }}
               >
                 {savedSettings ? "✓ Saved!" : "Save Settings"}
+              </button>
+              <button
+                onClick={() => setAgentSettingsOpen(true)}
+                style={{
+                  ...ghostBtn, width: "100%", justifyContent: "center",
+                  padding: "7px 12px", color: C.mauve,
+                  border: `1px solid rgba(203,166,247,0.3)`,
+                }}
+              >
+                <span>⚙</span>
+                <span>Configure Agent…</span>
               </button>
             </div>
           </aside>
@@ -690,9 +719,9 @@ export function AgentDetail(): React.JSX.Element {
                       {msg.content}
                     </div>
 
-                    {/* Step details (collapsible) */}
+                    {/* Plan execution widget */}
                     {msg.role === "assistant" && msg.steps && msg.steps.length > 0 && (
-                      <StepDetails steps={msg.steps} />
+                      <PlanExecutionWidget steps={msg.steps} thinking={msg.thinking} />
                     )}
                   </div>
                 </div>
@@ -705,24 +734,8 @@ export function AgentDetail(): React.JSX.Element {
               </div>
             ))}
 
-            {/* Typing indicator */}
-            {running && (
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-                <div style={{
-                  width: 30, height: 30, borderRadius: "50%", background: C.surface0,
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14,
-                }}>
-                  🤖
-                </div>
-                <div style={{
-                  padding: "8px 14px",
-                  borderRadius: "18px 18px 18px 4px",
-                  background: C.surface0,
-                }}>
-                  <TypingIndicator />
-                </div>
-              </div>
-            )}
+            {/* Live execution bar */}
+            {running && <LiveExecutionBar />}
             <div ref={chatEndRef} />
           </div>
 
@@ -857,32 +870,348 @@ export function AgentDetail(): React.JSX.Element {
           </aside>
         )}
       </div>
+
+      {/* Agent configuration modal */}
+      {agentSettingsOpen && name && (
+        <AgentSettingsModal agentName={name} onClose={() => setAgentSettingsOpen(false)} />
+      )}
     </>
   );
 }
 
-// ── Step details (collapsible under assistant messages) ──────────────────────
-function StepDetails({ steps }: { steps: Array<{ index: number; action: string; output: unknown; thinking?: string }> }) {
-  const [open, setOpen] = useState(false);
+// ── Live Execution Bar (shown while agent is running) ─────────────────────────
+function LiveExecutionBar() {
+  const [phase, setPhase] = useState(0);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const phases = [
+    "Analyzing request…",
+    "Planning steps…",
+    "Executing tools…",
+    "Processing results…",
+    "Refining output…",
+  ];
+  useEffect(() => {
+    const id = setInterval(() => setPhase((p) => (p + 1) % phases.length), 2000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
-    <div style={{ marginTop: 6 }}>
-      <button
-        onClick={() => setOpen((x) => !x)}
-        style={{
-          background: "none", border: "none", cursor: "pointer",
-          color: C.blue, fontSize: 11, padding: 0,
-          display: "flex", alignItems: "center", gap: 4,
-        }}
-      >
-        <span style={{ fontSize: 9 }}>{open ? "▼" : "▶"}</span>
-        <span>{steps.length} step{steps.length !== 1 ? "s" : ""}</span>
-      </button>
-      {open && (
-        <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
-          {steps.map((s) => <StepCard key={s.index} step={s} />)}
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+      <div style={{
+        width: 30, height: 30, borderRadius: "50%", background: C.surface0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 14, flexShrink: 0, marginTop: 2,
+      }}>🤖</div>
+      <div style={{
+        flex: 1, background: C.surface0,
+        borderRadius: "18px 18px 18px 4px",
+        border: `1px solid ${C.surface1}`,
+        overflow: "hidden",
+      }}>
+        {/* Step row */}
+        <div style={{
+          padding: "8px 14px",
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          {/* Spinner */}
+          <span style={{
+            display: "inline-block", width: 12, height: 12,
+            border: `2px solid ${C.surface1}`, borderTop: `2px solid ${C.mauve}`,
+            borderRadius: "50%", flexShrink: 0,
+            animation: "solixSpin 0.8s linear infinite",
+          }} />
+          <span style={{ fontSize: 13, color: C.text, flex: 1, transition: "opacity 0.3s" }}>
+            {phases[phase]}
+          </span>
+          {/* Reasoning toggle (Copilot-style) */}
+          <button
+            onClick={() => setThinkingOpen((x) => !x)}
+            style={{
+              background: thinkingOpen ? "rgba(203,166,247,0.12)" : "none",
+              border: `1px solid ${thinkingOpen ? "rgba(203,166,247,0.3)" : C.surface1}`,
+              cursor: "pointer", color: C.mauve, fontSize: 11, padding: "3px 10px",
+              borderRadius: 20, display: "flex", alignItems: "center", gap: 5,
+              transition: "background 0.15s, border-color 0.15s",
+            }}
+          >
+            <span style={{ fontSize: 10 }}>{thinkingOpen ? "▼" : "▶"}</span>
+            <span>Reasoning</span>
+          </button>
         </div>
-      )}
+        {/* Inline reasoning */}
+        {thinkingOpen && (
+          <div style={{
+            borderTop: `1px solid ${C.surface1}`,
+            padding: "8px 14px",
+            display: "flex", flexDirection: "column", gap: 6,
+          }}>
+            {[100, 80, 60].map((w, i) => (
+              <div key={i} style={{
+                height: 8, borderRadius: 4,
+                background: `rgba(203,166,247,0.1)`,
+                width: `${w}%`,
+                animation: `solixPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
+              }} />
+            ))}
+            <span style={{ fontSize: 11, color: C.overlay0, fontStyle: "italic" }}>
+              Thinking in progress…
+            </span>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+// ── Plan Execution Full Modal ─────────────────────────────────────────────────
+function PlanFullModal({
+  steps, thinking, onClose,
+}: {
+  steps: Array<{ index: number; action: string; output: unknown; thinking?: string }>;
+  thinking?: string;
+  onClose: () => void;
+}) {
+  const [expandedStep, setExpandedStep] = useState<number | null>(null);
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 300,
+        background: "rgba(17,17,27,0.88)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{
+        background: C.base, color: C.text, borderRadius: 14,
+        width: "min(700px,100%)", maxHeight: "85vh",
+        display: "flex", flexDirection: "column",
+        boxShadow: "0 16px 64px rgba(0,0,0,0.6)",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        border: `1px solid ${C.surface0}`,
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "14px 20px", borderBottom: `1px solid ${C.surface0}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: C.mantle, borderRadius: "14px 14px 0 0", flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18 }}>📋</span>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>Plan Execution</span>
+            <span style={{
+              fontSize: 11, padding: "2px 10px", borderRadius: 20,
+              background: "rgba(166,227,161,0.15)", color: C.green, fontWeight: 700,
+            }}>
+              {steps.length} step{steps.length !== 1 ? "s" : ""} · completed
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none", border: "none", color: C.overlay0,
+              fontSize: 18, cursor: "pointer", padding: "4px 8px", borderRadius: 6, lineHeight: 1,
+            }}
+          >✕</button>
+        </div>
+
+        {/* Overview */}
+        {thinking && (
+          <div style={{ padding: "12px 20px", borderBottom: `1px solid ${C.surface0}`, flexShrink: 0 }}>
+            <ThinkingBlock text={thinking} />
+          </div>
+        )}
+
+        {/* Steps list */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {steps.map((step) => {
+            const isExpanded = expandedStep === step.index;
+            return (
+              <div
+                key={step.index}
+                style={{
+                  background: C.mantle, borderRadius: 10,
+                  border: isExpanded ? `1px solid rgba(203,166,247,0.25)` : `1px solid ${C.surface0}`,
+                  overflow: "hidden", transition: "border-color 0.15s",
+                }}
+              >
+                <button
+                  onClick={() => setExpandedStep(isExpanded ? null : step.index)}
+                  style={{
+                    width: "100%", background: "none", border: "none", cursor: "pointer",
+                    padding: "10px 14px", display: "flex", alignItems: "center", gap: 10,
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{
+                    width: 24, height: 24, borderRadius: "50%", flexShrink: 0,
+                    background: "rgba(166,227,161,0.18)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 11, fontWeight: 700, color: C.green,
+                  }}>
+                    {step.index + 1}
+                  </span>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: C.text }}>
+                    {step.action}
+                  </span>
+                  {step.thinking && (
+                    <span style={{
+                      fontSize: 10, padding: "2px 8px", borderRadius: 20,
+                      background: "rgba(203,166,247,0.1)", color: C.mauve,
+                    }}>💭</span>
+                  )}
+                  <span style={{ fontSize: 10, color: C.overlay0 }}>{isExpanded ? "▼" : "▶"}</span>
+                </button>
+                {isExpanded && (
+                  <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.surface0}`, marginTop: 0 }}>
+                    {step.thinking && (
+                      <div style={{
+                        margin: "10px 0", padding: "8px 12px",
+                        background: "rgba(203,166,247,0.06)",
+                        border: `1px solid rgba(203,166,247,0.15)`, borderRadius: 8,
+                        fontSize: 12, color: C.subtext0, fontFamily: "monospace",
+                        lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                        maxHeight: 200, overflowY: "auto",
+                      }}>
+                        💭 {step.thinking}
+                      </div>
+                    )}
+                    <div style={{
+                      fontSize: 12, color: C.text, whiteSpace: "pre-wrap",
+                      wordBreak: "break-word", fontFamily: "monospace",
+                      background: C.surface0, borderRadius: 6, padding: "8px 10px",
+                      maxHeight: 300, overflowY: "auto",
+                    }}>
+                      {typeof step.output === "string"
+                        ? step.output
+                        : JSON.stringify(step.output, null, 2)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Plan Execution Widget (compact, under each completed assistant message) ───
+function PlanExecutionWidget({
+  steps, thinking,
+}: {
+  steps: Array<{ index: number; action: string; output: unknown; thinking?: string }>;
+  thinking?: string;
+}) {
+  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const lastStep = steps[steps.length - 1];
+  const stepThinking = lastStep?.thinking || thinking;
+
+  return (
+    <>
+      <div style={{
+        marginTop: 8, background: C.mantle,
+        border: `1px solid ${C.surface0}`, borderRadius: 10,
+        overflow: "hidden", fontSize: 12,
+      }}>
+        {/* Compact status row */}
+        <div style={{
+          padding: "7px 12px",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          {/* Step count badge */}
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            padding: "2px 8px", borderRadius: 20,
+            background: "rgba(166,227,161,0.15)", color: C.green,
+            fontSize: 10, fontWeight: 700, flexShrink: 0,
+          }}>
+            ✓ {steps.length} step{steps.length !== 1 ? "s" : ""}
+          </span>
+
+          {/* Last step title */}
+          <span style={{
+            flex: 1, color: C.subtext0, overflow: "hidden",
+            textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {lastStep?.action || "Plan completed"}
+          </span>
+
+          {/* Reasoning toggle (Copilot-style) */}
+          {stepThinking && (
+            <button
+              onClick={() => setReasoningOpen((x) => !x)}
+              style={{
+                background: reasoningOpen ? "rgba(203,166,247,0.12)" : "none",
+                border: `1px solid ${reasoningOpen ? "rgba(203,166,247,0.3)" : C.surface0}`,
+                cursor: "pointer", color: C.mauve, fontSize: 10, padding: "3px 10px",
+                borderRadius: 20, display: "flex", alignItems: "center", gap: 5,
+                flexShrink: 0, transition: "background 0.15s, border-color 0.15s",
+              }}
+              title={reasoningOpen ? "Hide reasoning" : "Show reasoning"}
+            >
+              <span style={{ fontSize: 9 }}>{reasoningOpen ? "▼" : "▶"}</span>
+              <span>💭 Reasoning</span>
+              {!reasoningOpen && (
+                <span style={{ color: C.overlay0 }}>
+                  ({stepThinking.length > 200
+                    ? `${Math.ceil(stepThinking.length / 100) * 100}+ chars`
+                    : `${stepThinking.length} chars`})
+                </span>
+              )}
+            </button>
+          )}
+
+          {/* View full plan */}
+          <button
+            onClick={() => setPlanModalOpen(true)}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: C.blue, fontSize: 11, padding: "3px 8px",
+              borderRadius: 6, flexShrink: 0,
+              transition: "color 0.12s",
+            }}
+            title="View full plan execution"
+          >
+            View plan →
+          </button>
+        </div>
+
+        {/* Inline reasoning (Copilot-style collapsible) */}
+        {reasoningOpen && stepThinking && (
+          <div style={{
+            borderTop: `1px solid ${C.surface0}`,
+            padding: "10px 12px",
+            background: "rgba(203,166,247,0.04)",
+            fontSize: 12, color: C.subtext1,
+            fontFamily: "monospace", lineHeight: 1.7,
+            whiteSpace: "pre-wrap", wordBreak: "break-word",
+            maxHeight: 200, overflowY: "auto",
+            borderRadius: "0 0 10px 10px",
+          }}>
+            {stepThinking}
+          </div>
+        )}
+      </div>
+
+      {/* Full plan modal */}
+      {planModalOpen && (
+        <PlanFullModal
+          steps={steps}
+          thinking={thinking}
+          onClose={() => setPlanModalOpen(false)}
+        />
+      )}
+    </>
   );
 }
 

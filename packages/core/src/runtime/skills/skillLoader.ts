@@ -38,12 +38,21 @@ export async function loadSkills(): Promise<Skill[]> {
           continue;
         }
 
+        if (!fm.schema) {
+          console.warn(
+            `[SkillLoader] Skill "${fm.contributor}/${fm.name}" has no schema block — ` +
+            `add an inputs/outputs/verify section to enable contract validation.`,
+          );
+        }
+
         skills.push({
           frontmatter: {
             name: fm.name,
             version: fm.version,
             contributor: fm.contributor,
             description: fm.description ?? "",
+            tags: Array.isArray(fm.tags) ? fm.tags : undefined,
+            schema: fm.schema ?? undefined,
           },
           body: parsed.content.trim(),
           filePath: skillPath,

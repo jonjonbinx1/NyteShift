@@ -54,7 +54,7 @@ contextBridge.exposeInMainWorld("solixApi", {
   listProviderModels: (providerId: string) => ipcRenderer.invoke("providers:listModels", providerId),
 
   // Run
-  runAutonomous: (name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; sessionId?: string }) =>
+  runAutonomous: (name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) =>
     ipcRenderer.invoke("run:autonomous", name, task, opts),
   getRunStatus: (agentName: string) => ipcRenderer.invoke("run:status", agentName),
   clearRun: (runId: string) => ipcRenderer.invoke("run:clear", runId),

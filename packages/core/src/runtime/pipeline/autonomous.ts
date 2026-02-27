@@ -57,7 +57,56 @@ function stripThinkingTags(text: string): { content: string; thinking: string } 
   });
   return { content: cleaned.trim(), thinking };
 }
+// ── Tool-call input validator ────────────────────────────────────────────────────
 
+/**
+ * Validates a tool call’s input object against the tool’s inputSchema.
+ * Checks required fields and, where provided, type / enum constraints.
+ * Returns an array of human-readable error strings; empty means valid.
+ */
+function validateToolInput(
+  input: Record<string, unknown>,
+  inputSchema: Record<string, unknown>,
+): string[] {
+  const errors: string[] = [];
+  const properties = inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
+  const required   = inputSchema.required   as string[] | undefined;
+
+  // Required-field check.
+  if (required) {
+    for (const field of required) {
+      if (input[field] === undefined || input[field] === null) {
+        errors.push(`Missing required field: "${field}"`);
+      }
+    }
+  }
+
+  // Per-property type / enum checks.
+  if (properties) {
+    for (const [key, schema] of Object.entries(properties)) {
+      if (input[key] === undefined) continue;
+
+      const allowedValues = schema.enum as unknown[] | undefined;
+      if (allowedValues && !allowedValues.includes(input[key])) {
+        errors.push(
+          `Field "${key}" must be one of: ${allowedValues.join(", ")} (got "${input[key]}")`,
+        );
+      }
+
+      const expectedType = schema.type as string | undefined;
+      if (expectedType && expectedType !== "array" && expectedType !== "object") {
+        // eslint-disable-next-line valid-typeof
+        if (typeof input[key] !== expectedType) {
+          errors.push(
+            `Field "${key}" must be of type ${expectedType} (got ${typeof input[key]})`,
+          );
+        }
+      }
+    }
+  }
+
+  return errors;
+}
 // ── System-prompt builder ──────────────────────────────────────────────────
 
 /**
@@ -217,7 +266,31 @@ export async function runAutonomousTask(
     .map((s) => `• ${s.frontmatter.contributor}/${s.frontmatter.name}: ${s.frontmatter.description}`)
     .join("\n");
   const toolList = tools
-    .map((t) => `• ${t.contributor}/${t.name}: ${t.description}`)
+    .map((t) => {
+      let entry = `• ${t.contributor}/${t.name}: ${t.description}`;
+
+      // Append parameter information from the tool spec so the model knows
+      // exactly which field names and values are accepted.
+      if (t.spec?.inputSchema) {
+        const schema   = t.spec.inputSchema as Record<string, unknown>;
+        const required = schema.required as string[] | undefined;
+        const props    = schema.properties as Record<string, Record<string, unknown>> | undefined;
+        if (props) {
+          const params = Object.entries(props)
+            .map(([k, v]) => {
+              const req      = required?.includes(k) ? " (required)" : " (optional)";
+              const typeInfo = v.enum
+                ? `one of: ${(v.enum as unknown[]).join(", ")}`
+                : (v.type as string ?? "any");
+              return `    - ${k}${req}: ${typeInfo}`;
+            })
+            .join("\n");
+          entry += `\n  Parameters:\n${params}`;
+        }
+      }
+
+      return entry;
+    })
     .join("\n");
 
   // ── Build opening conversation ────────────────────────────────────────
@@ -225,13 +298,23 @@ export async function runAutonomousTask(
   // Soul personality is injected *into* the system prompt (as a Persona
   // section) rather than as a separate message — this follows Anthropic's
   // guidance to keep all behavioural instructions in the system message.
+  //
+  // Prior conversation history (user/assistant turns from the chat session)
+  // is injected between the system prompt and the current user message so
+  // the model retains full context across turns.
+  const historyMessages: Message[] = (options.chatHistory ?? []).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
   let messages: Message[] = [
     { role: "system", content: buildSystemPrompt(skillList, toolList, maxSteps) },
+    ...historyMessages,
     { role: "user",   content: task },
   ];
   messages = await injectSoul(agentName, messages);
 
-  log(`  conversation primed — ${messages.length} message(s)`);
+  log(`  conversation primed — ${messages.length} message(s) (history=${historyMessages.length})`);
   log(`  system prompt length: ${messages[0]?.content?.length ?? 0} chars`);
   log(`  user message: "${task.slice(0, 150).replace(/\n/g, "↵")}"`);
 
@@ -356,14 +439,91 @@ export async function runAutonomousTask(
         toolOutput = `Tool "${toolCall.name}" not found. Available tools: ${available}`;
         logW(`  tool "${toolCall.name}" not found`);
       } else {
+        // ── Input validation ─────────────────────────────────────────────
+        if (toolDef.spec?.inputSchema) {
+          const validationErrors = validateToolInput(
+            toolCall.input as Record<string, unknown>,
+            toolDef.spec.inputSchema,
+          );
+          if (validationErrors.length > 0) {
+            const validationMsg = [
+              `Tool "${toolDef.contributor}/${toolDef.name}" call rejected — invalid input:`,
+              ...validationErrors.map((e) => `  • ${e}`),
+              `Re-read the tool’s parameter list in the system prompt and correct your call.`,
+            ].join("\n");
+            logW(`  input validation failed (${validationErrors.length} error(s)):`, validationErrors);
+            messages.push({ role: "user", content: `<tool_result>\n${validationMsg}\n</tool_result>` });
+            log(`  validation error injected — continuing to step ${i + 2}`);
+            continue;
+          }
+        }
+
         log(`  executing tool "${toolDef.name}"…`);
         try {
           const rawResult = await toolDef.run({ input: toolCall.input, context: {} });
-          toolOutput =
-            typeof rawResult === "string"
-              ? rawResult
-              : JSON.stringify(rawResult, null, 2);
-          log(`  tool result (${toolOutput.length} chars): "${toolOutput.slice(0, 200).replace(/\n/g, "↵")}"`);
+
+          // ── ok:false guard ─────────────────────────────────────────────
+          const resultObj =
+            typeof rawResult === "object" && rawResult !== null
+              ? (rawResult as Record<string, unknown>)
+              : null;
+
+          if (resultObj && resultObj.ok === false) {
+            const errDetail =
+              typeof resultObj.error === "string"
+                ? resultObj.error
+                : JSON.stringify(rawResult, null, 2);
+            toolOutput = [
+              `Tool "${toolDef.contributor}/${toolDef.name}" returned a failure:`,
+              errDetail,
+              `You MUST handle this error.  Do NOT claim success.  Try an alternative approach or explain clearly what went wrong.`,
+            ].join("\n");
+            logW(`  tool returned ok=false — ${errDetail}`);
+          } else {
+            toolOutput =
+              typeof rawResult === "string"
+                ? rawResult
+                : JSON.stringify(rawResult, null, 2);
+            log(`  tool result (${toolOutput.length} chars): "${toolOutput.slice(0, 200).replace(/\n/g, "↵")}"`);
+
+            // ── Post-action verify ────────────────────────────────────────
+            if (toolDef.spec?.verify?.length) {
+              const verifyResults: string[] = [];
+              for (const verifyName of toolDef.spec.verify) {
+                const verifyTool = tools.find(
+                  (t) => t.name === verifyName || `${t.contributor}/${t.name}` === verifyName,
+                );
+                if (!verifyTool) {
+                  logW(`  verify tool "${verifyName}" not found — skipping`);
+                  continue;
+                }
+                try {
+                  const vResult = await verifyTool.run({ input: toolCall.input, context: {} });
+                  const vStr =
+                    typeof vResult === "string" ? vResult : JSON.stringify(vResult, null, 2);
+                  const vObj =
+                    typeof vResult === "object" && vResult !== null
+                      ? (vResult as Record<string, unknown>)
+                      : null;
+                  if (vObj && vObj.ok === false) {
+                    verifyResults.push(`⚠ Verify "${verifyName}" FAILED: ${vObj.error ?? vStr}`);
+                    logW(`  verify "${verifyName}" failed — ${vObj.error ?? vStr}`);
+                  } else {
+                    verifyResults.push(`✓ Verify "${verifyName}" passed.`);
+                    log(`  verify "${verifyName}" passed`);
+                  }
+                } catch (vErr) {
+                  verifyResults.push(
+                    `⚠ Verify "${verifyName}" threw: ${(vErr as Error).message}`,
+                  );
+                  logW(`  verify "${verifyName}" error:`, vErr);
+                }
+              }
+              if (verifyResults.length) {
+                toolOutput += `\n\nVerification:\n${verifyResults.join("\n")}`;
+              }
+            }
+          }
         } catch (toolErr) {
           toolOutput = `Error running tool "${toolDef.name}": ${(toolErr as Error).message}`;
           logE(`  tool execution error:`, toolErr);

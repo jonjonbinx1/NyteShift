@@ -62,7 +62,7 @@ interface ChatStoreAPI {
   getSessionList(agentName: string): ChatSessionSummaryInfo[];
 }
 
-const ChatStoreContext = createContext<ChatStoreAPI | null>(null);
+const ChatStoreContext = createContext<{ api: ChatStoreAPI; v: number } | null>(null);
 
 // ── Provider ───────────────────────────────────────────────────────────
 
@@ -91,8 +91,8 @@ function createEmptySession(agentName: string): ChatSessionInfo {
 }
 
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
-  const [, forceRender] = useState(0);
-  const bump = useCallback(() => forceRender((n) => n + 1), []);
+  const [version, setVersion] = useState(0);
+  const bump = useCallback(() => setVersion((n) => n + 1), []);
 
   // Mutable refs so callbacks always see current state without stale closures
   const stateRef = useRef<ChatStoreState>({
@@ -287,7 +287,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [bump]);
 
   return (
-    <ChatStoreContext.Provider value={api}>
+    <ChatStoreContext.Provider value={{ api, v: version }}>
       {children}
     </ChatStoreContext.Provider>
   );
@@ -298,5 +298,5 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 export function useChatStore(): ChatStoreAPI {
   const ctx = useContext(ChatStoreContext);
   if (!ctx) throw new Error("useChatStore must be used within <ChatStoreProvider>");
-  return ctx;
+  return ctx.api;
 }
