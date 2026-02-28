@@ -39,10 +39,10 @@ export function registerUiCommands(program: Command): void {
       const uiDir = existsSync(fromBin) ? fromBin : existsSync(fromCwd) ? fromCwd : null;
 
       if (uiDir) {
-        // Use preview mode — runs the production build (dist/), not the dev server
-        runCommand("pnpm", ["--filter", "@solix/ui", "preview"], {
-          cwd: path.resolve(uiDir, "../..")
-        });
+        // Use 'dev' mode if no dist exists yet, otherwise 'preview' (production build)
+        const hasDist = existsSync(path.join(uiDir, "dist", "main", "main.js"));
+        const script = hasDist ? "preview" : "dev";
+        runCommand("npm", ["run", script], { cwd: uiDir });
       } else {
         console.error("Could not find packages/ui. Run from the SolixAI workspace root.");
         process.exit(1);

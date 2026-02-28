@@ -72,8 +72,32 @@ function CheckList<T>({
   if (items.length === 0)
     return <p style={{ color: C.overlay0, fontSize: 13, margin: 0 }}>None installed.</p>;
 
+  const allKeys = items.map(keyOf);
+  const allSelected = allKeys.every((k) => selected.includes(k));
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {/* Select-all row */}
+      <label style={{
+        display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+        padding: "7px 10px", borderRadius: 8,
+        background: allSelected ? "rgba(203,166,247,0.06)" : "transparent",
+        border: `1px solid ${allSelected ? "rgba(203,166,247,0.2)" : "transparent"}`,
+        marginBottom: 4,
+      }}>
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={() => onChange(allSelected ? [] : allKeys)}
+          style={{ marginTop: 0, accentColor: C.mauve, width: 14, height: 14, flexShrink: 0 }}
+        />
+        <span style={{ fontSize: 12, fontWeight: 700, color: allSelected ? C.mauve : C.subtext0 }}>
+          {allSelected ? "Deselect all" : "Select all"}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 10, color: C.overlay0 }}>
+          {selected.length} / {items.length}
+        </span>
+      </label>
       {items.map((item) => {
         const k = keyOf(item);
         const checked = selected.includes(k);
@@ -426,23 +450,11 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                     Skills provide this agent with additional capabilities via structured prompts.
                     {selectedSkills.length > 0 && (
                       <span style={{ marginLeft: 6, color: C.green, fontWeight: 700 }}>
-                        {selectedSkills.length} enabled
+                        {selectedSkills.length} of {skills.length} enabled
                       </span>
                     )}
                   </p>
                 </div>
-                {selectedSkills.length > 0 && (
-                  <button
-                    onClick={() => setSelectedSkills([])}
-                    style={{
-                      background: "none", border: `1px solid ${C.surface1}`,
-                      color: C.subtext0, fontSize: 11, cursor: "pointer",
-                      padding: "4px 10px", borderRadius: 6, flexShrink: 0,
-                    }}
-                  >
-                    Disable all
-                  </button>
-                )}
               </div>
               <CheckList<SkillInfo>
                 items={skills}
@@ -465,23 +477,11 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                     Tools give this agent access to functions like file I/O, HTTP requests, and code execution.
                     {selectedTools.length > 0 && (
                       <span style={{ marginLeft: 6, color: C.green, fontWeight: 700 }}>
-                        {selectedTools.length} enabled
+                        {selectedTools.length} of {tools.length} enabled
                       </span>
                     )}
                   </p>
                 </div>
-                {selectedTools.length > 0 && (
-                  <button
-                    onClick={() => setSelectedTools([])}
-                    style={{
-                      background: "none", border: `1px solid ${C.surface1}`,
-                      color: C.subtext0, fontSize: 11, cursor: "pointer",
-                      padding: "4px 10px", borderRadius: 6, flexShrink: 0,
-                    }}
-                  >
-                    Disable all
-                  </button>
-                )}
               </div>
               <CheckList<ToolInfo>
                 items={tools}

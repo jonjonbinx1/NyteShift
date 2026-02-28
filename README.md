@@ -27,9 +27,8 @@ SolixAI/
 │   ├── core/      — Runtime: skills, tools, providers, pipelines, config
 │   ├── cli/       — CLI (`solix` command)
 │   └── ui/        — Electron desktop app
-├── package.json
-├── tsconfig.base.json
-└── pnpm-workspace.yaml
+├── package.json   — npm workspaces root
+└── tsconfig.base.json
 ```
 
 ## Getting Started
@@ -37,7 +36,6 @@ SolixAI/
 ### Prerequisites
 
 - Node.js ≥ 20
-- pnpm ≥ 9
 
 ### Install & Build
 
@@ -57,30 +55,30 @@ command available globally. If you prefer manual steps, the commands below
 also work:
 
 ```bash
-pnpm install     # or npm install when using npm workspaces
-pnpm build
+npm install
+npm run build
 ```
 
 ### CLI
 
 ```bash
 # Create an agent
-pnpm --filter @solix/cli exec solix agent create my-agent
+solix agent create my-agent
 
 # List agents
-pnpm --filter @solix/cli exec solix agent list
+solix agent list
 
 # Run a task
-pnpm --filter @solix/cli exec solix agent run my-agent "Summarize the latest news"
+solix agent run my-agent "Summarize the latest news"
 
 # Show config
-pnpm --filter @solix/cli exec solix config show
+solix config show
 ```
 
 ### Electron UI
 
 ```bash
-pnpm --filter @solix/ui dev
+npm run dev:ui
 ```
 
 ## User-Level Storage

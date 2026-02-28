@@ -11,7 +11,7 @@
     "clean": "rimraf dist out"
   },
   "dependencies": {
-    "@solix/core": "workspace:*",
+    "@solix/core": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.1.0"

@@ -93,8 +93,28 @@ function CheckList({
     onChange(selected.includes(k) ? selected.filter((x) => x !== k) : [...selected, k]);
   };
   if (items.length === 0) return <p style={{ color: "#585b70", fontSize: 13, margin: 0 }}>None installed.</p>;
+  const allKeys = items.map(keyOf);
+  const allSelected = allKeys.length > 0 && allKeys.every((k) => selected.includes(k));
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+      {/* Select-all row */}
+      <label style={{
+        display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+        padding: "5px 8px", borderRadius: 6,
+        background: allSelected ? "rgba(203,166,247,0.08)" : "transparent",
+        borderBottom: "1px solid #313244", marginBottom: 2,
+      }}>
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={() => onChange(allSelected ? [] : allKeys)}
+          style={{ accentColor: "#cba6f7", width: 13, height: 13 }}
+        />
+        <span style={{ fontSize: 12, fontWeight: 700, color: allSelected ? "#cba6f7" : "#a6adc8" }}>
+          {allSelected ? "Deselect all" : "Select all"}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#585b70" }}>{selected.length} / {items.length}</span>
+      </label>
       {items.map((item) => {
         const k = keyOf(item);
         const checked = selected.includes(k);
@@ -147,6 +167,8 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
 
   // Options
   const [providers, setProviders] = useState<string[]>([]);
+  const [models, setModels] = useState<import("../global.js").ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [tools, setTools] = useState<ToolInfo[]>([]);
 
@@ -159,6 +181,19 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
     window.solixApi.listSkills().then(setSkills).catch(console.error);
     window.solixApi.listTools().then(setTools).catch(console.error);
   }, []);
+
+  // Fetch models whenever the selected provider changes
+  useEffect(() => {
+    if (!window.solixApi) return;
+    setModels([]);
+    if (!provider) return;
+    setModelsLoading(true);
+    window.solixApi
+      .listProviderModels(provider)
+      .then((ms) => setModels(ms))
+      .catch(() => setModels([]))
+      .finally(() => setModelsLoading(false));
+  }, [provider]);
 
   // Close on Escape
   useEffect(() => {
@@ -246,13 +281,25 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
               </select>
             </div>
             <div style={fieldStyle}>
-              <label style={labelStyle}>Model ID</label>
+              <label style={labelStyle}>
+                Model ID{modelsLoading && <span style={{ marginLeft: 6, fontSize: 11, color: "#7f849c", fontWeight: 400 }}>loading…</span>}
+              </label>
               <input
                 style={inputStyle}
+                list="model-options"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="gpt-4o / claude-3-5-sonnet …"
+                placeholder={models.length > 0 ? `${models.length} models available…` : "gpt-4o / claude-3-5-sonnet …"}
               />
+              {models.length > 0 && (
+                <datalist id="model-options">
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.description ?? m.id}
+                    </option>
+                  ))}
+                </datalist>
+              )}
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>Temperature</label>

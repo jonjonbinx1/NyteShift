@@ -5,8 +5,8 @@ Electron desktop application for SolixAI.
 ## Development
 
 ```bash
-pnpm install
-pnpm --filter @solix/ui dev
+npm install
+npm run dev:ui
 ```
 
 This launches the Electron app with Vite hot-reload for the renderer process.
@@ -14,7 +14,7 @@ This launches the Electron app with Vite hot-reload for the renderer process.
 ## Build
 
 ```bash
-pnpm --filter @solix/ui build
+npm run build:all
 ```
 
 ## Architecture
