@@ -54,6 +54,10 @@ export interface MarketplaceItem {
   installed: boolean;
   /** Optional description from README.md or frontmatter */
   description: string;
+  /** When installed, hash mismatch indicates an update is available. */
+  needsUpdate?: boolean;
+  /** Whether the installed copy has auto-update enabled (from installed index) */
+  autoUpdate?: boolean;
 }
 
 /** Result of a sync operation */

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTheme } from "../theme/ThemeContext.js";
 
 interface LogEntry {
   timestamp: number;
@@ -10,13 +11,14 @@ interface LogViewerProps {
 }
 
 export function LogViewer({ logs }: LogViewerProps): React.JSX.Element {
+  const { palette: C } = useTheme();
   return (
     <div
       style={{
         fontFamily: "monospace",
         fontSize: "0.85rem",
-        background: "#181825",
-        color: "#a6adc8",
+        background: C.mantle,
+        color: C.subtext0,
         padding: "1rem",
         borderRadius: 6,
         maxHeight: 400,
@@ -26,7 +28,7 @@ export function LogViewer({ logs }: LogViewerProps): React.JSX.Element {
       {logs.length === 0 && <div>No logs yet.</div>}
       {logs.map((entry, i) => (
         <div key={i} style={{ marginBottom: 4 }}>
-          <span style={{ color: "#585b70" }}>
+          <span style={{ color: C.surface2 }}>
             [{new Date(entry.timestamp).toLocaleTimeString()}]
           </span>{" "}
           {entry.message}

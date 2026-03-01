@@ -60,6 +60,62 @@ export interface ChatSessionSummaryInfo {
   preview: string;
 }
 
+// ── Triggers ────────────────────────────────────────────────────────
+
+export type TriggerType = "cron" | "webhook" | "manual" | "discord";
+
+// ── Configurable Field Contract ─────────────────────────────────────
+
+export interface ConfigFieldDefinitionInfo {
+  key: string;
+  label: string;
+  type: "string" | "secret" | "number" | "boolean" | "select" | "multiselect" | "textarea";
+  description?: string;
+  required?: boolean;
+  default?: unknown;
+  options?: string[];
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+}
+
+export interface TriggerDefinitionInfo {
+  id: string;
+  name: string;
+  type: TriggerType;
+  agentName: string;
+  enabled: boolean;
+  schedule?: string;
+  webhookPath?: string;
+  webhookSecret?: string;
+  taskTemplate: string;
+  provider?: string;
+  model?: string;
+  maxSteps?: number;
+  // Discord-specific fields
+  discordBotToken?: string;
+  discordGuildId?: string;
+  discordChannelIds?: string[];
+  discordMentionOnly?: boolean;
+  discordMode?: "trigger" | "bridge";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TriggerRunInfo {
+  id: string;
+  triggerId: string;
+  triggerName: string;
+  agentName: string;
+  status: "running" | "completed" | "failed";
+  event: { type: string; payload: Record<string, unknown>; timestamp: number };
+  result?: { finalOutput: string; aborted: boolean; steps: number };
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+}
+
 export interface SolixApi {
   listAgents(): Promise<string[]>;
   createAgent(name: string): Promise<{ name: string }>;
@@ -70,8 +126,8 @@ export interface SolixApi {
   writeConfig(cfg: unknown): Promise<void>;
   readSoul(name: string): Promise<string>;
   writeSoul(name: string, content: string): Promise<void>;
-  listSkills(): Promise<Array<{ frontmatter: { name: string; contributor: string; description: string } }>>;
-  listTools(): Promise<Array<{ name: string; contributor: string; description: string }>>;
+  listSkills(): Promise<Array<{ frontmatter: { name: string; contributor: string; description: string; config?: ConfigFieldDefinitionInfo[] } }>>;
+  listTools(): Promise<Array<{ name: string; contributor: string; description: string; config?: ConfigFieldDefinitionInfo[] }>>;
   // Providers
   listProviders(): Promise<Array<{ id: string }>>;
   /** Fetch models from a specific provider (or all if omitted). */
@@ -105,11 +161,80 @@ export interface SolixApi {
   marketplaceSourceRemove(name: string): Promise<{ sources: MarketplaceSourceConfig[] }>;
   marketplaceSourceToggle(name: string, enabled: boolean): Promise<{ sources: MarketplaceSourceConfig[] }>;
 
+  // auto-update and updates
+  marketplaceCheckUpdates(): Promise<Array<{ item: { category: string; contributor: string; name: string; hash: string }; updated: boolean; message: string }>>;
+  marketplaceUpdate(item?: { category: string; contributor: string; name: string }): Promise<any>;
+  marketplaceSetAutoUpdate(item: { category: string; contributor: string; name: string }, enabled: boolean): Promise<void>;
+  marketplaceSetGlobalAutoUpdate(enabled: boolean): Promise<void>;
+  marketplaceInstalled(): Promise<{ globalAutoUpdate?: boolean; items: Array<{ category: string; contributor: string; name: string; version?: string; hash: string; autoUpdate?: boolean }> }>;
+
   // Change notifications
   onToolsChanged(cb: () => void): void;
   notifyToolsChanged(): void;
   onProvidersChanged(cb: () => void): void;
   notifyProvidersChanged(): void;
+
+  // ── Triggers ──────────────────────────────────────────────────────
+  triggersListAll(): Promise<TriggerDefinitionInfo[]>;
+  triggersListForAgent(agentName: string): Promise<TriggerDefinitionInfo[]>;
+  triggersCreate(params: {
+    name: string;
+    agentName: string;
+    type: TriggerType;
+    enabled: boolean;
+    taskTemplate: string;
+    schedule?: string;
+    webhookPath?: string;
+    webhookSecret?: string;
+    provider?: string;
+    model?: string;
+    maxSteps?: number;
+    // Discord fields
+    discordBotToken?: string;
+    discordGuildId?: string;
+    discordChannelIds?: string[];
+    discordMentionOnly?: boolean;
+    discordMode?: "trigger" | "bridge";
+  }): Promise<TriggerDefinitionInfo>;
+
+  // ── Discord Bridge ──────────────────────────────────────────────
+  discordBridgeStart(agentName: string): Promise<{ running: boolean }>;
+  discordBridgeStop(agentName: string): Promise<{ running: boolean }>;
+  discordBridgeStatus(agentName: string): Promise<{ running: boolean }>;
+  discordBridgeConfigRead(agentName: string): Promise<{
+    botToken: string;
+    agentName: string;
+    guildId?: string;
+    channelIds?: string[];
+    mentionOnly?: boolean;
+    enabled: boolean;
+    provider?: string;
+    model?: string;
+  } | null>;
+  discordBridgeConfigWrite(agentName: string, config: {
+    botToken: string;
+    agentName: string;
+    guildId?: string;
+    channelIds?: string[];
+    mentionOnly?: boolean;
+    enabled: boolean;
+    provider?: string;
+    model?: string;
+  }): Promise<void>;
+  triggersUpdate(triggerId: string, updates: Partial<TriggerDefinitionInfo>): Promise<TriggerDefinitionInfo | null>;
+  triggersDelete(triggerId: string): Promise<boolean>;
+  triggersFire(triggerId: string, payload?: Record<string, unknown>): Promise<TriggerRunInfo>;
+  triggersEngineStart(): Promise<{ running: boolean }>;
+  triggersEngineStop(): Promise<{ running: boolean }>;
+  triggersEngineStatus(): Promise<{ running: boolean }>;
+  triggersRuns(filter?: { agentName?: string; triggerId?: string }): Promise<TriggerRunInfo[]>;
+  onTriggerRunUpdate(cb: (run: TriggerRunInfo) => void): void;
+
+  // ── Skill / Tool Config ────────────────────────────────────────────
+  /** Read resolved config values for a skill or tool (global → agent merge). */
+  skillToolConfigRead(kind: "skill" | "tool", qualifiedName: string, agentName?: string): Promise<Record<string, unknown>>;
+  /** Write config values at global or agent scope. */
+  skillToolConfigWrite(kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string): Promise<void>;
 }
 
 declare global {

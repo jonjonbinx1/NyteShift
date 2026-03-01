@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "build:all": "npm run build --workspaces --if-present",
+    "build:all": "npm run build --workspace=@solix/core && npm run build --workspaces --if-present",
     "dev:cli": "npm run dev --workspace=packages/cli",
     "dev:ui": "npm run dev --workspace=packages/ui",
     "lint": "npm run lint --workspaces --if-present",

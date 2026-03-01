@@ -4,6 +4,7 @@ import matter from "gray-matter";
 
 import type { Skill, SkillFrontmatter } from "../../types/index.js";
 import { skillsDir, readTextFile, pathExists } from "../../utils/index.js";
+import { getInstalledItem } from "../marketplace/installed.js";
 
 /**
  * Scans ~/.solix/skills for skill.md files.
@@ -45,7 +46,7 @@ export async function loadSkills(): Promise<Skill[]> {
           );
         }
 
-        skills.push({
+        const skill: any = {
           frontmatter: {
             name: fm.name,
             version: fm.version,
@@ -53,10 +54,25 @@ export async function loadSkills(): Promise<Skill[]> {
             description: fm.description ?? "",
             tags: Array.isArray(fm.tags) ? fm.tags : undefined,
             schema: fm.schema ?? undefined,
+            config: Array.isArray(fm.config) ? fm.config : undefined,
           },
           body: parsed.content.trim(),
           filePath: skillPath,
-        });
+        };
+
+        // try to merge in installed metadata if available
+        try {
+          const meta = await getInstalledItem("skills", fm.contributor, fm.name);
+          if (meta) {
+            skill.hash = meta.hash;
+            skill.autoUpdate = meta.autoUpdate;
+            if (meta.version) skill.frontmatter.version = meta.version;
+          }
+        } catch {
+          // ignore
+        }
+
+        skills.push(skill);
       } catch (err) {
         console.warn(`[SkillLoader] Failed to parse ${skillPath}:`, err);
       }

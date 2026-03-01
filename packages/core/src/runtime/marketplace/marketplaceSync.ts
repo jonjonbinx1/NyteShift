@@ -76,6 +76,19 @@ export async function syncAllMarketplaces(): Promise<MarketplaceSyncResult[]> {
   }
 
   console.log("[Marketplace:sync] final results:", results);
+
+  // If any installed items are flagged for auto‑update (global or per-item),
+  // attempt to refresh them now that the cache has been brought up to date.
+  try {
+    const { autoUpdateInstalledItems } = await import("./installed.js");
+    const upd = await autoUpdateInstalledItems();
+    if (upd.length) {
+      console.log("[Marketplace:sync] auto-update results:", upd);
+    }
+  } catch (err) {
+    console.warn("[Marketplace:sync] failed to auto-update items:", err);
+  }
+
   return results;
 }
 

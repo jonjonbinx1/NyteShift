@@ -8,6 +8,11 @@ import {
   readMarketplaceConfig,
   addMarketplaceSource,
   removeMarketplaceSource,
+  // new helpers for updates
+  autoUpdateInstalledItems,
+  checkAndUpdateItem,
+  setGlobalAutoUpdate,
+  setItemAutoUpdate,
 } from "@solix/core";
 
 export function registerMarketplaceCommands(program: Command): void {
@@ -123,5 +128,48 @@ export function registerMarketplaceCommands(program: Command): void {
     .action(async (name: string) => {
       await removeMarketplaceSource(name);
       console.log(chalk.green(`Removed source: ${name}`));
+    });
+
+  // ── update / auto commands ─────────────────────────────────────────
+  marketplace
+    .command("update [path]")
+    .description("Check for updates (or update a specific installed item)")
+    .action(async (path?: string) => {
+      if (!path) {
+        const results = await autoUpdateInstalledItems();
+        for (const r of results) {
+          const name = `${r.item.category}/${r.item.contributor}/${r.item.name}`;
+          console.log(`${name}: ${r.updated ? "updated" : "no change"} — ${r.message}`);
+        }
+        return;
+      }
+      const parts = path.split("/");
+      if (parts.length !== 3) {
+        console.error(chalk.red("Usage: solix marketplace update <category>/<contributor>/<name>"));
+        process.exit(1);
+      }
+      const [category, contributor, name] = parts;
+      const res = await checkAndUpdateItem(category, contributor, name);
+      console.log(`${category}/${contributor}/${name}: ${res.message}`);
+    });
+
+  marketplace
+    .command("auto <scope> <on|off>")
+    .description("Enable or disable automatic updates. Scope may be 'global' or a specific <category>/<contributor>/<name>")
+    .action(async (scope: string, state: string) => {
+      const enabled = state === "on";
+      if (scope === "global") {
+        await setGlobalAutoUpdate(enabled);
+        console.log(chalk.green(`Global auto-update ${enabled ? "enabled" : "disabled"}`));
+      } else {
+        const parts = scope.split("/");
+        if (parts.length !== 3) {
+          console.error(chalk.red("Usage: solix marketplace auto <global|category/contributor/name> <on|off>"));
+          process.exit(1);
+        }
+        const [category, contributor, name] = parts;
+        await setItemAutoUpdate(category, contributor, name, enabled);
+        console.log(chalk.green(`${category}/${contributor}/${name} auto-update ${enabled ? "enabled" : "disabled"}`));
+      }
     });
 }

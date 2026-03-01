@@ -85,6 +85,35 @@ export async function readTextFile(path: string): Promise<string> {
   return readFile(path, "utf-8");
 }
 
+/**
+ * Compute a SHA256 hash representing the contents of all files within a
+ * directory tree.  Useful for detecting changes without comparing timestamps.
+ */
+export async function computeDirectoryHash(dir: string): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  const { readdir, stat, readFile } = await import("node:fs/promises");
+  const hash = createHash("sha256");
+
+  async function walk(p: string) {
+    const entries = await readdir(p);
+    entries.sort();
+    for (const e of entries) {
+      const full = join(p, e);
+      const st = await stat(full);
+      if (st.isDirectory()) {
+        await walk(full);
+      } else if (st.isFile()) {
+        // incorporate relative path to avoid collisions
+        hash.update(full.replace(dir, ""));
+        const data = await readFile(full);
+        hash.update(data);
+      }
+    }
+  }
+  await walk(dir);
+  return hash.digest("hex");
+}
+
 export async function writeTextFile(path: string, content: string): Promise<void> {
   const { writeFile, mkdir } = await import("node:fs/promises");
   const { dirname } = await import("node:path");

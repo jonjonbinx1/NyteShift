@@ -18,12 +18,13 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
-    "gray-matter": "^4.0.3",
-    "glob": "^11.0.0"
+    "discord.js": "^14.25.1",
+    "glob": "^11.0.0",
+    "gray-matter": "^4.0.3"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
     "rimraf": "^6.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.6.0"
   }
 }

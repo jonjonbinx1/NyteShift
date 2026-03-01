@@ -100,6 +100,11 @@ All runtime content lives under `~/.solix/`:
 
 Marketplace content (skills, tools, themes, triggers, soul templates) lives in a separate repository: **SolixAI-Marketplace**. Use `solix marketplace sync` to pull content into your local `~/.solix` directory.
 
+You can manage updates via the CLI:
+
+- `solix marketplace update [<category>/<contributor>/<name>]` – check for or apply updates to installed items. Running without a path scans all installed items.
+- `solix marketplace auto <global|category/contributor/name> <on|off>` – enable or disable automatic updates globally or for a specific item. Global setting is also persisted to your user config.
+
 ## License
 
 MIT

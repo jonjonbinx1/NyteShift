@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTheme } from "../theme/ThemeContext.js";
 
 interface SkillInfo {
   frontmatter: { name: string; contributor: string; description: string };
@@ -14,65 +15,6 @@ interface Props {
   onClose: () => void;
   onCreated: () => void;
 }
-
-// ── Tiny helpers ─────────────────────────────────────────────────────────────
-
-const overlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.55)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-};
-
-const modalStyle: React.CSSProperties = {
-  background: "#1e1e2e",
-  color: "#cdd6f4",
-  borderRadius: 10,
-  padding: "2rem",
-  width: 640,
-  maxHeight: "90vh",
-  overflowY: "auto",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-  display: "flex",
-  flexDirection: "column",
-  gap: "1.25rem",
-};
-
-const fieldStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  color: "#a6adc8",
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "7px 10px",
-  borderRadius: 6,
-  border: "1px solid #45475a",
-  background: "#181825",
-  color: "#cdd6f4",
-  fontSize: 14,
-  width: "100%",
-  boxSizing: "border-box",
-};
-
-const sectionHeadStyle: React.CSSProperties = {
-  fontSize: 15,
-  fontWeight: 700,
-  borderBottom: "1px solid #313244",
-  paddingBottom: 6,
-  marginBottom: 4,
-};
 
 function CheckList({
   items,
@@ -89,10 +31,11 @@ function CheckList({
   labelOf: (i: string) => string;
   descOf: (i: string) => string;
 }) {
+  const { palette: C } = useTheme();
   const toggle = (k: string) => {
     onChange(selected.includes(k) ? selected.filter((x) => x !== k) : [...selected, k]);
   };
-  if (items.length === 0) return <p style={{ color: "#585b70", fontSize: 13, margin: 0 }}>None installed.</p>;
+  if (items.length === 0) return <p style={{ color: C.surface2, fontSize: 13, margin: 0 }}>None installed.</p>;
   const allKeys = items.map(keyOf);
   const allSelected = allKeys.length > 0 && allKeys.every((k) => selected.includes(k));
   return (
@@ -102,18 +45,18 @@ function CheckList({
         display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
         padding: "5px 8px", borderRadius: 6,
         background: allSelected ? "rgba(203,166,247,0.08)" : "transparent",
-        borderBottom: "1px solid #313244", marginBottom: 2,
+        borderBottom: `1px solid ${C.surface0}`, marginBottom: 2,
       }}>
         <input
           type="checkbox"
           checked={allSelected}
           onChange={() => onChange(allSelected ? [] : allKeys)}
-          style={{ accentColor: "#cba6f7", width: 13, height: 13 }}
+          style={{ accentColor: C.mauve, width: 13, height: 13 }}
         />
-        <span style={{ fontSize: 12, fontWeight: 700, color: allSelected ? "#cba6f7" : "#a6adc8" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: allSelected ? C.mauve : C.subtext0 }}>
           {allSelected ? "Deselect all" : "Select all"}
         </span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#585b70" }}>{selected.length} / {items.length}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: C.surface2 }}>{selected.length} / {items.length}</span>
       </label>
       {items.map((item) => {
         const k = keyOf(item);
@@ -128,19 +71,19 @@ function CheckList({
               cursor: "pointer",
               padding: "6px 8px",
               borderRadius: 6,
-              background: checked ? "#313244" : "transparent",
+              background: checked ? C.surface0 : "transparent",
             }}
           >
             <input
               type="checkbox"
               checked={checked}
               onChange={() => toggle(k)}
-              style={{ marginTop: 2, accentColor: "#cba6f7" }}
+              style={{ marginTop: 2, accentColor: C.mauve }}
             />
             <span>
               <strong style={{ fontSize: 13 }}>{labelOf(item)}</strong>
               {descOf(item) && (
-                <span style={{ marginLeft: 6, fontSize: 12, color: "#7f849c" }}>{descOf(item)}</span>
+                <span style={{ marginLeft: 6, fontSize: 12, color: C.overlay1 }}>{descOf(item)}</span>
               )}
             </span>
           </label>
@@ -153,7 +96,65 @@ function CheckList({
 // ── Main modal ───────────────────────────────────────────────────────────────
 
 export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Element {
+  const { palette: C } = useTheme();
   const navigate = useNavigate();
+
+  const overlayStyle: React.CSSProperties = {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.55)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+  };
+
+  const modalStyle: React.CSSProperties = {
+    background: C.base,
+    color: C.text,
+    borderRadius: 10,
+    padding: "2rem",
+    width: 640,
+    maxHeight: "90vh",
+    overflowY: "auto",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+    display: "flex",
+    flexDirection: "column",
+    gap: "1.25rem",
+  };
+
+  const fieldStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  };
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 13,
+    fontWeight: 600,
+    color: C.subtext0,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+  };
+
+  const inputStyle: React.CSSProperties = {
+    padding: "7px 10px",
+    borderRadius: 6,
+    border: `1px solid ${C.surface1}`,
+    background: C.mantle,
+    color: C.text,
+    fontSize: 14,
+    width: "100%",
+    boxSizing: "border-box",
+  };
+
+  const sectionHeadStyle: React.CSSProperties = {
+    fontSize: 15,
+    fontWeight: 700,
+    borderBottom: `1px solid ${C.surface0}`,
+    paddingBottom: 6,
+    marginBottom: 4,
+  };
 
   // Form state
   const [name, setName] = useState("");
@@ -243,7 +244,7 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
           <h2 style={{ margin: 0, fontSize: 20 }}>Create New Agent</h2>
           <button
             onClick={onClose}
-            style={{ background: "none", border: "none", color: "#cdd6f4", fontSize: 20, cursor: "pointer", lineHeight: 1 }}
+            style={{ background: "none", border: "none", color: C.text, fontSize: 20, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -282,7 +283,7 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>
-                Model ID{modelsLoading && <span style={{ marginLeft: 6, fontSize: 11, color: "#7f849c", fontWeight: 400 }}>loading…</span>}
+                Model ID{modelsLoading && <span style={{ marginLeft: 6, fontSize: 11, color: C.overlay1, fontWeight: 400 }}>loading…</span>}
               </label>
               <input
                 style={inputStyle}
@@ -370,7 +371,7 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
         {/* ── Soul.md ───────────────────────────────────────────────── */}
         <div>
           <p style={sectionHeadStyle}>Soul.md</p>
-          <p style={{ fontSize: 12, color: "#7f849c", margin: "0 0 6px" }}>
+          <p style={{ fontSize: 12, color: C.overlay1, margin: "0 0 6px" }}>
             Optional system persona for this agent. Supports Markdown / plain text.
           </p>
           <textarea
@@ -383,21 +384,21 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
 
         {/* ── Error / Actions ───────────────────────────────────────── */}
         {error && (
-          <div style={{ color: "#f38ba8", background: "#2a1727", borderRadius: 6, padding: "8px 12px", fontSize: 14 }}>
+          <div style={{ color: C.red, background: "#2a1727", borderRadius: 6, padding: "8px 12px", fontSize: 14 }}>
             {error}
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
           <button
             onClick={onClose}
-            style={{ padding: "8px 20px", borderRadius: 6, border: "1px solid #45475a", background: "transparent", color: "#cdd6f4", cursor: "pointer", fontSize: 14 }}
+            style={{ padding: "8px 20px", borderRadius: 6, border: `1px solid ${C.surface1}`, background: "transparent", color: C.text, cursor: "pointer", fontSize: 14 }}
           >
             Cancel
           </button>
           <button
             onClick={handleSubmit}
             disabled={busy}
-            style={{ padding: "8px 20px", borderRadius: 6, border: "none", background: "#cba6f7", color: "#1e1e2e", fontWeight: 700, cursor: busy ? "not-allowed" : "pointer", fontSize: 14, opacity: busy ? 0.7 : 1 }}
+            style={{ padding: "8px 20px", borderRadius: 6, border: "none", background: C.mauve, color: C.base, fontWeight: 700, cursor: busy ? "not-allowed" : "pointer", fontSize: 14, opacity: busy ? 0.7 : 1 }}
           >
             {busy ? "Creating…" : "Create Agent"}
           </button>

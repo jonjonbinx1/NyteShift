@@ -1,25 +1,5 @@
 import React, { useEffect, useState } from "react";
-
-// ── Catppuccin Mocha palette ─────────────────────────────────────────────────
-const C = {
-  base: "#1e1e2e",
-  mantle: "#181825",
-  crust: "#11111b",
-  surface0: "#313244",
-  surface1: "#45475a",
-  surface2: "#585b70",
-  overlay0: "#6c7086",
-  text: "#cdd6f4",
-  subtext0: "#a6adc8",
-  subtext1: "#bac2de",
-  mauve: "#cba6f7",
-  blue: "#89b4fa",
-  green: "#a6e3a1",
-  red: "#f38ba8",
-  yellow: "#f9e2af",
-  peach: "#fab387",
-  teal: "#94e2d5",
-} as const;
+import { useTheme } from "../theme/ThemeContext.js";
 
 type PermLevel = "allow" | "deny" | "prompt";
 
@@ -188,16 +168,18 @@ function PermissionRow({
 }
 
 // ── Tab button ───────────────────────────────────────────────────────────────
-type Tab = "permissions" | "skills" | "tools" | "advanced";
+type Tab = "permissions" | "skills" | "tools" | "discord" | "advanced";
 const TABS: { id: Tab; icon: string; label: string }[] = [
   { id: "permissions", icon: "🔐", label: "Permissions" },
   { id: "skills", icon: "⚡", label: "Skills" },
   { id: "tools", icon: "🔧", label: "Tools" },
+  { id: "discord", icon: "💬", label: "Discord" },
   { id: "advanced", icon: "🛠", label: "Advanced" },
 ];
 
 // ── Main modal ───────────────────────────────────────────────────────────────
 export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Element {
+  const { palette: C } = useTheme();
   const [activeTab, setActiveTab] = useState<Tab>("permissions");
   const [config, setConfig] = useState<Record<string, any>>({});
 
@@ -216,6 +198,17 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
   const [maxSteps, setMaxSteps] = useState("30");
   const [description, setDescription] = useState("");
   const [autonomyLevel, setAutonomyLevel] = useState<"full" | "supervised" | "manual">("full");
+
+  // Discord bridge
+  const [discordBotToken, setDiscordBotToken] = useState("");
+  const [discordGuildId, setDiscordGuildId] = useState("");
+  const [discordChannelIds, setDiscordChannelIds] = useState("");
+  const [discordMentionOnly, setDiscordMentionOnly] = useState(false);
+  const [discordEnabled, setDiscordEnabled] = useState(false);
+  const [discordBridgeRunning, setDiscordBridgeRunning] = useState(false);
+  const [discordLoading, setDiscordLoading] = useState(false);
+  const [discordError, setDiscordError] = useState("");
+  const [showToken, setShowToken] = useState(false);
 
   // UI state
   const [saved, setSaved] = useState(false);
@@ -241,6 +234,20 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
 
     window.solixApi.listSkills().then(setSkills).catch(console.error);
     window.solixApi.listTools().then(setTools).catch(console.error);
+
+    // Load Discord bridge config
+    window.solixApi.discordBridgeConfigRead?.(agentName).then((cfg) => {
+      if (cfg) {
+        setDiscordBotToken(cfg.botToken || "");
+        setDiscordGuildId(cfg.guildId || "");
+        setDiscordChannelIds(cfg.channelIds?.join(", ") || "");
+        setDiscordMentionOnly(cfg.mentionOnly ?? false);
+        setDiscordEnabled(cfg.enabled ?? false);
+      }
+    }).catch(console.error);
+    window.solixApi.discordBridgeStatus?.(agentName).then((s) => {
+      setDiscordBridgeRunning(s?.running ?? false);
+    }).catch(console.error);
   }, [agentName]);
 
   // Close on Escape
@@ -269,6 +276,19 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       };
       await window.solixApi.writeAgentConfig(agentName, next);
       setConfig(next as Record<string, any>);
+
+      // Persist Discord bridge config alongside agent config.
+      if (discordBotToken.trim()) {
+        await window.solixApi.discordBridgeConfigWrite?.(agentName, {
+          botToken: discordBotToken.trim(),
+          agentName,
+          guildId: discordGuildId.trim() || undefined,
+          channelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+          mentionOnly: discordMentionOnly,
+          enabled: discordEnabled,
+        });
+      }
+
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } finally {
@@ -491,6 +511,171 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                 labelOf={(i) => `${i.contributor}/${i.name}`}
                 descOf={(i) => i.description ?? ""}
               />
+            </div>
+          )}
+
+          {/* ── Discord ── */}
+          {activeTab === "discord" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              {/* Intro */}
+              <div>
+                <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>Discord Bot</h3>
+                <p style={{ margin: "0 0 16px", fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
+                  Connect this agent to a Discord bot so it can respond to messages in your server.
+                  The bot maintains a persistent conversation per channel (bridge mode).
+                </p>
+              </div>
+
+              {/* Bot token */}
+              <div style={sectionStyle}>
+                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bot Token</h4>
+                <p style={{ margin: 0, fontSize: 11, color: C.subtext0, lineHeight: 1.4 }}>
+                  Create a bot at{" "}
+                  <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer"
+                    style={{ color: C.mauve, textDecoration: "none" }}
+                  >discord.com/developers</a>.
+                  Enable <strong>Message Content Intent</strong> under Privileged Gateway Intents.
+                </p>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    value={discordBotToken}
+                    onChange={(e) => setDiscordBotToken(e.target.value)}
+                    placeholder="Paste your Discord bot token"
+                    type={showToken ? "text" : "password"}
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button
+                    type="button" onClick={() => setShowToken(!showToken)}
+                    style={{
+                      background: C.surface0, border: `1px solid ${C.surface1}`,
+                      borderRadius: 6, padding: "6px 12px", color: C.subtext0,
+                      cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+                    }}
+                  >{showToken ? "Hide" : "Show"}</button>
+                </div>
+              </div>
+
+              {/* Channel filtering */}
+              <div style={sectionStyle}>
+                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Channel Filtering</h4>
+                <div>
+                  <label style={labelStyle}>Guild (Server) ID</label>
+                  <input
+                    value={discordGuildId}
+                    onChange={(e) => setDiscordGuildId(e.target.value)}
+                    placeholder="Optional — restrict to a specific server"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Channel IDs</label>
+                  <input
+                    value={discordChannelIds}
+                    onChange={(e) => setDiscordChannelIds(e.target.value)}
+                    placeholder="Comma-separated — blank = all visible channels"
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox" id="dc-mention" checked={discordMentionOnly}
+                    onChange={(e) => setDiscordMentionOnly(e.target.checked)}
+                    style={{ accentColor: C.mauve }}
+                  />
+                  <label htmlFor="dc-mention" style={{ fontSize: 13, color: C.text, cursor: "pointer" }}>
+                    Only respond when @mentioned
+                  </label>
+                </div>
+              </div>
+
+              {/* Enable / status */}
+              <div style={sectionStyle}>
+                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bridge Status</h4>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox" id="dc-enabled" checked={discordEnabled}
+                    onChange={(e) => setDiscordEnabled(e.target.checked)}
+                    style={{ accentColor: C.mauve }}
+                  />
+                  <label htmlFor="dc-enabled" style={{ fontSize: 13, color: C.text, cursor: "pointer" }}>
+                    Enable Discord bridge
+                  </label>
+                </div>
+
+                {/* Live indicator */}
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "10px 14px", borderRadius: 8,
+                  background: discordBridgeRunning ? "rgba(166,227,161,0.08)" : "rgba(108,112,134,0.08)",
+                  border: `1px solid ${discordBridgeRunning ? "rgba(166,227,161,0.25)" : C.surface1}`,
+                }}>
+                  <span style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: discordBridgeRunning ? C.green : C.overlay0,
+                    boxShadow: discordBridgeRunning ? `0 0 6px ${C.green}` : "none",
+                  }} />
+                  <span style={{ fontSize: 13, color: discordBridgeRunning ? C.green : C.subtext0, fontWeight: 600 }}>
+                    {discordBridgeRunning ? "Connected" : "Offline"}
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  {!discordBridgeRunning ? (
+                    <button
+                      disabled={discordLoading || !discordBotToken.trim()}
+                      onClick={async () => {
+                        setDiscordLoading(true); setDiscordError("");
+                        try {
+                          // Save config first, then start.
+                          await window.solixApi?.discordBridgeConfigWrite?.(agentName, {
+                            botToken: discordBotToken.trim(),
+                            agentName,
+                            guildId: discordGuildId.trim() || undefined,
+                            channelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+                            mentionOnly: discordMentionOnly,
+                            enabled: true,
+                          });
+                          setDiscordEnabled(true);
+                          await window.solixApi?.discordBridgeStart?.(agentName);
+                          setDiscordBridgeRunning(true);
+                        } catch (err) { setDiscordError((err as Error).message); }
+                        finally { setDiscordLoading(false); }
+                      }}
+                      style={{
+                        padding: "6px 16px", borderRadius: 7, border: "none",
+                        background: C.green, color: C.crust, fontWeight: 700,
+                        cursor: discordLoading || !discordBotToken.trim() ? "not-allowed" : "pointer",
+                        fontSize: 12, opacity: discordLoading || !discordBotToken.trim() ? 0.5 : 1,
+                      }}
+                    >{discordLoading ? "Connecting…" : "Start"}</button>
+                  ) : (
+                    <button
+                      disabled={discordLoading}
+                      onClick={async () => {
+                        setDiscordLoading(true); setDiscordError("");
+                        try {
+                          await window.solixApi?.discordBridgeStop?.(agentName);
+                          setDiscordBridgeRunning(false);
+                        } catch (err) { setDiscordError((err as Error).message); }
+                        finally { setDiscordLoading(false); }
+                      }}
+                      style={{
+                        padding: "6px 16px", borderRadius: 7, border: "none",
+                        background: C.red, color: C.crust, fontWeight: 700,
+                        cursor: discordLoading ? "not-allowed" : "pointer",
+                        fontSize: 12, opacity: discordLoading ? 0.5 : 1,
+                      }}
+                    >{discordLoading ? "Stopping…" : "Stop"}</button>
+                  )}
+                </div>
+
+                {discordError && (
+                  <div style={{
+                    padding: "8px 12px", borderRadius: 8,
+                    background: "rgba(243,139,168,0.08)",
+                    border: `1px solid rgba(243,139,168,0.2)`,
+                    fontSize: 12, color: C.red, wordBreak: "break-word",
+                  }}>{discordError}</div>
+                )}
+              </div>
             </div>
           )}
 

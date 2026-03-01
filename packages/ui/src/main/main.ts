@@ -36,8 +36,18 @@ import {
   addMarketplaceSource,
   removeMarketplaceSource,
   toggleMarketplaceSource,
+  // Triggers
+  listAllTriggers,
+  readAgentTriggers,
+  createTriggerDefinition,
+  updateTriggerDefinition,
+  deleteTriggerDefinition,
+  getTriggerEngine,
+  // Skill / Tool Config
+  readSkillToolConfig,
+  writeSkillToolConfig,
 } from "@solix/core";
-import type { ChatSession } from "@solix/core";
+import type { ChatSession, TriggerType } from "@solix/core";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -100,17 +110,31 @@ function registerIpc(): void {
   ipcMain.handle("soul:write", (_e, name: string, content: string) => writeSoul(name, content));
 
   // Skills & Tools
-  ipcMain.handle("skills:list", () => listSkills());
+  ipcMain.handle("skills:list", async () => {
+    const skills = await listSkills();
+    return skills.map((s) => ({
+      frontmatter: {
+        name: s.frontmatter.name,
+        contributor: s.frontmatter.contributor,
+        description: s.frontmatter.description,
+        config: s.frontmatter.config ?? undefined,
+        version: (s.frontmatter as any).version,
+      },
+      autoUpdate: (s as any).autoUpdate,
+    }));
+  });
   ipcMain.handle("tools:list", async () => {
     // `listTools` returns full contracts including the `run` function, which
     // cannot be sent over Electron IPC (structured cloning fails).  Only
     // return the serializable metadata that the renderer actually needs.
     const tools = await listTools();
-    return tools.map(({ name, version, contributor, description }) => ({
-      name,
-      version,
-      contributor,
-      description,
+    return tools.map((t) => ({
+      name: t.name,
+      version: t.version,
+      contributor: t.contributor,
+      description: t.description,
+      config: t.config ?? undefined,
+      autoUpdate: (t as any).autoUpdate,
     }));
   });
 
@@ -286,6 +310,275 @@ function registerIpc(): void {
   ipcMain.handle("marketplace:source:toggle", (_e, name: string, enabled: boolean) =>
     toggleMarketplaceSource(name, enabled),
   );
+
+  // Updates & auto‑update configuration
+  ipcMain.handle("marketplace:checkUpdates", async () => {
+    const { autoUpdateInstalledItems } = await import("@solix/core");
+    return autoUpdateInstalledItems();
+  });
+
+  ipcMain.handle("marketplace:update", async (_e, item?: { category: string; contributor: string; name: string }) => {
+    const core = await import("@solix/core");
+    if (item) {
+      return core.checkAndUpdateItem(item.category, item.contributor, item.name);
+    }
+    // run full scan
+    return (await core.autoUpdateInstalledItems()).map((r: any) => ({
+      item: r.item,
+      updated: r.updated,
+      message: r.message,
+    }));
+  });
+
+  ipcMain.handle("marketplace:setAutoUpdate", async (_e, item: { category: string; contributor: string; name: string }, enabled: boolean) => {
+    const { setItemAutoUpdate } = await import("@solix/core");
+    return setItemAutoUpdate(item.category, item.contributor, item.name, enabled);
+  });
+
+  ipcMain.handle("marketplace:setGlobalAutoUpdate", async (_e, enabled: boolean) => {
+    const { setGlobalAutoUpdate } = await import("@solix/core");
+    return setGlobalAutoUpdate(enabled);
+  });
+
+  ipcMain.handle("marketplace:installed", async () => {
+    const { readInstalledIndex } = await import("@solix/core");
+    return readInstalledIndex();
+  });
+
+  // ── Triggers ──────────────────────────────────────────────────────────
+  ipcMain.handle("triggers:listAll", async () => {
+    console.log("[IPC] triggers:listAll — called");
+    try {
+      const triggers = await listAllTriggers();
+      console.log(`[IPC] triggers:listAll — returned ${triggers.length} trigger(s)`);
+      return triggers;
+    } catch (err) {
+      console.error("[IPC] triggers:listAll — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:listForAgent", async (_e, agentName: string) => {
+    console.log(`[IPC] triggers:listForAgent — agent="${agentName}"`);
+    try {
+      const triggers = await readAgentTriggers(agentName);
+      console.log(`[IPC] triggers:listForAgent — returned ${triggers.length} trigger(s)`);
+      return triggers;
+    } catch (err) {
+      console.error("[IPC] triggers:listForAgent — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:create", async (_e, params: {
+    name: string;
+    agentName: string;
+    type: TriggerType;
+    enabled: boolean;
+    taskTemplate: string;
+    schedule?: string;
+    webhookPath?: string;
+    webhookSecret?: string;
+    provider?: string;
+    model?: string;
+    maxSteps?: number;
+    // Discord fields
+    discordBotToken?: string;
+    discordGuildId?: string;
+    discordChannelIds?: string[];
+    discordMentionOnly?: boolean;
+    discordMode?: "trigger" | "bridge";
+  }) => {
+    console.log("[IPC] triggers:create —", params.name, "→", params.agentName);
+    try {
+      const trigger = await createTriggerDefinition(params);
+      // Hot-reload into engine.
+      try {
+        const engine = getTriggerEngine();
+        if (engine.isRunning) engine.addTrigger(trigger);
+      } catch {}
+      return trigger;
+    } catch (err) {
+      console.error("[IPC] triggers:create — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:update", async (_e, triggerId: string, updates: Record<string, unknown>) => {
+    console.log("[IPC] triggers:update —", triggerId);
+    try {
+      const updated = await updateTriggerDefinition(triggerId, updates as any);
+      if (updated) {
+        try {
+          const engine = getTriggerEngine();
+          if (engine.isRunning) {
+            engine.removeTrigger(triggerId);
+            if (updated.enabled) engine.addTrigger(updated);
+          }
+        } catch {}
+      }
+      return updated;
+    } catch (err) {
+      console.error("[IPC] triggers:update — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:delete", async (_e, triggerId: string) => {
+    console.log("[IPC] triggers:delete —", triggerId);
+    try {
+      const deleted = await deleteTriggerDefinition(triggerId);
+      if (deleted) {
+        try {
+          const engine = getTriggerEngine();
+          if (engine.isRunning) engine.removeTrigger(triggerId);
+        } catch {}
+      }
+      return deleted;
+    } catch (err) {
+      console.error("[IPC] triggers:delete — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:fire", async (_e, triggerId: string, payload?: Record<string, unknown>) => {
+    console.log("[IPC] triggers:fire —", triggerId);
+    try {
+      const engine = getTriggerEngine();
+      if (!engine.isRunning) await engine.start();
+      const run = await engine.fireManual(triggerId, payload ?? {});
+      // Notify renderer.
+      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
+      return run;
+    } catch (err) {
+      console.error("[IPC] triggers:fire — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:engine:start", async () => {
+    console.log("[IPC] triggers:engine:start");
+    try {
+      const engine = getTriggerEngine();
+      if (!engine.isRunning) await engine.start();
+      return { running: true };
+    } catch (err) {
+      console.error("[IPC] triggers:engine:start — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:engine:stop", async () => {
+    console.log("[IPC] triggers:engine:stop");
+    try {
+      const engine = getTriggerEngine();
+      if (engine.isRunning) await engine.stop();
+      return { running: false };
+    } catch (err) {
+      console.error("[IPC] triggers:engine:stop — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("triggers:engine:status", () => {
+    try {
+      const engine = getTriggerEngine();
+      return { running: engine.isRunning };
+    } catch {
+      return { running: false };
+    }
+  });
+
+  ipcMain.handle("triggers:runs", async (_e, filter?: { agentName?: string; triggerId?: string }) => {
+    try {
+      const engine = getTriggerEngine();
+      const runs = engine.getRuns(filter);
+      // Strip large result bodies for IPC serialisation safety.
+      return runs.map((r) => ({
+        ...r,
+        result: r.result ? { finalOutput: r.result.finalOutput, aborted: r.result.aborted, steps: r.result.steps.length } : undefined,
+      }));
+    } catch {
+      return [];
+    }
+  });
+
+  // ── Discord Bridge IPC ──────────────────────────────────────────────
+
+  ipcMain.handle("discord:bridge:start", async (_e, agentName: string) => {
+    console.log("[IPC] discord:bridge:start —", agentName);
+    try {
+      const { startBridge } = await import("@solix/core");
+      await startBridge(agentName);
+      return { running: true };
+    } catch (err) {
+      console.error("[IPC] discord:bridge:start — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:bridge:stop", async (_e, agentName: string) => {
+    console.log("[IPC] discord:bridge:stop —", agentName);
+    try {
+      const { stopBridge } = await import("@solix/core");
+      await stopBridge(agentName);
+      return { running: false };
+    } catch (err) {
+      console.error("[IPC] discord:bridge:stop — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:bridge:status", async (_e, agentName: string) => {
+    try {
+      const { isBridgeRunning } = await import("@solix/core");
+      return { running: isBridgeRunning(agentName) };
+    } catch {
+      return { running: false };
+    }
+  });
+
+  ipcMain.handle("discord:bridge:config:read", async (_e, agentName: string) => {
+    try {
+      const { readBridgeConfig } = await import("@solix/core");
+      return await readBridgeConfig(agentName);
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle("discord:bridge:config:write", async (_e, agentName: string, config: any) => {
+    try {
+      const { writeBridgeConfig } = await import("@solix/core");
+      await writeBridgeConfig(agentName, config);
+    } catch (err) {
+      console.error("[IPC] discord:bridge:config:write — ERROR:", err);
+      throw err;
+    }
+  });
+
+  // ── Skill / Tool Config ─────────────────────────────────────────────
+
+  ipcMain.handle("skillToolConfig:read", async (
+    _e,
+    kind: "skill" | "tool",
+    qualifiedName: string,
+    agentName?: string,
+  ) => {
+    console.log(`[IPC] skillToolConfig:read — ${kind} "${qualifiedName}" agent=${agentName ?? "global"}`);
+    return readSkillToolConfig(kind, qualifiedName, agentName);
+  });
+
+  ipcMain.handle("skillToolConfig:write", async (
+    _e,
+    kind: "skill" | "tool",
+    qualifiedName: string,
+    values: Record<string, unknown>,
+    agentName?: string,
+  ) => {
+    console.log(`[IPC] skillToolConfig:write — ${kind} "${qualifiedName}" agent=${agentName ?? "global"}`);
+    await writeSkillToolConfig(kind, qualifiedName, values, agentName);
+  });
 }
 
 // ── App lifecycle ──────────────────────────────────────────────────────
@@ -324,6 +617,27 @@ app.whenReady().then(async () => {
     });
   } catch (err) {
     console.error("whenUserProvidersLoaded hook setup failed:", err);
+  }
+
+  // Start trigger engine so cron/webhook triggers run in the background.
+  try {
+    const triggerEngine = getTriggerEngine();
+    triggerEngine.on("run:started", (run: any) => {
+      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
+    });
+    triggerEngine.on("run:completed", (run: any) => {
+      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
+    });
+    triggerEngine.on("run:failed", (run: any) => {
+      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
+    });
+    triggerEngine.start().then(() => {
+      console.log("[SolixAI] trigger engine started");
+    }).catch((err) => {
+      console.error("[SolixAI] trigger engine start failed:", err);
+    });
+  } catch (err) {
+    console.error("[SolixAI] trigger engine setup failed:", err);
   }
 
   app.on("activate", () => {

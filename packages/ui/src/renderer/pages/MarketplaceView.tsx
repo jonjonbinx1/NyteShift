@@ -4,24 +4,7 @@ import type {
   MarketplaceSourceConfig,
   MarketplaceSyncResultInfo,
 } from "../global.js";
-
-/* ── Dark-theme tokens (Catppuccin Mocha) ────────────────────────────── */
-const t = {
-  bg: "#1e1e2e",
-  surface: "#181825",
-  card: "#252536",
-  cardHover: "#2e2e44",
-  border: "#393952",
-  borderHover: "#cba6f7",
-  accent: "#cba6f7",
-  danger: "#f38ba8",
-  success: "#a6e3a1",
-  muted: "#585b70",
-  text: "#cdd6f4",
-  subtext: "#a6adc8",
-  dim: "#6c7086",
-  overlay: "#11111b",
-};
+import { useTheme } from "../theme/ThemeContext.js";
 
 const CAT_COLORS: Record<string, string> = {
   skills: "#cba6f7",
@@ -38,6 +21,9 @@ const catColor = (c: string) => CAT_COLORS[c] ?? "#9399b2";
    MarketplaceView
    ════════════════════════════════════════════════════════════════════════ */
 export function MarketplaceView(): React.JSX.Element {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+
   /* ── data state ─────────────────────────────────────────────────── */
   const [items, setItems] = useState<MarketplaceItemInfo[]>([]);
   const [syncing, setSyncing] = useState(false);
@@ -57,6 +43,8 @@ export function MarketplaceView(): React.JSX.Element {
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [newBranch, setNewBranch] = useState("main");
+  const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false);
+  const [installedIndex, setInstalledIndex] = useState<any>(null);
 
   const api = () => (window as any).solixApi;
 
@@ -71,11 +59,70 @@ export function MarketplaceView(): React.JSX.Element {
     try { setSources((await a.marketplaceConfigRead()).sources); } catch { /* */ }
   }, []);
 
+  const loadInstalledIndex = useCallback(async () => {
+    const a = api(); if (!a) return;
+    try {
+      const idx = await a.marketplaceInstalled();
+      setInstalledIndex(idx);
+      if (typeof idx.globalAutoUpdate === "boolean") {
+        setGlobalAutoUpdate(!!idx.globalAutoUpdate);
+      } else {
+        // fallback to config
+        try {
+          const cfg = await a.readConfig();
+          setGlobalAutoUpdate(!!(cfg.autoUpdate?.marketplace));
+        } catch {
+          setGlobalAutoUpdate(false);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleGlobalAutoToggle = async (en: boolean) => {
+    const a = api(); if (!a) return;
+    await a.marketplaceSetGlobalAutoUpdate(en);
+    setGlobalAutoUpdate(en);
+    // also write into global config so future installs use default
+    try {
+      const cfg = await a.readConfig();
+      cfg.autoUpdate = cfg.autoUpdate ?? {};
+      cfg.autoUpdate.marketplace = en;
+      await a.writeConfig(cfg);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleItemAutoToggle = async (item: MarketplaceItemInfo, en: boolean) => {
+    const a = api(); if (!a) return;
+    await a.marketplaceSetAutoUpdate({ category: item.category, contributor: item.contributor, name: item.name }, en);
+    await loadInstalledIndex();
+    await loadItems();
+  };
+
+  const handleUpdate = async (item?: MarketplaceItemInfo) => {
+    const a = api(); if (!a) return;
+    try {
+      const res = await a.marketplaceUpdate(item ? { category: item.category, contributor: item.contributor, name: item.name } : undefined);
+      if (item) {
+        flash(res.message || "Updated");
+      } else {
+        flash("Checked for updates");
+      }
+      await loadItems();
+      await loadInstalledIndex();
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    }
+  };
+
   /* initial boot */
   const autoSyncedRef = React.useRef(false);
   useEffect(() => {
     const boot = async (a: any) => {
-      await Promise.all([loadSources(), loadItems()]);
+      await Promise.all([loadSources(), loadItems(), loadInstalledIndex()]);
       if (!autoSyncedRef.current) {
         const cats = await a.marketplaceCategories();
         if (cats.length === 0) {
@@ -85,6 +132,7 @@ export function MarketplaceView(): React.JSX.Element {
             const res = await a.marketplaceSync();
             setSyncResults(res);
             await loadItems();
+            await loadInstalledIndex();
           } catch (e: any) {
             setSyncResults([{ source: "?", status: "error", message: e.message }]);
           } finally { setSyncing(false); }
@@ -191,6 +239,7 @@ export function MarketplaceView(): React.JSX.Element {
     try {
       setSyncResults(await a.marketplaceSync());
       await loadItems();
+      await loadInstalledIndex();
     } catch (e: any) {
       setSyncResults([{ source: "?", status: "error", message: e.message }]);
     } finally { setSyncing(false); }
@@ -201,7 +250,7 @@ export function MarketplaceView(): React.JSX.Element {
     const k = ikey(item); setBusy(k);
     try {
       const r = await a.marketplaceInstall({ category: item.category, contributor: item.contributor, name: item.name, localPath: item.localPath });
-      flash(r.message); await loadItems();
+      flash(r.message); await loadItems(); await loadInstalledIndex();
       if (item.category === "tools") a.notifyToolsChanged?.();
     } catch (e: any) { flash(`Error: ${e.message}`); }
     finally { setBusy(null); }
@@ -212,7 +261,7 @@ export function MarketplaceView(): React.JSX.Element {
     const k = ikey(item); setBusy(k);
     try {
       const r = await a.marketplaceUninstall({ category: item.category, contributor: item.contributor, name: item.name });
-      flash(r.message); await loadItems();
+      flash(r.message); await loadItems(); await loadInstalledIndex();
     } catch (e: any) { flash(`Error: ${e.message}`); }
     finally { setBusy(null); }
   };
@@ -271,13 +320,21 @@ export function MarketplaceView(): React.JSX.Element {
             )}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <Btn variant="ghost" onClick={() => setShowSources((v) => !v)}>
             {showSources ? "✕ Close" : "⚙ Sources"}
           </Btn>
           <Btn variant="accent" onClick={handleSync} disabled={syncing}>
             {syncing ? <><Spinner /> Syncing…</> : "↻ Sync All"}
           </Btn>
+          <Btn variant="ghost" onClick={() => handleUpdate()} disabled={syncing}>
+            Check updates
+          </Btn>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, color: t.subtext, fontSize: "0.84rem" }}>
+            <input type="checkbox" checked={globalAutoUpdate} onChange={(e) => handleGlobalAutoToggle(e.target.checked)}
+              style={{ accentColor: t.accent, width: 14, height: 14 }} />
+            auto‑update
+          </label>
         </div>
       </div>
 
@@ -372,7 +429,9 @@ export function MarketplaceView(): React.JSX.Element {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
               {drillItems.map((item) => (
                 <ItemCard key={ikey(item)} item={item} busy={busy === ikey(item)}
-                  onInstall={() => handleInstall(item)} onUninstall={() => handleUninstall(item)} />
+                  onInstall={() => handleInstall(item)} onUninstall={() => handleUninstall(item)}
+                  onUpdate={() => handleUpdate(item)}
+                  onAutoToggle={(en) => handleItemAutoToggle(item, en)} />
               ))}
             </div>
           )
@@ -405,6 +464,8 @@ export function MarketplaceView(): React.JSX.Element {
 function ContributorCard({ contributor, items, onClick }: {
   contributor: string; items: MarketplaceItemInfo[]; onClick: () => void;
 }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   const [hovered, setHovered] = useState(false);
   const installedCount = items.filter((i) => i.installed).length;
   const cats = Array.from(new Set(items.map((i) => i.category)));
@@ -481,9 +542,16 @@ function ContributorCard({ contributor, items, onClick }: {
 }
 
 /* ── Item card (drill-down) ──────────────────────────────────────────── */
-function ItemCard({ item, busy, onInstall, onUninstall }: {
-  item: MarketplaceItemInfo; busy: boolean; onInstall: () => void; onUninstall: () => void;
+function ItemCard({ item, busy, onInstall, onUninstall, onUpdate, onAutoToggle }: {
+  item: MarketplaceItemInfo;
+  busy: boolean;
+  onInstall: () => void;
+  onUninstall: () => void;
+  onUpdate?: () => void;
+  onAutoToggle?: (enabled: boolean) => void;
 }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   const [hovered, setHovered] = useState(false);
   const color = catColor(item.category);
   return (
@@ -519,15 +587,26 @@ function ItemCard({ item, busy, onInstall, onUninstall }: {
           </p>
         )}
       </div>
-      <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {item.installed ? (
           <>
             <span style={{ padding: "3px 10px", borderRadius: 14, fontSize: "0.74rem", fontWeight: 700, background: `${t.success}18`, color: t.success }}>
               ✓ Installed
             </span>
+            {item.needsUpdate && onUpdate && (
+              <Btn variant="accent" style={{ padding: "4px 12px", fontSize: "0.78rem" }} onClick={onUpdate} disabled={busy}>
+                {busy ? "…" : "Update"}
+              </Btn>
+            )}
             <Btn variant="danger" style={{ padding: "4px 12px", fontSize: "0.78rem" }} onClick={onUninstall} disabled={busy}>
               {busy ? "…" : "Uninstall"}
             </Btn>
+            {onAutoToggle && (
+              <label style={{ fontSize: "0.72rem", marginLeft: 8, display: "flex", alignItems: "center", gap: 4 }}>
+                <input type="checkbox" checked={!!item.autoUpdate} onChange={(e) => onAutoToggle(e.target.checked)}
+                  style={{ accentColor: t.accent }} /> auto‑update
+              </label>
+            )}
           </>
         ) : (
           <Btn variant="accent" onClick={onInstall} disabled={busy}>
@@ -541,6 +620,8 @@ function ItemCard({ item, busy, onInstall, onUninstall }: {
 
 /* ── Tab button ──────────────────────────────────────────────────────── */
 function TabBtn({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return (
     <button onClick={onClick} style={{
       padding: "8px 18px", background: "transparent", border: "none",
@@ -560,6 +641,8 @@ function TabBtn({ label, count, active, onClick }: { label: string; count: numbe
 
 /* ── Skeleton grid ───────────────────────────────────────────────────── */
 function SkeletonGrid({ itemCards }: { itemCards: boolean }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return (
     <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${itemCards ? 280 : 260}px, 1fr))`, gap: 14 }}>
       {Array.from({ length: 6 }).map((_, i) => (
@@ -579,6 +662,8 @@ function SkeletonGrid({ itemCards }: { itemCards: boolean }) {
 
 /* ── Empty states ────────────────────────────────────────────────────── */
 function EmptyState() {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return (
     <div style={{ textAlign: "center", padding: "4rem 1rem", color: t.dim }}>
       <p style={{ fontSize: "1.15rem", fontWeight: 700, marginBottom: 6 }}>Welcome to the Marketplace</p>
@@ -590,6 +675,8 @@ function EmptyState() {
   );
 }
 function EmptyMsg({ children }: { children: React.ReactNode }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return (
     <div style={{ textAlign: "center", padding: "3rem 1rem", color: t.dim }}>
       <p style={{ fontSize: "1rem", fontWeight: 500 }}>{children}</p>
@@ -599,6 +686,8 @@ function EmptyMsg({ children }: { children: React.ReactNode }) {
 
 /* ── Spinner ─────────────────────────────────────────────────────────── */
 function Spinner() {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return <span style={{
     display: "inline-block", width: 13, height: 13, marginRight: 4,
     border: `2px solid ${t.dim}`, borderTopColor: t.accent,
@@ -610,6 +699,8 @@ function Spinner() {
 function Btn({ variant, children, style, ...rest }: {
   variant: "accent" | "ghost" | "danger"; children: React.ReactNode; style?: React.CSSProperties;
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   const base: React.CSSProperties = {
     display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer",
     padding: "7px 18px", borderRadius: 8, fontSize: "0.84rem", fontWeight: 700,
@@ -626,6 +717,8 @@ function Btn({ variant, children, style, ...rest }: {
 function MiniInput({ value, onChange, placeholder, style }: {
   value: string; onChange: (v: string) => void; placeholder: string; style?: React.CSSProperties;
 }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return (
     <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
       style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${t.border}`,

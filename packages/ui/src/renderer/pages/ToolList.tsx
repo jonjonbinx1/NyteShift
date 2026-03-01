@@ -1,28 +1,17 @@
-import React, { useEffect, useState, useMemo } from "react";
-
-/* ── Catppuccin Mocha palette ─────────────────────────────────────── */
-const c = {
-  bg: "#1e1e2e",
-  surface: "#181825",
-  card: "#252536",
-  cardHover: "#2e2e44",
-  border: "#393952",
-  borderHover: "#a6e3a1",
-  accent: "#a6e3a1",
-  muted: "#6c7086",
-  text: "#cdd6f4",
-  subtext: "#a6adc8",
-  dim: "#585b70",
-  purple: "#cba6f7",
-};
+import React, { useEffect, useState, useMemo } from "react";import { SkillToolConfigModal } from "../components/SkillToolConfigModal.js";
+import type { ConfigFieldDefinitionInfo } from "../global.js";
+import { useTheme } from "../theme/ThemeContext.js";
 
 interface ToolInfo {
   name: string;
   contributor: string;
   description: string;
+  config?: ConfigFieldDefinitionInfo[];
 }
 
 function SearchInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+  const { palette: P } = useTheme();
+  const c = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.green, accent: P.green, muted: P.overlay0, text: P.text, subtext: P.subtext0, dim: P.surface2, purple: P.mauve };
   return (
     <div style={{ position: "relative", maxWidth: 480 }}>
       <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: c.muted, pointerEvents: "none", fontSize: "0.88rem" }}>🔍</span>
@@ -37,9 +26,14 @@ function SearchInput({ value, onChange, placeholder }: { value: string; onChange
 }
 
 export function ToolList(): React.JSX.Element {
+  const { palette: P } = useTheme();
+  const c = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.green, accent: P.green, muted: P.overlay0, text: P.text, subtext: P.subtext0, dim: P.surface2, purple: P.mauve };
   const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [installedIdx, setInstalledIdx] = useState<any>(null);
   const [search, setSearch] = useState("");
   const [activeContributor, setActiveContributor] = useState<string | null>(null);
+  const [agents, setAgents] = useState<string[]>([]);
+  const [configTarget, setConfigTarget] = useState<ToolInfo | null>(null);
 
   const reload = () => {
     if (!window.solixApi) return;
@@ -49,7 +43,42 @@ export function ToolList(): React.JSX.Element {
   useEffect(() => {
     reload();
     if (window.solixApi?.onToolsChanged) window.solixApi.onToolsChanged(reload);
+    window.solixApi?.listAgents().then(setAgents).catch(console.error);
+    loadInstalledIndex();
   }, []);
+
+  const loadInstalledIndex = async () => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    try {
+      const idx = await a.marketplaceInstalled();
+      setInstalledIdx(idx);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleUpdateTool = async (t: ToolInfo) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    try {
+      const res = await a.marketplaceUpdate({ category: "tools", contributor: t.contributor, name: t.name });
+      if (res && res.message) flash(res.message);
+      await loadInstalledIndex();
+      window.solixApi.listTools().then(setTools).catch(console.error);
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    }
+  };
+
+  const handleAutoToggleTool = async (t: ToolInfo, en: boolean) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    await a.marketplaceSetAutoUpdate({ category: "tools", contributor: t.contributor, name: t.name }, en);
+    await loadInstalledIndex();
+  };
+
+  const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
   /* group by contributor */
   const byContributor = useMemo(() => {
@@ -186,7 +215,39 @@ export function ToolList(): React.JSX.Element {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                   <span style={{ fontWeight: 700, fontSize: "1rem" }}>{t.name}</span>
-                  <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600, background: c.accent, color: "#1e1e2e" }}>tool</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {t.config && t.config.length > 0 && (
+                      <button
+                        onClick={() => setConfigTarget(t)}
+                        style={{
+                          padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+                          background: "rgba(166,227,161,0.12)", color: c.accent,
+                          border: `1px solid rgba(166,227,161,0.3)`, cursor: "pointer",
+                          transition: "background 0.12s",
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(166,227,161,0.22)"; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(166,227,161,0.12)"; }}
+                      >
+                        ⚙ Configure
+                      </button>
+                    )}
+                    {installedIdx && installedIdx.items && installedIdx.items.find((i: any) => i.category === "tools" && i.contributor === t.contributor && i.name === t.name) && (
+                      <>
+                        <button onClick={() => handleUpdateTool(t)}
+                          style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+                            background: "rgba(166,227,161,0.12)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)` }}>
+                          Update
+                        </button>
+                        <label style={{ fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                          <input type="checkbox" checked={!!installedIdx.items.find((i: any) => i.category === "tools" && i.contributor === t.contributor && i.name === t.name).autoUpdate}
+                            onChange={(e) => handleAutoToggleTool(t, e.target.checked)}
+                            style={{ accentColor: c.accent, width: 14, height: 14 }} />
+                          auto
+                        </label>
+                      </>
+                    )}
+                    <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600, background: c.accent, color: "#1e1e2e" }}>tool</span>
+                  </div>
                 </div>
                 {t.description && (
                   <p style={{ fontSize: "0.86rem", color: c.subtext, margin: 0, lineHeight: 1.5 }}>{t.description}</p>
@@ -195,6 +256,18 @@ export function ToolList(): React.JSX.Element {
             ))}
           </div>
         )
+      )}
+
+      {/* ── Config modal ── */}
+      {configTarget && configTarget.config && configTarget.config.length > 0 && (
+        <SkillToolConfigModal
+          kind="tool"
+          qualifiedName={`${configTarget.contributor}/${configTarget.name}`}
+          displayName={configTarget.name}
+          fields={configTarget.config}
+          agents={agents}
+          onClose={() => setConfigTarget(null)}
+        />
       )}
     </div>
   );

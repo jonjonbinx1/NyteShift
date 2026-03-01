@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
+import { useTheme } from "../theme/ThemeContext.js";
 
 type ModelInfo = { id: string; contextWindow: number; maxOutputTokens: number; description?: string };
 
 export function ProviderConfig(): React.JSX.Element {
+  const { palette: C } = useTheme();
   const [providers, setProviders] = useState<Array<{ id: string }>>([]);
   const [config, setConfig] = useState<Record<string, any>>({});
   const [saved, setSaved] = useState(false);
@@ -160,7 +162,7 @@ export function ProviderConfig(): React.JSX.Element {
           }} style={{ padding: "6px 12px" }}>Refresh Models</button>
 
           <button onClick={handleSetDefaultModel} style={{ padding: "6px 12px" }}>Set Default</button>
-          {saved && <span style={{ color: "green" }}>Saved!</span>}
+          {saved && <span style={{ color: C.green }}>Saved!</span>}
         </div>
       </section>
 
@@ -207,12 +209,12 @@ export function ProviderConfig(): React.JSX.Element {
           <div style={{ flex: 1 }}>
             <div style={{ marginBottom: 12 }}>
               <button onClick={handleSave} style={{ padding: "6px 16px" }}>Save Config</button>
-              {saved && <span style={{ color: "green", marginLeft: 12 }}>Saved!</span>}
+              {saved && <span style={{ color: C.green, marginLeft: 12 }}>Saved!</span>}
             </div>
 
             <div>
               <h4>Raw config (read-only)</h4>
-              <pre style={{ whiteSpace: "pre-wrap", background: "#f6f6f6", padding: 12, borderRadius: 6 }}>
+              <pre style={{ whiteSpace: "pre-wrap", background: C.surface0, padding: 12, borderRadius: 6 }}>
                 {JSON.stringify(config, null, 2)}
               </pre>
             </div>

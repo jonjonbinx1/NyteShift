@@ -51,6 +51,8 @@ export {
   writeGlobalConfig,
   readAgentConfig,
   writeAgentConfig,
+  readSkillToolConfig,
+  writeSkillToolConfig,
 } from "./runtime/config/configResolver.js";
 export { ensureSolixDirs } from "./runtime/config/ensureDirs.js";
 
@@ -63,7 +65,30 @@ export {
 } from "./runtime/soul/soulInjector.js";
 
 // ── Triggers ───────────────────────────────────────────────────────────
-export { listTriggers, fireTrigger } from "./runtime/triggers/triggerRunner.js";
+export { listTriggers, fireTrigger } from "./runtime/triggers/triggerRunner.js";export {
+  listAllTriggers,
+  readAgentTriggers,
+  writeAgentTriggers,
+  createTriggerDefinition,
+  updateTriggerDefinition,
+  deleteTriggerDefinition,
+  getTriggerDefinition,
+} from "./runtime/triggers/triggerStore.js";
+export { TriggerEngine, getTriggerEngine } from "./runtime/triggers/triggerEngine.js";
+export type { TriggerEngineOptions } from "./runtime/triggers/triggerEngine.js";
+
+// ── Discord ────────────────────────────────────────────────────────────
+export {
+  DiscordBridge,
+  readBridgeConfig,
+  writeBridgeConfig,
+  deleteBridgeConfig,
+  startBridge,
+  stopBridge,
+  isBridgeRunning,
+  getActiveBridges,
+} from "./runtime/discord/discordBridge.js";
+export type { DiscordBridgeOptions } from "./runtime/discord/discordBridge.js";
 
 // ── Control ────────────────────────────────────────────────────────────
 export { AgentController } from "./runtime/control/controller.js";
@@ -91,4 +116,11 @@ export {
   listMarketplaceCategories,
   installMarketplaceItem,
   uninstallMarketplaceItem,
+  // update/auto helpers
+  readInstalledIndex,
+  getInstalledItem,
+  setItemAutoUpdate,
+  setGlobalAutoUpdate,
+  checkAndUpdateItem,
+  autoUpdateInstalledItems,
 } from "./runtime/marketplace/index.js";

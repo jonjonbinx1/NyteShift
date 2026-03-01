@@ -3,25 +3,7 @@ import { useParams } from "react-router-dom";
 import { useChatStore } from "../stores/ChatStore.js";
 import type { ChatMessageInfo, ChatSessionSummaryInfo } from "../global.js";
 import { AgentSettingsModal } from "../components/AgentSettingsModal.js";
-
-// ── Catppuccin Mocha palette tokens ────────────────────────────────────────
-const C = {
-  base: "#1e1e2e",
-  mantle: "#181825",
-  crust: "#11111b",
-  surface0: "#313244",
-  surface1: "#45475a",
-  surface2: "#585b70",
-  overlay0: "#6c7086",
-  text: "#cdd6f4",
-  subtext0: "#a6adc8",
-  subtext1: "#bac2de",
-  mauve: "#cba6f7",
-  blue: "#89b4fa",
-  green: "#a6e3a1",
-  red: "#f38ba8",
-  yellow: "#f9e2af",
-} as const;
+import { useTheme } from "../theme/ThemeContext.js";
 
 type Model = { id: string; contextWindow?: number; maxOutputTokens?: number; description?: string };
 
@@ -235,6 +217,7 @@ function ThinkingBlock({ text }: { text: string }) {
 export function AgentDetail(): React.JSX.Element {
   const { name } = useParams<{ name: string }>();
   const chatStore = useChatStore();
+  const { palette: C } = useTheme();
 
   // Agent config
   const [config, setConfig] = useState<Record<string, any>>({});

@@ -35,3 +35,13 @@ export {
   installMarketplaceItem,
   uninstallMarketplaceItem,
 } from "./marketplaceBrowser.js";
+
+// Installed-item metadata / auto-update helpers
+export {
+  readInstalledIndex,
+  getInstalledItem,
+  setItemAutoUpdate,
+  setGlobalAutoUpdate,
+  checkAndUpdateItem,
+  autoUpdateInstalledItems,
+} from "./installed.js";
