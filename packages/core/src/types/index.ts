@@ -398,6 +398,15 @@ export interface GlobalDiscordConfig {
    *  - `"trigger"` — one-shot autonomous run per message, no history.
    */
   mode?: "trigger" | "bridge";
+  /**
+   * Optional channel-to-agent routing map.
+   * Key = Discord channel **name** (e.g. `"codi"`) or channel **ID** (e.g. `"987654321"`), value = agent name.
+   * Lookup is attempted by ID first, then by name (case-insensitive, leading "#" stripped).
+   * Messages sent in a mapped channel are routed directly to that agent
+   * without requiring any name prefix — the bot acts as if it owns that channel.
+   * Mapped channels are implicitly whitelisted even if they are not in channelIds.
+   */
+  channelAgentMap?: Record<string, string>;
 }
 
 // ── Control ────────────────────────────────────────────────────────────

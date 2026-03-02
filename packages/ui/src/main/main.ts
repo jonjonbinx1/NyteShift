@@ -716,6 +716,47 @@ app.whenReady().then(async () => {
     );
   }).catch(() => {});
 
+  // Auto-start Discord bridges that have enabled: true saved in their config.
+  // Deferred via setTimeout so it never blocks window creation or IPC registration.
+  setTimeout(() => {
+    import("@solix/core").then(async ({ readGlobalDiscordConfig, startGlobalBridge, listAgents: _listAgents, readBridgeConfig, startBridge }) => {
+      // Global bridge
+      try {
+        const globalCfg = await readGlobalDiscordConfig();
+        if (globalCfg?.enabled && globalCfg?.botToken) {
+          startGlobalBridge().then(() => {
+            console.log("[SolixAI] global Discord bridge auto-started");
+          }).catch((err: Error) => {
+            console.warn("[SolixAI] global Discord bridge auto-start failed:", err.message);
+          });
+        }
+      } catch (err) {
+        console.warn("[SolixAI] global Discord bridge config read failed:", (err as Error).message);
+      }
+
+      // Per-agent bridges — fire each one independently so a slow/failing
+      // agent does not delay the others.
+      try {
+        const agents = await _listAgents();
+        for (const agentName of agents) {
+          readBridgeConfig(agentName).then((cfg) => {
+            if (cfg?.enabled && cfg?.botToken) {
+              startBridge(agentName).then(() => {
+                console.log(`[SolixAI] Discord bridge auto-started for agent "${agentName}"`);
+              }).catch((err: Error) => {
+                console.warn(`[SolixAI] Discord bridge auto-start failed for "${agentName}":`, err.message);
+              });
+            }
+          }).catch((err: Error) => {
+            console.warn(`[SolixAI] Discord bridge config read failed for "${agentName}":`, err.message);
+          });
+        }
+      } catch (err) {
+        console.warn("[SolixAI] per-agent Discord bridge auto-start failed:", (err as Error).message);
+      }
+    }).catch(() => {});
+  }, 0);
+
   // Start trigger engine so cron/webhook triggers run in the background.
   try {
     const triggerEngine = getTriggerEngine();

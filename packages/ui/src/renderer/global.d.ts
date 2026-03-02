@@ -248,6 +248,7 @@ export interface SolixApi {
     channelIds?: string[];
     enabled: boolean;
     mode?: "trigger" | "bridge";
+    channelAgentMap?: Record<string, string>;
   } | null>;
   /** Write the global Discord config to ~/.solix/config.json. */
   discordGlobalConfigWrite(config: {
@@ -256,6 +257,7 @@ export interface SolixApi {
     channelIds?: string[];
     enabled: boolean;
     mode?: "trigger" | "bridge";
+    channelAgentMap?: Record<string, string>;
   }): Promise<void>;
   triggersUpdate(triggerId: string, updates: Partial<TriggerDefinitionInfo>): Promise<TriggerDefinitionInfo | null>;
   triggersDelete(triggerId: string): Promise<boolean>;

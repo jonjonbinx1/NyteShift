@@ -570,6 +570,8 @@ export class GlobalDiscordBridge extends EventEmitter {
   private readonly guildId?: string;
   private readonly channelIds: Set<string>;
   private readonly mode: "trigger" | "bridge";
+  /** channel ID → agent name direct routing map */
+  private readonly channelAgentMap: Map<string, string>;
 
   constructor(cfg: GlobalDiscordConfig) {
     super();
@@ -577,6 +579,7 @@ export class GlobalDiscordBridge extends EventEmitter {
     this.guildId = cfg.guildId;
     this.channelIds = new Set(cfg.channelIds ?? []);
     this.mode = cfg.mode ?? "bridge";
+    this.channelAgentMap = new Map(Object.entries(cfg.channelAgentMap ?? {}));
   }
 
   get isRunning(): boolean {
@@ -654,10 +657,43 @@ export class GlobalDiscordBridge extends EventEmitter {
     if (message.author.bot) return;
 
     if (this.guildId && message.guild?.id !== this.guildId) return;
-    if (this.channelIds.size > 0 && !this.channelIds.has(message.channel.id)) return;
+
+    // Resolve mapped agent: try channel ID first, then channel name (case-insensitive, strip leading #).
+    const channelName = (message.channel.name || "").toLowerCase().replace(/^#/, "");
+    const mappedAgent =
+      this.channelAgentMap.get(message.channel.id) ??
+      this.channelAgentMap.get(channelName) ??
+      [...this.channelAgentMap.entries()].find(
+        ([k]) => k.toLowerCase().replace(/^#/, "") === channelName
+      )?.[1];
+
+    if (!mappedAgent && this.channelIds.size > 0 && !this.channelIds.has(message.channel.id)) return;
 
     const raw = message.content.trim();
     if (!raw) return;
+
+    // If this channel has a direct agent mapping, route straight to that agent
+    // with no name prefix required.
+    if (mappedAgent) {
+      log(
+        `[global] channel-mapped message from ${message.author.username} in #${message.channel.name || message.channel.id} → agent "${mappedAgent}":`,
+        `"${raw.slice(0, 80)}"`,
+      );
+      this.emit("message", {
+        agentName: mappedAgent,
+        author: message.author.username,
+        authorId: message.author.id,
+        channelId: message.channel.id,
+        guildId: message.guild?.id,
+        content: raw,
+      });
+      if (this.mode === "bridge") {
+        await this.handleBridgeMessage(message, mappedAgent, raw);
+      } else {
+        await this.handleTriggerMessage(message, mappedAgent, raw);
+      }
+      return;
+    }
 
     // Load known agents and find those WITHOUT their own dedicated bridge.
     const allAgents = await listAgents();
