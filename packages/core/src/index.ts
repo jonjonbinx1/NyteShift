@@ -63,7 +63,16 @@ export {
   readSoul,
   writeSoul,
 } from "./runtime/soul/soulInjector.js";
-
+// ── Memory ──────────────────────────────────────────────
+export {
+  writeMemory,
+  readMemory,
+  listMemories,
+  deleteMemory,
+  clearAllMemories,
+  searchMemories,
+} from "./runtime/memory/memoryManager.js";
+export type { MemoryEntry } from "./runtime/memory/memoryManager.js";
 // ── Triggers ───────────────────────────────────────────────────────────
 export { listTriggers, fireTrigger } from "./runtime/triggers/triggerRunner.js";export {
   listAllTriggers,

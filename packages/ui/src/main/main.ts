@@ -46,6 +46,13 @@ import {
   // Skill / Tool Config
   readSkillToolConfig,
   writeSkillToolConfig,
+  // Memory
+  writeMemory,
+  readMemory,
+  listMemories,
+  deleteMemory,
+  clearAllMemories,
+  searchMemories,
 } from "@solix/core";
 import type { ChatSession, TriggerType } from "@solix/core";
 
@@ -233,6 +240,34 @@ function registerIpc(): void {
   );
   ipcMain.handle("chats:deleteAll", (_e, agentName: string) =>
     deleteAllChatSessions(agentName),
+  );
+
+  // ── Memory ───────────────────────────────────────────────
+  // Persistent external memory for agents (read/write from UI and from
+  // agent tool calls in the autonomous pipeline).
+  ipcMain.handle("memory:write",
+    (_e, agentName: string, key: string, value: string, category?: string, note?: string) =>
+      writeMemory(agentName, key, value, category, note),
+  );
+  ipcMain.handle("memory:read",
+    (_e, agentName: string, key: string) =>
+      readMemory(agentName, key),
+  );
+  ipcMain.handle("memory:list",
+    (_e, agentName: string, category?: string) =>
+      listMemories(agentName, category),
+  );
+  ipcMain.handle("memory:delete",
+    (_e, agentName: string, key: string) =>
+      deleteMemory(agentName, key),
+  );
+  ipcMain.handle("memory:clear",
+    (_e, agentName: string) =>
+      clearAllMemories(agentName),
+  );
+  ipcMain.handle("memory:search",
+    (_e, agentName: string, query: string) =>
+      searchMemories(agentName, query),
   );
 
   // Marketplace

@@ -62,7 +62,16 @@ export interface ChatSessionSummaryInfo {
   messageCount: number;
   preview: string;
 }
+// ── Memory ────────────────────────────────────────────────
 
+export interface MemoryEntryInfo {
+  key: string;
+  value: string;
+  category?: string;
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
+}
 // ── Triggers ────────────────────────────────────────────────────────
 
 export type TriggerType = "cron" | "webhook" | "manual" | "discord";
@@ -262,7 +271,23 @@ export interface SolixApi {
   skillToolConfigRead(kind: "skill" | "tool", qualifiedName: string, agentName?: string): Promise<Record<string, unknown>>;
   /** Write config values at global or agent scope. */
   skillToolConfigWrite(kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string): Promise<void>;
-}
+  // ── Memory ───────────────────────────────────────────────
+  /**
+   * Store or update a persistent memory for an agent.
+   * Memories survive across chat sessions and are only retrieved when the
+   * agent explicitly calls memory_read / memory_list / memory_search.
+   */
+  memoryWrite(agentName: string, key: string, value: string, category?: string, note?: string): Promise<MemoryEntryInfo>;
+  /** Retrieve a single memory by key (null if not found). */
+  memoryRead(agentName: string, key: string): Promise<MemoryEntryInfo | null>;
+  /** List all memories, optionally filtered by category. */
+  memoryList(agentName: string, category?: string): Promise<MemoryEntryInfo[]>;
+  /** Delete a single memory by key. */
+  memoryDelete(agentName: string, key: string): Promise<void>;
+  /** Delete ALL memories for an agent (agent reset). */
+  memoryClear(agentName: string): Promise<void>;
+  /** Keyword search across all memory fields. */
+  memorySearch(agentName: string, query: string): Promise<MemoryEntryInfo[]>;}
 
 declare global {
   interface Window {

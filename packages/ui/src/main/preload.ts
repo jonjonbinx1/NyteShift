@@ -164,4 +164,16 @@ contextBridge.exposeInMainWorld("solixApi", {
     ipcRenderer.invoke("skillToolConfig:read", kind, qualifiedName, agentName),
   skillToolConfigWrite: (kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string) =>
     ipcRenderer.invoke("skillToolConfig:write", kind, qualifiedName, values, agentName),
-});
+  // ── Memory ─────────────────────────────────────────────────
+  memoryWrite: (agentName: string, key: string, value: string, category?: string, note?: string) =>
+    ipcRenderer.invoke("memory:write", agentName, key, value, category, note),
+  memoryRead: (agentName: string, key: string) =>
+    ipcRenderer.invoke("memory:read", agentName, key),
+  memoryList: (agentName: string, category?: string) =>
+    ipcRenderer.invoke("memory:list", agentName, category),
+  memoryDelete: (agentName: string, key: string) =>
+    ipcRenderer.invoke("memory:delete", agentName, key),
+  memoryClear: (agentName: string) =>
+    ipcRenderer.invoke("memory:clear", agentName),
+  memorySearch: (agentName: string, query: string) =>
+    ipcRenderer.invoke("memory:search", agentName, query),});

@@ -10,6 +10,7 @@ import { injectSoul } from "../soul/soulInjector.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { loadSkills } from "../skills/skillLoader.js";
 import { loadTools } from "../tools/toolLoader.js";
+import { createMemoryTools } from "../memory/memoryTools.js";
 
 // ── Structured logging ─────────────────────────────────────────────────────
 const log  = (...args: unknown[]) => console.log("[pipeline:autonomous]",  ...args);
@@ -259,8 +260,12 @@ export async function runAutonomousTask(
   log(`  config resolved — provider="${providerId}" model="${model}" temperature=${temperature} maxTokens=${maxTokens} maxSteps=${maxSteps}`);
 
   // ── Load skills & tools ───────────────────────────────────────────────
-  const [skills, tools] = await Promise.all([loadSkills(), loadTools()]);
-  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s)`);
+  // Marketplace tools are combined with built-in memory tools (solix/*)
+  // which are always available without installation.
+  const [skills, marketplaceTools] = await Promise.all([loadSkills(), loadTools()]);
+  const memoryTools = createMemoryTools(agentName);
+  const tools = [...memoryTools, ...marketplaceTools];
+  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s) (${memoryTools.length} built-in + ${marketplaceTools.length} marketplace)`);
 
   const skillList = skills
     .map((s) => `• ${s.frontmatter.contributor}/${s.frontmatter.name}: ${s.frontmatter.description}`)

@@ -43,6 +43,11 @@ export function agentSoulPath(name: string): string {
   return join(agentsDir(), toKebab(name), "soul.md");
 }
 
+/** ~/.solix/agents/<name>/memory/ — persistent external memory store */
+export function agentMemoryDir(name: string): string {
+  return join(agentsDir(), toKebab(name), "memory");
+}
+
 // ── String helpers ─────────────────────────────────────────────────────
 
 /** Normalize any string to lowercase-kebab-case. */
