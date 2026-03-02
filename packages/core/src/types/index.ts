@@ -162,6 +162,14 @@ export interface AgentConfig {
   maxTokens?: number;
   skills?: string[];
   tools?: string[];
+  /**
+   * When true the agent may call `sub_agent_run` with `async: true`,
+   * firing the child run in the background and continuing its own ReAct
+   * loop immediately.  The result can be retrieved later with
+   * `sub_agent_collect`.  Disabled by default to keep the simpler
+   * synchronous Anthropic orchestrator-workers behaviour.
+   */
+  allowAsyncSubAgents?: boolean;
   [key: string]: unknown;
 }
 
@@ -215,6 +223,32 @@ export interface AutonomousTaskOptions {
   onStep?: (step: PipelineStep) => void;
   /** Prior conversation turns to prepend so the agent retains context. */
   chatHistory?: Array<{ role: "user" | "assistant"; content: string }>;
+
+  // ── Sub-agent orchestration ─────────────────────────────────────────
+  /**
+   * Current nesting depth.  Used to enforce the maximum recursion limit
+   * and prevent infinite delegation loops.  0 = top-level run.
+   *
+   * Follows Anthropic's recommendation to bound orchestrator-worker
+   * delegation depth so a misbehaving agent cannot spawn unbounded
+   * sub-agent chains.
+   */
+  _depth?: number;
+  /**
+   * Maximum allowed nesting depth for sub-agent delegation.
+   * Default: 3 (parent → child → grandchild → great-grandchild).
+   */
+  maxDepth?: number;
+  /**
+   * Name of the parent agent that spawned this run, if any.
+   * Stored for observability and lineage tracking.
+   */
+  parentAgent?: string;
+  /**
+   * Unique identifier of the parent run, if this task was spawned as a
+   * sub-agent delegation.
+   */
+  parentRunId?: string;
 }
 
 export interface PipelineStep {
@@ -225,6 +259,11 @@ export interface PipelineStep {
   /** Model reasoning / chain-of-thought for this step, if available. */
   thinking?: string;
   timestamp: number;
+  /**
+   * When this step is a sub-agent delegation, contains the full result
+   * from the child run for observability / UI expansion.
+   */
+  subAgentResult?: SubAgentResult;
 }
 
 export interface PipelineResult {
@@ -234,6 +273,50 @@ export interface PipelineResult {
   /** Aggregated chain-of-thought from all steps. */
   thinking?: string;
   aborted: boolean;
+  /** Parent agent name if this was a sub-agent run. */
+  parentAgent?: string;
+  /** Unique ID of the parent run when this is a sub-agent. */
+  parentRunId?: string;
+  /** Nesting depth (0 = top-level). */
+  depth?: number;
+  /** Sub-agent runs spawned during this pipeline execution. */
+  subAgentRuns?: SubAgentResult[];
+}
+
+/**
+ * Lightweight record of a completed sub-agent delegation.
+ *
+ * Follows Anthropic's orchestrator-workers pattern — each delegation is
+ * a self-contained autonomous run that returns a final answer to the parent.
+ */
+export interface SubAgentResult {
+  /** Name of the delegated agent. */
+  agentName: string;
+  /** Task description sent to the sub-agent. */
+  task: string;
+  /** Final answer produced by the sub-agent. */
+  finalOutput: string;
+  /** Number of ReAct steps consumed. */
+  stepCount: number;
+  /** Elapsed wall-clock time in ms. */
+  elapsedMs: number;
+  /** Whether the sub-agent was aborted. */
+  aborted: boolean;
+  /** Nesting depth of this sub-agent (1 = direct child). */
+  depth: number;
+  /** Full step details (for UI drill-down). */
+  steps?: PipelineStep[];
+  /** Any nested sub-agent results from this child. */
+  children?: SubAgentResult[];
+  // ── Async delegation fields ──────────────────────────────────────────
+  /** True when the sub-agent was launched asynchronously (fire-and-forget). */
+  isAsync?: boolean;
+  /** Stable identifier for the async run (used with sub_agent_collect). */
+  runId?: string;
+  /** Lifecycle status for async runs. Sync runs are always "completed". */
+  status?: "running" | "completed" | "failed";
+  /** Error message when status is "failed". */
+  error?: string;
 }
 
 // ── Trigger ────────────────────────────────────────────────────────────

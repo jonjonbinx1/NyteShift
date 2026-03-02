@@ -114,6 +114,10 @@ export { AgentController } from "./runtime/control/controller.js";
 // ── Utils (selective) ──────────────────────────────────────────────────
 export { toKebab, solixHome } from "./utils/index.js";
 
+// ── Sub-Agent Delegation ───────────────────────────────────────────────
+export { createSubAgentTools } from "./runtime/subagent/subagentTools.js";
+export type { SubAgentToolsOptions } from "./runtime/subagent/subagentTools.js";
+
 // ── Marketplace ────────────────────────────────────────────────────────
 export type {
   MarketplaceConfig,
