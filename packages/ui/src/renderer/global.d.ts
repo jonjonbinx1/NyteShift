@@ -15,6 +15,9 @@ export interface MarketplaceItemInfo {
   localPath: string;
   installed: boolean;
   description: string;
+  version?: string;
+  autoUpdate?: boolean;
+  needsUpdate?: boolean;
 }
 
 export interface MarketplaceSyncResultInfo {
@@ -132,7 +135,7 @@ export interface SolixApi {
   listProviders(): Promise<Array<{ id: string }>>;
   /** Fetch models from a specific provider (or all if omitted). */
   listProviderModels(providerId?: string): Promise<ModelInfo[]>;
-  runAutonomous(name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }): Promise<{
+  runAutonomous(name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }): Promise<{
     finalOutput: string;
     thinking?: string;
     steps: Array<{ index: number; action: string; output: unknown; thinking?: string }>;
@@ -220,6 +223,30 @@ export interface SolixApi {
     enabled: boolean;
     provider?: string;
     model?: string;
+  }): Promise<void>;
+
+  // ── Global Discord Bridge ───────────────────────────────────────
+  /** Start the global Discord bridge using the stored config. */
+  discordGlobalStart(): Promise<{ running: boolean }>;
+  /** Stop the global Discord bridge. */
+  discordGlobalStop(): Promise<{ running: boolean }>;
+  /** Whether the global Discord bridge is currently running. */
+  discordGlobalStatus(): Promise<{ running: boolean }>;
+  /** Read the global Discord config from ~/.solix/config.json. */
+  discordGlobalConfigRead(): Promise<{
+    botToken: string;
+    guildId?: string;
+    channelIds?: string[];
+    enabled: boolean;
+    mode?: "trigger" | "bridge";
+  } | null>;
+  /** Write the global Discord config to ~/.solix/config.json. */
+  discordGlobalConfigWrite(config: {
+    botToken: string;
+    guildId?: string;
+    channelIds?: string[];
+    enabled: boolean;
+    mode?: "trigger" | "bridge";
   }): Promise<void>;
   triggersUpdate(triggerId: string, updates: Partial<TriggerDefinitionInfo>): Promise<TriggerDefinitionInfo | null>;
   triggersDelete(triggerId: string): Promise<boolean>;

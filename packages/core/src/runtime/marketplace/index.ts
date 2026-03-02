@@ -44,4 +44,5 @@ export {
   setGlobalAutoUpdate,
   checkAndUpdateItem,
   autoUpdateInstalledItems,
+  reconcileInstalledItems,
 } from "./installed.js";

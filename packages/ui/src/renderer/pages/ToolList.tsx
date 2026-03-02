@@ -34,6 +34,10 @@ export function ToolList(): React.JSX.Element {
   const [activeContributor, setActiveContributor] = useState<string | null>(null);
   const [agents, setAgents] = useState<string[]>([]);
   const [configTarget, setConfigTarget] = useState<ToolInfo | null>(null);
+  const [toast, setToast] = useState("");
+  const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false);
+  const [updatingAll, setUpdatingAll] = useState(false);
+  const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
 
   const reload = () => {
     if (!window.solixApi) return;
@@ -53,6 +57,14 @@ export function ToolList(): React.JSX.Element {
     try {
       const idx = await a.marketplaceInstalled();
       setInstalledIdx(idx);
+      if (typeof idx.globalAutoUpdate === "boolean") {
+        setGlobalAutoUpdate(!!idx.globalAutoUpdate);
+      } else {
+        try {
+          const cfg = await a.readConfig();
+          setGlobalAutoUpdate(!!(cfg.autoUpdate?.marketplace));
+        } catch { /* ignore */ }
+      }
     } catch {
       // ignore
     }
@@ -61,24 +73,122 @@ export function ToolList(): React.JSX.Element {
   const handleUpdateTool = async (t: ToolInfo) => {
     const a = (window as any).solixApi;
     if (!a) return;
+    const key = `${t.contributor}/${t.name}`;
+    setUpdatingItems((prev) => new Set([...prev, key]));
     try {
       const res = await a.marketplaceUpdate({ category: "tools", contributor: t.contributor, name: t.name });
-      if (res && res.message) flash(res.message);
+      flash(res?.message ?? (res?.updated ? "Updated" : "Already up to date"));
       await loadInstalledIndex();
-      window.solixApi.listTools().then(setTools).catch(console.error);
+      window.solixApi!.listTools().then(setTools).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
+    } finally {
+      setUpdatingItems((prev) => { const n = new Set(prev); n.delete(key); return n; });
+    }
+  };
+
+  const handleUninstallTool = async (t: ToolInfo) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    const key = `${t.contributor}/${t.name}`;
+    if (!confirm(`Uninstall tool ${t.name}? This will remove the on-disk tool.`)) return;
+    setUpdatingItems((prev) => new Set([...prev, key]));
+    try {
+      const res = await a.marketplaceUninstall({ category: "tools", contributor: t.contributor, name: t.name });
+      flash(res?.message ?? "Uninstalled");
+      await loadInstalledIndex();
+      window.solixApi!.listTools().then(setTools).catch(console.error);
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    } finally {
+      setUpdatingItems((prev) => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 
   const handleAutoToggleTool = async (t: ToolInfo, en: boolean) => {
     const a = (window as any).solixApi;
     if (!a) return;
-    await a.marketplaceSetAutoUpdate({ category: "tools", contributor: t.contributor, name: t.name }, en);
-    await loadInstalledIndex();
+    const key = `${t.contributor}/${t.name}`;
+    setUpdatingItems((prev) => new Set([...prev, key]));
+    try {
+      try {
+        setInstalledIdx((prev: any) => {
+          if (!prev) return prev;
+          const next = { ...prev };
+          const items: any[] = next.items || [];
+          const existsIdx = items.findIndex((it: any) =>
+            it.category === "tools" && it.contributor === t.contributor && it.name === t.name,
+          );
+          if (existsIdx >= 0) {
+            next.items = items.map((it: any, idx: number) =>
+              idx === existsIdx ? { ...it, autoUpdate: en } : it,
+            );
+          } else {
+            next.items = [...items, { category: "tools", contributor: t.contributor, name: t.name, hash: "", autoUpdate: en }];
+          }
+          return next;
+        });
+      } catch {}
+
+      await a.marketplaceSetAutoUpdate({ category: "tools", contributor: t.contributor, name: t.name }, en);
+      flash(`Auto-update ${en ? "enabled" : "disabled"} for ${t.name}`);
+      await loadInstalledIndex();
+    } catch (e: any) {
+      setInstalledIdx((prev: any) => {
+        if (!prev) return prev;
+        const next = { ...prev };
+        next.items = (next.items || []).map((it: any) =>
+          it.category === "tools" && it.contributor === t.contributor && it.name === t.name
+            ? { ...it, autoUpdate: !en }
+            : it,
+        );
+        return next;
+      });
+      flash(`Error saving auto-update preference: ${e.message}`);
+    } finally {
+      setUpdatingItems((prev) => { const n = new Set(prev); n.delete(key); return n; });
+    }
   };
 
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
+
+  const handleUpdateAllTools = async (contributor?: string) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    setUpdatingAll(true);
+    try {
+      const targets = contributor
+        ? (byContributor.get(contributor) ?? [])
+        : tools;
+      let updated = 0;
+      for (const t of targets) {
+        try {
+          const res = await a.marketplaceUpdate({ category: "tools", contributor: t.contributor, name: t.name });
+          if (res && res.updated) updated++;
+        } catch { /* skip individual failures */ }
+      }
+      flash(updated > 0 ? `Updated ${updated} tool${updated !== 1 ? "s" : ""}` : "All tools up to date");
+      await loadInstalledIndex();
+      window.solixApi!.listTools().then(setTools).catch(console.error);
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    } finally {
+      setUpdatingAll(false);
+    }
+  };
+
+  const handleGlobalAutoToggle = async (en: boolean) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    await a.marketplaceSetGlobalAutoUpdate(en);
+    setGlobalAutoUpdate(en);
+    try {
+      const cfg = await a.readConfig();
+      cfg.autoUpdate = cfg.autoUpdate ?? {};
+      cfg.autoUpdate.marketplace = en;
+      await a.writeConfig(cfg);
+    } catch { /* ignore */ }
+  };
 
   /* group by contributor */
   const byContributor = useMemo(() => {
@@ -148,6 +258,33 @@ export function ToolList(): React.JSX.Element {
             </>
           )}
         </div>
+        {/* Update All + global auto-update controls */}
+        {activeContributor ? (
+          <button
+            onClick={() => handleUpdateAllTools(activeContributor)}
+            disabled={updatingAll}
+            style={{ padding: "6px 14px", borderRadius: 8, fontSize: "0.82rem", fontWeight: 600,
+              background: "rgba(166,227,161,0.15)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)`,
+              cursor: updatingAll ? "not-allowed" : "pointer", opacity: updatingAll ? 0.6 : 1 }}>
+            {updatingAll ? "Updating…" : `↻ Update All (${activeContributor})`}
+          </button>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => handleUpdateAllTools()}
+              disabled={updatingAll}
+              style={{ padding: "6px 14px", borderRadius: 8, fontSize: "0.82rem", fontWeight: 600,
+                background: "rgba(166,227,161,0.15)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)`,
+                cursor: updatingAll ? "not-allowed" : "pointer", opacity: updatingAll ? 0.6 : 1 }}>
+              {updatingAll ? "Updating…" : "↻ Update All"}
+            </button>
+            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.82rem", color: c.subtext, cursor: "pointer", userSelect: "none" }}>
+              <input type="checkbox" checked={globalAutoUpdate} onChange={(e) => handleGlobalAutoToggle(e.target.checked)}
+                style={{ accentColor: c.accent, width: 14, height: 14, cursor: "pointer" }} />
+              auto‑update
+            </label>
+          </div>
+        )}
       </div>
 
       {/* ── Search ── */}
@@ -231,21 +368,41 @@ export function ToolList(): React.JSX.Element {
                         ⚙ Configure
                       </button>
                     )}
-                    {installedIdx && installedIdx.items && installedIdx.items.find((i: any) => i.category === "tools" && i.contributor === t.contributor && i.name === t.name) && (
-                      <>
-                        <button onClick={() => handleUpdateTool(t)}
-                          style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
-                            background: "rgba(166,227,161,0.12)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)` }}>
-                          Update
-                        </button>
-                        <label style={{ fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
-                          <input type="checkbox" checked={!!installedIdx.items.find((i: any) => i.category === "tools" && i.contributor === t.contributor && i.name === t.name).autoUpdate}
-                            onChange={(e) => handleAutoToggleTool(t, e.target.checked)}
-                            style={{ accentColor: c.accent, width: 14, height: 14 }} />
-                          auto
-                        </label>
-                      </>
-                    )}
+                    {(() => {
+                      const entry = installedIdx?.items?.find((i: any) => i.category === "tools" && i.contributor === t.contributor && i.name === t.name);
+                      const itemKey = `${t.contributor}/${t.name}`;
+                      const busy = updatingItems.has(itemKey);
+                      return (
+                        <>
+                          <button
+                            onClick={() => handleUpdateTool(t)}
+                            disabled={busy}
+                            style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+                              background: "rgba(166,227,161,0.12)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)`,
+                              cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1 }}>
+                            {busy ? "…" : "↻ Update"}
+                          </button>
+                          <button
+                            onClick={() => handleUninstallTool(t)}
+                            disabled={busy}
+                            style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+                              background: "rgba(255,120,120,0.06)", color: "#ff6b6b", border: `1px solid rgba(255,120,120,0.12)`,
+                              cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, marginLeft: 6 }}>
+                            {busy ? "…" : "🗑 Remove"}
+                          </button>
+                          <label style={{ fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 4, marginLeft: 4, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={!!entry?.autoUpdate}
+                              disabled={busy}
+                              onChange={(e) => handleAutoToggleTool(t, e.target.checked)}
+                              aria-busy={busy}
+                              style={{ accentColor: c.accent, width: 14, height: 14, cursor: busy ? "not-allowed" : "pointer" }} />
+                            auto
+                          </label>
+                        </>
+                      );
+                    })()}
                     <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600, background: c.accent, color: "#1e1e2e" }}>tool</span>
                   </div>
                 </div>
@@ -268,6 +425,18 @@ export function ToolList(): React.JSX.Element {
           agents={agents}
           onClose={() => setConfigTarget(null)}
         />
+      )}
+
+      {/* ── Toast ── */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 28, right: 28, background: c.card, color: c.text,
+          padding: "11px 22px", borderRadius: 10, border: `1px solid ${c.accent}`,
+          boxShadow: `0 8px 28px rgba(0,0,0,0.3)`, zIndex: 9999, fontSize: "0.86rem",
+          maxWidth: 380,
+        }}>
+          {toast}
+        </div>
       )}
     </div>
   );

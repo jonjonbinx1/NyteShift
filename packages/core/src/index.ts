@@ -87,6 +87,15 @@ export {
   stopBridge,
   isBridgeRunning,
   getActiveBridges,
+  // Global Discord bridge
+  GlobalDiscordBridge,
+  parseAgentFromMessage,
+  readGlobalDiscordConfig,
+  writeGlobalDiscordConfig,
+  startGlobalBridge,
+  stopGlobalBridge,
+  isGlobalBridgeRunning,
+  getGlobalBridge,
 } from "./runtime/discord/discordBridge.js";
 export type { DiscordBridgeOptions } from "./runtime/discord/discordBridge.js";
 
@@ -123,4 +132,5 @@ export {
   setGlobalAutoUpdate,
   checkAndUpdateItem,
   autoUpdateInstalledItems,
+  reconcileInstalledItems,
 } from "./runtime/marketplace/index.js";

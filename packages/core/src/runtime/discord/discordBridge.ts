@@ -32,6 +32,7 @@ import { join } from "node:path";
 
 import type {
   DiscordBridgeConfig,
+  GlobalDiscordConfig,
   TriggerDefinition,
   TriggerEvent,
   PipelineResult,
@@ -50,6 +51,8 @@ import {
   readJsonFile,
   writeJsonFile,
 } from "../../utils/index.js";
+import { readGlobalConfig, writeGlobalConfig } from "../config/configResolver.js";
+import { listAgents } from "../agents/agentManager.js";
 
 // ── Logging ────────────────────────────────────────────────────────────
 
@@ -230,6 +233,16 @@ export class DiscordBridge extends EventEmitter {
   // ── Message handler ────────────────────────────────────────────────
 
   private async handleMessage(message: any): Promise<void> {
+    // Log raw incoming message for debugging before any filters
+    try {
+      const user = message.author?.username || "<unknown>";
+      const chan = message.channel?.name || message.channel?.id || "<unknown>";
+      const raw = message.content;
+      log(`[discord-bridge] incoming message from ${user} in #${chan}: "${raw}"`);
+    } catch {
+      // ignore logging errors
+    }
+
     // Ignore bot messages (including our own).
     if (message.author.bot) return;
 
@@ -513,4 +526,362 @@ export async function stopBridge(agentName: string): Promise<void> {
 export function isBridgeRunning(agentName: string): boolean {
   const key = toKebab(agentName);
   return activeBridges.get(key)?.isRunning ?? false;
+}
+
+// ── Global Discord Config persistence ─────────────────────────────────
+
+/** Read the global Discord config from the user's top-level config. */
+export async function readGlobalDiscordConfig(): Promise<GlobalDiscordConfig | null> {
+  const cfg = await readGlobalConfig();
+  return (cfg as any).globalDiscord ?? null;
+}
+
+/** Write the global Discord config into the user's top-level config. */
+export async function writeGlobalDiscordConfig(discord: GlobalDiscordConfig): Promise<void> {
+  const cfg = await readGlobalConfig();
+  (cfg as any).globalDiscord = discord;
+  await writeGlobalConfig(cfg as any);
+}
+
+// ── GlobalDiscordBridge ────────────────────────────────────────────────
+
+/**
+ * A single shared Discord bot that routes messages to agents by name.
+ *
+ * Agents WITHOUT their own per-agent discord-bridge.json are served by
+ * this bridge.  To address an agent the user must prefix their message
+ * with the agent's name:
+ *
+ *   @AgentName do something for me
+ *   AgentName: do something for me
+ *
+ * Case is ignored when matching agent names.  The name prefix is stripped
+ * before the task is sent to the agent.
+ *
+ * Agents WITH their own per-agent discord-bridge.json (a dedicated bot
+ * token) run their own `DiscordBridge` and are NOT handled here.
+ */
+export class GlobalDiscordBridge extends EventEmitter {
+  private client: any = null;
+  private running = false;
+  private botUserId = "";
+
+  private readonly botToken: string;
+  private readonly guildId?: string;
+  private readonly channelIds: Set<string>;
+  private readonly mode: "trigger" | "bridge";
+
+  constructor(cfg: GlobalDiscordConfig) {
+    super();
+    this.botToken = cfg.botToken;
+    this.guildId = cfg.guildId;
+    this.channelIds = new Set(cfg.channelIds ?? []);
+    this.mode = cfg.mode ?? "bridge";
+  }
+
+  get isRunning(): boolean {
+    return this.running;
+  }
+
+  // ── Lifecycle ────────────────────────────────────────────────────
+
+  async start(): Promise<void> {
+    if (this.running) return;
+
+    let DiscordJS: any;
+    try {
+      DiscordJS = await import("discord.js");
+    } catch {
+      throw new Error(
+        "discord.js is not installed.  Run `npm install discord.js` in packages/core to enable Discord integration.",
+      );
+    }
+
+    const { Client, GatewayIntentBits, Events } = DiscordJS;
+
+    this.client = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages,
+      ],
+    });
+
+    this.client.once(Events.ClientReady, (readyClient: any) => {
+      this.botUserId = readyClient.user.id;
+      log(`[global] connected as ${readyClient.user.tag} (mode: ${this.mode})`);
+      this.emit("ready", { tag: readyClient.user.tag, id: this.botUserId });
+    });
+
+    this.client.on(Events.MessageCreate, async (message: any) => {
+      try {
+        await this.handleMessage(message);
+      } catch (err) {
+        logE("[global] message handler error:", (err as Error).message);
+        this.emit("error", err);
+      }
+    });
+
+    this.client.on("error", (err: Error) => {
+      logE("[global] client error:", err.message);
+      this.emit("error", err);
+    });
+
+    await this.client.login(this.botToken);
+    this.running = true;
+    log("[global] started");
+    this.emit("started");
+  }
+
+  async stop(): Promise<void> {
+    if (!this.running) return;
+    log("[global] stopping…");
+    try {
+      await this.client?.destroy();
+    } catch {
+      // Best-effort.
+    }
+    this.client = null;
+    this.running = false;
+    log("[global] stopped");
+    this.emit("stopped");
+  }
+
+  // ── Message routing ──────────────────────────────────────────────
+
+  private async handleMessage(message: any): Promise<void> {
+    if (message.author.bot) return;
+
+    if (this.guildId && message.guild?.id !== this.guildId) return;
+    if (this.channelIds.size > 0 && !this.channelIds.has(message.channel.id)) return;
+
+    const raw = message.content.trim();
+    if (!raw) return;
+
+    // Load known agents and find those WITHOUT their own dedicated bridge.
+    const allAgents = await listAgents();
+
+    // Build list of agents that should be served by the global bridge
+    // (i.e. those that have NO per-agent discord-bridge.json).
+    const globalAgents: string[] = [];
+    for (const name of allAgents) {
+      const cfg = await readBridgeConfig(name);
+      if (!cfg || !cfg.botToken) {
+        globalAgents.push(name);
+      }
+    }
+
+    const parsed = parseAgentFromMessage(raw, globalAgents);
+    if (!parsed) return; // No matching agent name prefix found.
+
+    const { agentName, task } = parsed;
+
+    log(
+      `[global] routing message from ${message.author.username} → agent "${agentName}":`,
+      `"${task.slice(0, 80)}"`,
+    );
+    this.emit("message", {
+      agentName,
+      author: message.author.username,
+      authorId: message.author.id,
+      channelId: message.channel.id,
+      guildId: message.guild?.id,
+      content: task,
+    });
+
+    if (this.mode === "bridge") {
+      await this.handleBridgeMessage(message, agentName, task);
+    } else {
+      await this.handleTriggerMessage(message, agentName, task);
+    }
+  }
+
+  private async handleBridgeMessage(message: any, agentName: string, task: string): Promise<void> {
+    const channelId = message.channel.id;
+    // Per-agent, per-channel session so conversations don't bleed between agents.
+    const sessionId = `discord-global-${channelId}-${toKebab(agentName)}`;
+
+    let session = await loadChatSession(agentName, sessionId);
+    if (!session) {
+      session = {
+        id: sessionId,
+        agentName,
+        title: `Discord Global #${message.channel.name || channelId}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [],
+      };
+    }
+
+    const userMsg: ChatMessage = {
+      id: randomUUID(),
+      role: "user",
+      content: `[${message.author.username}]: ${task}`,
+      ts: Date.now(),
+    };
+    session.messages.push(userMsg);
+
+    const chatHistory = session.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-50)
+      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
+    try {
+      await message.channel.sendTyping?.();
+
+      const result = await runAutonomousTask(agentName, task, {
+        chatHistory: chatHistory.slice(0, -1),
+      });
+
+      const assistantMsg: ChatMessage = {
+        id: randomUUID(),
+        role: "assistant",
+        content: result.finalOutput,
+        thinking: result.thinking,
+        ts: Date.now(),
+      };
+      session.messages.push(assistantMsg);
+      await saveChatSession(session);
+
+      await this.sendReply(message.channel, result.finalOutput, message.id);
+
+      this.emit("run:completed", { mode: "bridge", agentName, channelId, sessionId, result });
+    } catch (err) {
+      logE(`[global] bridge run failed for "${agentName}":`, (err as Error).message);
+      session.messages.push({ id: randomUUID(), role: "error" as any, content: `Error: ${(err as Error).message}`, ts: Date.now() });
+      await saveChatSession(session);
+      try { await message.channel.send(`[${agentName}] Sorry, I encountered an error: ${(err as Error).message}`); } catch {}
+      this.emit("run:failed", { mode: "bridge", agentName, error: (err as Error).message });
+    }
+  }
+
+  private async handleTriggerMessage(message: any, agentName: string, task: string): Promise<void> {
+    const event: TriggerEvent = {
+      type: "discord",
+      payload: {
+        content: task,
+        author: message.author.username,
+        authorId: message.author.id,
+        channelId: message.channel.id,
+        channelName: message.channel.name || "",
+        guildId: message.guild?.id || "",
+        guildName: message.guild?.name || "",
+        messageId: message.id,
+      },
+      timestamp: Date.now(),
+    };
+
+    try {
+      await message.channel.sendTyping?.();
+
+      const result = await runAutonomousTask(agentName, task, {});
+
+      await this.sendReply(message.channel, result.finalOutput, message.id);
+
+      this.emit("run:completed", { mode: "trigger", agentName, channelId: message.channel.id, result });
+    } catch (err) {
+      logE(`[global] trigger run failed for "${agentName}":`, (err as Error).message);
+      try { await message.channel.send(`[${agentName}] Sorry, I encountered an error: ${(err as Error).message}`); } catch {}
+      this.emit("run:failed", { mode: "trigger", agentName, error: (err as Error).message });
+    }
+  }
+
+  private async sendReply(channel: any, text: string, replyToId?: string): Promise<void> {
+    const maxLen = 1990;
+    const chunks: string[] = [];
+    let remaining = text;
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLen) { chunks.push(remaining); break; }
+      let splitAt = remaining.lastIndexOf("\n", maxLen);
+      if (splitAt <= 0) splitAt = maxLen;
+      chunks.push(remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt).trimStart();
+    }
+    for (let i = 0; i < chunks.length; i++) {
+      const opts: any = {};
+      if (i === 0 && replyToId) opts.reply = { messageReference: replyToId };
+      await channel.send({ content: chunks[i], ...opts });
+    }
+  }
+}
+
+// ── Agent name parsing ─────────────────────────────────────────────────
+
+/**
+ * Parse an agent name prefix from a Discord message.
+ *
+ * Supported formats (case-insensitive):
+ *   `@AgentName rest of message`
+ *   `AgentName: rest of message`
+ *
+ * @returns `{agentName, task}` or `null` if no match.
+ */
+export function parseAgentFromMessage(
+  content: string,
+  agents: string[],
+): { agentName: string; task: string } | null {
+  const lower = content.toLowerCase();
+
+  for (const name of agents) {
+    const lname = name.toLowerCase();
+
+    // "@AgentName " prefix
+    if (lower.startsWith(`@${lname} `) || lower.startsWith(`@${lname}\n`)) {
+      const task = content.slice(name.length + 1).trimStart(); // strip "@Name"
+      return { agentName: name, task };
+    }
+
+    // "AgentName: " prefix
+    if (lower.startsWith(`${lname}: `)) {
+      const task = content.slice(name.length + 2).trimStart(); // strip "Name: "
+      return { agentName: name, task };
+    }
+  }
+
+  return null;
+}
+
+// ── Global bridge registry ─────────────────────────────────────────────
+
+let _globalBridge: GlobalDiscordBridge | null = null;
+
+/** Get the active global Discord bridge, if any. */
+export function getGlobalBridge(): GlobalDiscordBridge | null {
+  return _globalBridge;
+}
+
+/**
+ * Start the global Discord bridge using the stored global config.
+ * Stops any previously running global bridge first.
+ */
+export async function startGlobalBridge(): Promise<GlobalDiscordBridge> {
+  if (_globalBridge?.isRunning) {
+    await _globalBridge.stop();
+  }
+
+  const cfg = await readGlobalDiscordConfig();
+  if (!cfg) {
+    throw new Error("No global Discord config found. Configure one in Global Settings → Discord.");
+  }
+  if (!cfg.botToken) {
+    throw new Error("Global Discord bot token is required.");
+  }
+
+  _globalBridge = new GlobalDiscordBridge(cfg);
+  await _globalBridge.start();
+  return _globalBridge;
+}
+
+/** Stop the global Discord bridge. */
+export async function stopGlobalBridge(): Promise<void> {
+  if (_globalBridge?.isRunning) {
+    await _globalBridge.stop();
+  }
+  _globalBridge = null;
+}
+
+/** Whether the global Discord bridge is currently running. */
+export function isGlobalBridgeRunning(): boolean {
+  return _globalBridge?.isRunning ?? false;
 }

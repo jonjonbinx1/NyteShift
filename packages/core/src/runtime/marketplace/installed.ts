@@ -82,12 +82,72 @@ export async function setItemAutoUpdate(
   name: string,
   enabled: boolean,
 ): Promise<void> {
-  const item = await getInstalledItem(category, contributor, name);
+  let item = await getInstalledItem(category, contributor, name);
   if (!item) {
-    throw new Error(`Item not installed: ${category}/${contributor}/${name}`);
+    // Item exists on disk but was not yet tracked in installed.json (e.g. it
+    // was installed before the index-tracking system was introduced).
+    // Auto-register it now so subsequent operations work correctly.
+    const dest = join(solixHome(), category, contributor, name);
+    if (!(await pathExists(dest))) {
+      throw new Error(`Item not installed: ${category}/${contributor}/${name}`);
+    }
+    console.log(`[installed] Auto-registering untracked item: ${category}/${contributor}/${name}`);
+    const hash = await computeDirectoryHash(dest);
+    item = { category, contributor, name, hash, autoUpdate: enabled };
+    await saveInstalledItem(item);
+    return;
   }
   item.autoUpdate = enabled;
   await saveInstalledItem(item);
+}
+
+/**
+ * Scan ~/.solix/skills and ~/.solix/tools for items that exist on disk but
+ * are not yet recorded in installed.json (e.g. items installed before the
+ * index-tracking system was introduced).  Missing entries are registered
+ * with a computed directory hash and default autoUpdate=false.
+ *
+ * This is safe to call at startup — it is additive-only and never removes
+ * or modifies existing index entries.
+ */
+export async function reconcileInstalledItems(): Promise<void> {
+  const { readdir, stat } = await import("node:fs/promises");
+  const categories = ["skills", "tools"] as const;
+
+  for (const category of categories) {
+    const root = join(solixHome(), category);
+    if (!(await pathExists(root))) continue;
+
+    let contributors: string[];
+    try { contributors = await readdir(root); } catch { continue; }
+
+    for (const contributor of contributors) {
+      const contribPath = join(root, contributor);
+      let st: import("node:fs").Stats;
+      try { st = await stat(contribPath); } catch { continue; }
+      if (!st.isDirectory()) continue;
+
+      let itemNames: string[];
+      try { itemNames = await readdir(contribPath); } catch { continue; }
+
+      for (const itemName of itemNames) {
+        const itemPath = join(contribPath, itemName);
+        try { st = await stat(itemPath); } catch { continue; }
+        if (!st.isDirectory()) continue;
+
+        const existing = await getInstalledItem(category, contributor, itemName);
+        if (!existing) {
+          try {
+            const hash = await computeDirectoryHash(itemPath);
+            await saveInstalledItem({ category, contributor, name: itemName, hash });
+            console.log(`[installed] Reconciled untracked item: ${category}/${contributor}/${itemName}`);
+          } catch (err) {
+            console.warn(`[installed] Failed to reconcile ${category}/${contributor}/${itemName}:`, err);
+          }
+        }
+      }
+    }
+  }
 }
 
 export async function setGlobalAutoUpdate(enabled: boolean): Promise<void> {

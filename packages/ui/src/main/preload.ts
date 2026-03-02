@@ -54,7 +54,7 @@ contextBridge.exposeInMainWorld("solixApi", {
   listProviderModels: (providerId: string) => ipcRenderer.invoke("providers:listModels", providerId),
 
   // Run
-  runAutonomous: (name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) =>
+  runAutonomous: (name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) =>
     ipcRenderer.invoke("run:autonomous", name, task, opts),
   getRunStatus: (agentName: string) => ipcRenderer.invoke("run:status", agentName),
   clearRun: (runId: string) => ipcRenderer.invoke("run:clear", runId),
@@ -85,6 +85,14 @@ contextBridge.exposeInMainWorld("solixApi", {
   marketplaceSourceRemove: (name: string) => ipcRenderer.invoke("marketplace:source:remove", name),
   marketplaceSourceToggle: (name: string, enabled: boolean) =>
     ipcRenderer.invoke("marketplace:source:toggle", name, enabled),
+  // Installed index, updates and auto-update
+  marketplaceInstalled: () => ipcRenderer.invoke("marketplace:installed"),
+  marketplaceUpdate: (item?: { category: string; contributor: string; name: string }) =>
+    ipcRenderer.invoke("marketplace:update", item),
+  marketplaceSetAutoUpdate: (item: { category: string; contributor: string; name: string }, enabled: boolean) =>
+    ipcRenderer.invoke("marketplace:setAutoUpdate", item, enabled),
+  marketplaceSetGlobalAutoUpdate: (enabled: boolean) =>
+    ipcRenderer.invoke("marketplace:setGlobalAutoUpdate", enabled),
 
   // Change notifications
   onToolsChanged: (cb: () => void) => {
@@ -143,6 +151,13 @@ contextBridge.exposeInMainWorld("solixApi", {
   discordBridgeStatus: (agentName: string) => ipcRenderer.invoke("discord:bridge:status", agentName),
   discordBridgeConfigRead: (agentName: string) => ipcRenderer.invoke("discord:bridge:config:read", agentName),
   discordBridgeConfigWrite: (agentName: string, config: any) => ipcRenderer.invoke("discord:bridge:config:write", agentName, config),
+
+  // ── Global Discord Bridge ───────────────────────────────────────────
+  discordGlobalStart: () => ipcRenderer.invoke("discord:global:start"),
+  discordGlobalStop: () => ipcRenderer.invoke("discord:global:stop"),
+  discordGlobalStatus: () => ipcRenderer.invoke("discord:global:status"),
+  discordGlobalConfigRead: () => ipcRenderer.invoke("discord:global:config:read"),
+  discordGlobalConfigWrite: (config: any) => ipcRenderer.invoke("discord:global:config:write", config),
 
   // ── Skill / Tool Config ────────────────────────────────────────────
   skillToolConfigRead: (kind: "skill" | "tool", qualifiedName: string, agentName?: string) =>

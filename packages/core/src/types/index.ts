@@ -188,6 +188,12 @@ export interface SolixConfig {
     skills?: Record<string, boolean>;
     tools?: Record<string, boolean>;
   };
+  /**
+   * Global Discord bot configuration.  When set, a single shared bot can
+   * serve all agents that don't have their own per-agent discord-bridge.json.
+   * Agents without their own config must be called by name in messages.
+   */
+  globalDiscord?: GlobalDiscordConfig;
   [key: string]: unknown;
 }
 
@@ -365,6 +371,33 @@ export interface DiscordBridgeConfig {
   provider?: string;
   /** Model override for bridge conversations. */
   model?: string;
+}
+
+/**
+ * Global Discord configuration stored in the user's top-level config.
+ *
+ * A single "global bot" can serve ALL agents that don't have their own
+ * per-agent discord-bridge.json.  Messages must be prefixed with the
+ * agent name to be routed correctly — e.g. `@AgentName do a task` or
+ * `AgentName: do a task`.  Agents that have their own bot token configured
+ * in their per-agent discord-bridge.json can be messaged directly without
+ * any name prefix.
+ */
+export interface GlobalDiscordConfig {
+  /** Discord bot token for the shared global bot. */
+  botToken: string;
+  /** Restrict to a specific guild ID (optional). */
+  guildId?: string;
+  /** Channel IDs to listen on.  Empty = all visible channels. */
+  channelIds?: string[];
+  /** Whether the global bridge is active. */
+  enabled: boolean;
+  /**
+   * Conversation mode for agents routed through the global bot:
+   *  - `"bridge"` — persistent chat session per channel per agent (default).
+   *  - `"trigger"` — one-shot autonomous run per message, no history.
+   */
+  mode?: "trigger" | "bridge";
 }
 
 // ── Control ────────────────────────────────────────────────────────────

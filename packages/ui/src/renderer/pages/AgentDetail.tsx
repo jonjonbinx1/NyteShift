@@ -21,34 +21,8 @@ const fmtDate = (ts: number) => {
   return d.toLocaleDateString();
 };
 
-// ── Small style-helpers (no CSS classes needed) ─────────────────────────────
-const iconBtn: React.CSSProperties = {
-  background: "none", border: "none", cursor: "pointer",
-  color: C.overlay0, fontSize: 14, padding: "4px 6px", borderRadius: 4,
-  display: "flex", alignItems: "center", justifyContent: "center",
-  transition: "color 0.1s",
-};
-const primaryBtn: React.CSSProperties = {
-  padding: "8px 18px", borderRadius: 8, border: "none",
-  background: C.mauve, color: C.crust, fontWeight: 700,
-  cursor: "pointer", fontSize: 14, transition: "opacity 0.15s",
-};
-const ghostBtn: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 6,
-  background: "none", border: `1px solid ${C.surface1}`,
-  cursor: "pointer", color: C.subtext0, padding: "5px 10px",
-  borderRadius: 6, fontSize: 12, transition: "border-color 0.1s",
-};
-const fieldInput: React.CSSProperties = {
-  background: C.surface0, border: `1px solid ${C.surface1}`,
-  borderRadius: 6, padding: "7px 10px", color: C.text,
-  fontSize: 13, outline: "none", fontFamily: "inherit",
-};
-const fieldSelect: React.CSSProperties = {
-  ...fieldInput, width: "100%", cursor: "pointer",
-};
-
 function FieldLabel({ children }: { children: React.ReactNode }) {
+  const { palette: C } = useTheme();
   return (
     <div style={{
       fontSize: 11, fontWeight: 700, color: C.subtext0,
@@ -61,6 +35,7 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 
 // ── Step detail card (inside run details) ───────────────────────────────────
 function StepCard({ step }: { step: { index: number; action: string; output: unknown; thinking?: string } }) {
+  const { palette: C } = useTheme();
   const [open, setOpen] = useState(false);
   return (
     <div style={{ background: C.surface0, borderRadius: 6, overflow: "hidden", marginBottom: 4 }}>
@@ -110,6 +85,13 @@ function SessionCard({
   onSelect: () => void;
   onDelete: () => void;
 }) {
+  const { palette: C } = useTheme();
+  const iconBtn: React.CSSProperties = {
+    background: "none", border: "none", cursor: "pointer",
+    color: C.overlay0, fontSize: 14, padding: "4px 6px", borderRadius: 4,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    transition: "color 0.1s",
+  };
   return (
     <div
       onClick={onSelect}
@@ -159,6 +141,7 @@ function SessionCard({
 
 // ── Typing indicator ────────────────────────────────────────────────────────
 function TypingIndicator() {
+  const { palette: C } = useTheme();
   return (
     <div style={{ display: "flex", gap: 4, padding: "8px 4px" }}>
       {[0, 1, 2].map((i) => (
@@ -177,6 +160,7 @@ function TypingIndicator() {
 
 // ── Thinking/Reasoning block (collapsible) ──────────────────────────────────
 function ThinkingBlock({ text }: { text: string }) {
+  const { palette: C } = useTheme();
   const [open, setOpen] = useState(false);
   if (!text) return null;
   return (
@@ -218,6 +202,31 @@ export function AgentDetail(): React.JSX.Element {
   const { name } = useParams<{ name: string }>();
   const chatStore = useChatStore();
   const { palette: C } = useTheme();
+  const iconBtn: React.CSSProperties = {
+    background: "none", border: "none", cursor: "pointer",
+    color: C.overlay0, fontSize: 14, padding: "4px 6px", borderRadius: 4,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    transition: "color 0.1s",
+  };
+  const primaryBtn: React.CSSProperties = {
+    padding: "8px 18px", borderRadius: 8, border: "none",
+    background: C.mauve, color: C.crust, fontWeight: 700,
+    cursor: "pointer", fontSize: 14, transition: "opacity 0.15s",
+  };
+  const ghostBtn: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 6,
+    background: "none", border: `1px solid ${C.surface1}`,
+    cursor: "pointer", color: C.subtext0, padding: "5px 10px",
+    borderRadius: 6, fontSize: 12, transition: "border-color 0.1s",
+  };
+  const fieldInput: React.CSSProperties = {
+    background: C.surface0, border: `1px solid ${C.surface1}`,
+    borderRadius: 6, padding: "7px 10px", color: C.text,
+    fontSize: 13, outline: "none", fontFamily: "inherit",
+  };
+  const fieldSelect: React.CSSProperties = {
+    ...fieldInput, width: "100%", cursor: "pointer",
+  };
 
   // Agent config
   const [config, setConfig] = useState<Record<string, any>>({});
@@ -303,6 +312,39 @@ export function AgentDetail(): React.JSX.Element {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, running]);
 
+  // Ensure textarea regains focus when window/document become active again.
+  // Do not steal focus if another input is active.
+  useEffect(() => {
+    const tryFocus = () => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const active = document.activeElement as HTMLElement | null;
+      const isInputFocused = !!(
+        active &&
+        (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)
+      );
+      if (!isInputFocused && !running) {
+        try {
+          el.focus();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") tryFocus();
+    };
+
+    window.addEventListener("focus", tryFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("focus", tryFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [running]);
+
   // ── Save settings ─────────────────────────────────────────────────────────
   const handleSaveSettings = async () => {
     if (!name) return;
@@ -379,6 +421,8 @@ export function AgentDetail(): React.JSX.Element {
         model: selModel || undefined,
         temperature: parseFloat(temperature) || undefined,
         maxTokens: parseInt(maxTokens, 10) || undefined,
+        // forward configured step budget so UI sliders actually take effect
+        maxSteps: typeof config.maxSteps === "number" ? config.maxSteps : undefined,
         sessionId,
         chatHistory: chatHistory.length > 0 ? chatHistory : undefined,
       });
@@ -864,6 +908,7 @@ export function AgentDetail(): React.JSX.Element {
 
 // ── Live Execution Bar (shown while agent is running) ─────────────────────────
 function LiveExecutionBar() {
+  const { palette: C } = useTheme();
   const [phase, setPhase] = useState(0);
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const phases = [
@@ -954,6 +999,7 @@ function PlanFullModal({
   thinking?: string;
   onClose: () => void;
 }) {
+  const { palette: C } = useTheme();
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
 
   useEffect(() => {
@@ -1094,6 +1140,7 @@ function PlanExecutionWidget({
   steps: Array<{ index: number; action: string; output: unknown; thinking?: string }>;
   thinking?: string;
 }) {
+  const { palette: C } = useTheme();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const lastStep = steps[steps.length - 1];
@@ -1199,6 +1246,7 @@ function PlanExecutionWidget({
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
+  const { palette: C } = useTheme();
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
       <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{value}</span>

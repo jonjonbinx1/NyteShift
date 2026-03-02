@@ -15,6 +15,9 @@ import {
   setItemAutoUpdate,
 } from "@solix/core";
 
+// types
+import type { MarketplaceItem } from "@solix/core";
+
 export function registerMarketplaceCommands(program: Command): void {
   const marketplace = program.command("marketplace").description("Marketplace commands");
 
@@ -83,7 +86,7 @@ export function registerMarketplaceCommands(program: Command): void {
       }
       const [category, contributor, name] = parts;
       const all = await browseMarketplace({ category });
-      const match = all.find((i) => i.contributor === contributor && i.name === name);
+      const match = all.find((i: MarketplaceItem) => i.contributor === contributor && i.name === name);
       if (!match) {
         console.error(chalk.red(`Item not found: ${itemPath}. Run \`solix marketplace sync\` and \`solix marketplace list\` first.`));
         process.exit(1);

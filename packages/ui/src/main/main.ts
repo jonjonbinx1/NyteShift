@@ -162,7 +162,7 @@ function registerIpc(): void {
   }>();
 
   // Run
-  ipcMain.handle("run:autonomous", async (_e, name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) => {
+  ipcMain.handle("run:autonomous", async (_e, name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) => {
     console.log(`[IPC] run:autonomous — agent="${name}" task="${task.slice(0, 80)}" opts=${JSON.stringify({ ...opts, chatHistory: opts?.chatHistory ? `[${opts.chatHistory.length} msgs]` : undefined })}`);
     const sessionId = opts?.sessionId || "";
     const runId = `${name}:${sessionId || Date.now()}`;
@@ -557,6 +557,60 @@ function registerIpc(): void {
     }
   });
 
+  // ── Global Discord Bridge IPC ───────────────────────────────────────
+
+  ipcMain.handle("discord:global:start", async () => {
+    console.log("[IPC] discord:global:start");
+    try {
+      const { startGlobalBridge } = await import("@solix/core");
+      await startGlobalBridge();
+      return { running: true };
+    } catch (err) {
+      console.error("[IPC] discord:global:start — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:global:stop", async () => {
+    console.log("[IPC] discord:global:stop");
+    try {
+      const { stopGlobalBridge } = await import("@solix/core");
+      await stopGlobalBridge();
+      return { running: false };
+    } catch (err) {
+      console.error("[IPC] discord:global:stop — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:global:status", async () => {
+    try {
+      const { isGlobalBridgeRunning } = await import("@solix/core");
+      return { running: isGlobalBridgeRunning() };
+    } catch {
+      return { running: false };
+    }
+  });
+
+  ipcMain.handle("discord:global:config:read", async () => {
+    try {
+      const { readGlobalDiscordConfig } = await import("@solix/core");
+      return await readGlobalDiscordConfig();
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle("discord:global:config:write", async (_e, config: any) => {
+    try {
+      const { writeGlobalDiscordConfig } = await import("@solix/core");
+      await writeGlobalDiscordConfig(config);
+    } catch (err) {
+      console.error("[IPC] discord:global:config:write — ERROR:", err);
+      throw err;
+    }
+  });
+
   // ── Skill / Tool Config ─────────────────────────────────────────────
 
   ipcMain.handle("skillToolConfig:read", async (
@@ -618,6 +672,14 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error("whenUserProvidersLoaded hook setup failed:", err);
   }
+
+  // Reconcile installed.json with items on disk that pre-date the index
+  // tracking system.  Runs silently in the background — never blocks startup.
+  import("@solix/core").then(({ reconcileInstalledItems }) => {
+    reconcileInstalledItems().catch((err) =>
+      console.warn("[SolixAI] installed-index reconciliation failed:", err),
+    );
+  }).catch(() => {});
 
   // Start trigger engine so cron/webhook triggers run in the background.
   try {

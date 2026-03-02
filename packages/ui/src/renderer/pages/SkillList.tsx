@@ -31,6 +31,10 @@ export function SkillList(): React.JSX.Element {
   const [activeContributor, setActiveContributor] = useState<string | null>(null);
   const [agents, setAgents] = useState<string[]>([]);
   const [configTarget, setConfigTarget] = useState<SkillInfo | null>(null);
+  const [toast, setToast] = useState("");
+  const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false);
+  const [updatingAll, setUpdatingAll] = useState(false);
+  const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!window.solixApi) return;
@@ -45,6 +49,14 @@ export function SkillList(): React.JSX.Element {
     try {
       const idx = await a.marketplaceInstalled();
       setInstalledIdx(idx);
+      if (typeof idx.globalAutoUpdate === "boolean") {
+        setGlobalAutoUpdate(!!idx.globalAutoUpdate);
+      } else {
+        try {
+          const cfg = await a.readConfig();
+          setGlobalAutoUpdate(!!(cfg.autoUpdate?.marketplace));
+        } catch { /* ignore */ }
+      }
     } catch {
       // ignore
     }
@@ -53,24 +65,129 @@ export function SkillList(): React.JSX.Element {
   const handleUpdateSkill = async (s: SkillInfo) => {
     const a = (window as any).solixApi;
     if (!a) return;
+    const key = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
+    setUpdatingItems((prev) => new Set([...prev, key]));
     try {
+      // core will auto-register untracked items; no need to pre-check here
       const res = await a.marketplaceUpdate({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name });
-      if (res && res.message) flash(res.message);
+      flash(res?.message ?? (res?.updated ? "Updated" : "Already up to date"));
       await loadInstalledIndex();
-      window.solixApi.listSkills().then(setSkills).catch(console.error);
+      window.solixApi!.listSkills().then(setSkills).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
+    } finally {
+      setUpdatingItems((prev) => { const n = new Set(prev); n.delete(key); return n; });
+    }
+  };
+
+  const handleUninstallSkill = async (s: SkillInfo) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    const key = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
+    if (!confirm(`Uninstall skill ${s.frontmatter.name}? This will remove the on-disk skill.`)) return;
+    setUpdatingItems((prev) => new Set([...prev, key]));
+    try {
+      const res = await a.marketplaceUninstall({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name });
+      flash(res?.message ?? "Uninstalled");
+      await loadInstalledIndex();
+      window.solixApi!.listSkills().then(setSkills).catch(console.error);
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    } finally {
+      setUpdatingItems((prev) => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 
   const handleAutoToggleSkill = async (s: SkillInfo, en: boolean) => {
     const a = (window as any).solixApi;
     if (!a) return;
-    await a.marketplaceSetAutoUpdate({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name }, en);
-    await loadInstalledIndex();
+    const key = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
+    // optimistic UI update — upsert entry so checkbox reacts immediately even
+    // for items not yet tracked in installed.json (core will auto-register them)
+    setUpdatingItems((prev) => new Set([...prev, key]));
+    try {
+      try {
+        setInstalledIdx((prev: any) => {
+          if (!prev) return prev;
+          const next = { ...prev };
+          const items: any[] = next.items || [];
+          const existsIdx = items.findIndex((it: any) =>
+            it.category === "skills" && it.contributor === s.frontmatter.contributor && it.name === s.frontmatter.name,
+          );
+          if (existsIdx >= 0) {
+            next.items = items.map((it: any, idx: number) =>
+              idx === existsIdx ? { ...it, autoUpdate: en } : it,
+            );
+          } else {
+            // speculatively add a placeholder — loadInstalledIndex() will replace it
+            next.items = [...items, { category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name, hash: "", autoUpdate: en }];
+          }
+          return next;
+        });
+      } catch {
+        // ignore optimistic update failures
+      }
+
+      await a.marketplaceSetAutoUpdate({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name }, en);
+      flash(`Auto-update ${en ? "enabled" : "disabled"} for ${s.frontmatter.name}`);
+      await loadInstalledIndex();
+    } catch (e: any) {
+      // revert optimistic change on failure
+      setInstalledIdx((prev: any) => {
+        if (!prev) return prev;
+        const next = { ...prev };
+        next.items = (next.items || []).map((it: any) =>
+          it.category === "skills" && it.contributor === s.frontmatter.contributor && it.name === s.frontmatter.name
+            ? { ...it, autoUpdate: !en }
+            : it,
+        );
+        return next;
+      });
+      flash(`Error saving auto-update preference: ${e.message}`);
+    } finally {
+      setUpdatingItems((prev) => { const n = new Set(prev); n.delete(key); return n; });
+    }
   };
 
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
+
+  const handleUpdateAllSkills = async (contributor?: string) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    setUpdatingAll(true);
+    try {
+      const targets = contributor
+        ? (byContributor.get(contributor) ?? [])
+        : skills;
+      let updated = 0;
+      for (const s of targets) {
+        try {
+          const res = await a.marketplaceUpdate({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name });
+          if (res && res.updated) updated++;
+        } catch { /* skip individual failures */ }
+      }
+      flash(updated > 0 ? `Updated ${updated} skill${updated !== 1 ? "s" : ""}` : "All skills up to date");
+      await loadInstalledIndex();
+      window.solixApi!.listSkills().then(setSkills).catch(console.error);
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    } finally {
+      setUpdatingAll(false);
+    }
+  };
+
+  const handleGlobalAutoToggle = async (en: boolean) => {
+    const a = (window as any).solixApi;
+    if (!a) return;
+    await a.marketplaceSetGlobalAutoUpdate(en);
+    setGlobalAutoUpdate(en);
+    try {
+      const cfg = await a.readConfig();
+      cfg.autoUpdate = cfg.autoUpdate ?? {};
+      cfg.autoUpdate.marketplace = en;
+      await a.writeConfig(cfg);
+    } catch { /* ignore */ }
+  };
 
   /* group by contributor */
   const byContributor = useMemo(() => {
@@ -145,6 +262,33 @@ export function SkillList(): React.JSX.Element {
             </>
           )}
         </div>
+        {/* Update All + global auto-update controls */}
+        {activeContributor ? (
+          <button
+            onClick={() => handleUpdateAllSkills(activeContributor)}
+            disabled={updatingAll}
+            style={{ padding: "6px 14px", borderRadius: 8, fontSize: "0.82rem", fontWeight: 600,
+              background: "rgba(203,166,247,0.15)", color: c.accent, border: `1px solid rgba(203,166,247,0.3)`,
+              cursor: updatingAll ? "not-allowed" : "pointer", opacity: updatingAll ? 0.6 : 1 }}>
+            {updatingAll ? "Updating…" : `↻ Update All (${activeContributor})`}
+          </button>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => handleUpdateAllSkills()}
+              disabled={updatingAll}
+              style={{ padding: "6px 14px", borderRadius: 8, fontSize: "0.82rem", fontWeight: 600,
+                background: "rgba(203,166,247,0.15)", color: c.accent, border: `1px solid rgba(203,166,247,0.3)`,
+                cursor: updatingAll ? "not-allowed" : "pointer", opacity: updatingAll ? 0.6 : 1 }}>
+              {updatingAll ? "Updating…" : "↻ Update All"}
+            </button>
+            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.82rem", color: c.subtext, cursor: "pointer", userSelect: "none" }}>
+              <input type="checkbox" checked={globalAutoUpdate} onChange={(e) => handleGlobalAutoToggle(e.target.checked)}
+                style={{ accentColor: c.accent, width: 14, height: 14, cursor: "pointer" }} />
+              auto‑update
+            </label>
+          </div>
+        )}
       </div>
 
       {/* ── Search ── */}
@@ -235,21 +379,44 @@ export function SkillList(): React.JSX.Element {
                         ⚙ Configure
                       </button>
                     )}
-                    {installedIdx && installedIdx.items && installedIdx.items.find((i: any) => i.category === "skills" && i.contributor === s.frontmatter.contributor && i.name === s.frontmatter.name) && (
-                      <>
-                        <button onClick={() => handleUpdateSkill(s)}
-                          style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
-                            background: "rgba(166,227,161,0.12)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)` }}>
-                          Update
-                        </button>
-                        <label style={{ fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
-                          <input type="checkbox" checked={!!installedIdx.items.find((i: any) => i.category === "skills" && i.contributor === s.frontmatter.contributor && i.name === s.frontmatter.name).autoUpdate}
-                            onChange={(e) => handleAutoToggleSkill(s, e.target.checked)}
-                            style={{ accentColor: c.accent, width: 14, height: 14 }} />
-                          auto
-                        </label>
-                      </>
-                    )}
+                    {(() => {
+                      // show controls for every on-disk skill; entry may be undefined for
+                      // items installed before index tracking was introduced — core will
+                      // auto-register them on first interaction
+                      const entry = installedIdx?.items?.find((i: any) => i.category === "skills" && i.contributor === s.frontmatter.contributor && i.name === s.frontmatter.name);
+                      const itemKey = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
+                      const busy = updatingItems.has(itemKey);
+                      return (
+                        <>
+                          <button
+                            onClick={() => handleUpdateSkill(s)}
+                            disabled={busy}
+                            style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+                              background: "rgba(166,227,161,0.12)", color: c.accent, border: `1px solid rgba(166,227,161,0.3)`,
+                              cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1 }}>
+                            {busy ? "…" : "↻ Update"}
+                          </button>
+                          <button
+                            onClick={() => handleUninstallSkill(s)}
+                            disabled={busy}
+                            style={{ padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
+                              background: "rgba(255,120,120,0.06)", color: "#ff6b6b", border: `1px solid rgba(255,120,120,0.12)`,
+                              cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, marginLeft: 6 }}>
+                            {busy ? "…" : "🗑 Remove"}
+                          </button>
+                          <label style={{ fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 4, marginLeft: 4, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={!!entry?.autoUpdate}
+                              disabled={busy}
+                              onChange={(e) => handleAutoToggleSkill(s, e.target.checked)}
+                              aria-busy={busy}
+                              style={{ accentColor: c.accent, width: 14, height: 14, cursor: busy ? "not-allowed" : "pointer" }} />
+                            auto
+                          </label>
+                        </>
+                      );
+                    })()}
                     <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600, background: c.accent, color: "#1e1e2e" }}>skill</span>
                   </div>
                 </div>
@@ -272,6 +439,18 @@ export function SkillList(): React.JSX.Element {
           agents={agents}
           onClose={() => setConfigTarget(null)}
         />
+      )}
+
+      {/* ── Toast ── */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 28, right: 28, background: c.card, color: c.text,
+          padding: "11px 22px", borderRadius: 10, border: `1px solid ${c.accent}`,
+          boxShadow: `0 8px 28px rgba(0,0,0,0.3)`, zIndex: 9999, fontSize: "0.86rem",
+          maxWidth: 380,
+        }}>
+          {toast}
+        </div>
       )}
     </div>
   );

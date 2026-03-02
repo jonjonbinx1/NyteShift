@@ -17,24 +17,6 @@ interface Props {
   onClose: () => void;
 }
 
-// ── Style helpers ────────────────────────────────────────────────────────────
-const inputStyle: React.CSSProperties = {
-  background: C.surface0, border: `1px solid ${C.surface1}`,
-  borderRadius: 6, padding: "7px 10px", color: C.text,
-  fontSize: 13, outline: "none", fontFamily: "inherit",
-  width: "100%", boxSizing: "border-box",
-};
-const selectStyle: React.CSSProperties = { ...inputStyle, cursor: "pointer", appearance: "auto" as any };
-const labelStyle: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, color: C.subtext0,
-  marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.07em",
-  display: "block",
-};
-const sectionStyle: React.CSSProperties = {
-  background: C.mantle, borderRadius: 10, padding: "16px 18px",
-  display: "flex", flexDirection: "column", gap: 16,
-};
-
 // ── CheckList for skills / tools ─────────────────────────────────────────────
 function CheckList<T>({
   items, selected, onChange, keyOf, labelOf, descOf,
@@ -46,6 +28,7 @@ function CheckList<T>({
   labelOf: (i: T) => string;
   descOf: (i: T) => string;
 }) {
+  const { palette: C } = useTheme();
   const toggle = (k: string) =>
     onChange(selected.includes(k) ? selected.filter((x) => x !== k) : [...selected, k]);
 
@@ -130,6 +113,7 @@ function PermissionRow({
   value: PermLevel;
   onChange: (v: PermLevel) => void;
 }) {
+  const { palette: C } = useTheme();
   const colors: Record<PermLevel, string> = {
     allow: C.green,
     deny: C.red,
@@ -180,6 +164,22 @@ const TABS: { id: Tab; icon: string; label: string }[] = [
 // ── Main modal ───────────────────────────────────────────────────────────────
 export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Element {
   const { palette: C } = useTheme();
+  const inputStyle: React.CSSProperties = {
+    background: C.surface0, border: `1px solid ${C.surface1}`,
+    borderRadius: 6, padding: "7px 10px", color: C.text,
+    fontSize: 13, outline: "none", fontFamily: "inherit",
+    width: "100%", boxSizing: "border-box",
+  };
+  const selectStyle: React.CSSProperties = { ...inputStyle, cursor: "pointer", appearance: "auto" as any };
+  const labelStyle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, color: C.subtext0,
+    marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.07em",
+    display: "block",
+  };
+  const sectionStyle: React.CSSProperties = {
+    background: C.mantle, borderRadius: 10, padding: "16px 18px",
+    display: "flex", flexDirection: "column", gap: 16,
+  };
   const [activeTab, setActiveTab] = useState<Tab>("permissions");
   const [config, setConfig] = useState<Record<string, any>>({});
 
