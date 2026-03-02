@@ -71,7 +71,12 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
   const [discordLoading, setDiscordLoading] = useState(false);
   const [discordError, setDiscordError] = useState("");
   const [showDiscordToken, setShowDiscordToken] = useState(false);
-
+  const [channelAgentRows, setChannelAgentRows] = useState<Array<{ channelId: string; agentName: string }>>([]);
+  const [agentList, setAgentList] = useState<string[]>([]);  const [discordNeedsRestart, setDiscordNeedsRestart] = useState(false);
+  const discordInitialized = React.useRef(false);
+  const markDiscordDirty = React.useCallback(() => {
+    if (discordInitialized.current) setDiscordNeedsRestart(true);
+  }, []);
   // UI state
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -107,11 +112,23 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
         setDiscordChannelIds(cfg.channelIds?.join(", ") || "");
         setDiscordEnabled(cfg.enabled ?? false);
         setDiscordMode(cfg.mode ?? "bridge");
+        if (cfg.channelAgentMap && typeof cfg.channelAgentMap === "object") {
+          setChannelAgentRows(
+            Object.entries(cfg.channelAgentMap).map(([channelId, agentName]) => ({
+              channelId,
+              agentName: agentName as string,
+            }))
+          );
+        }
       }
+      // Mark initialized only after Discord form values are settled so field
+      // changes afterwards can correctly set the dirty flag.
+      discordInitialized.current = true;
     }).catch(console.error);
     window.solixApi.discordGlobalStatus?.().then((s: any) => {
       setDiscordRunning(s?.running ?? false);
     }).catch(() => {});
+    window.solixApi.listAgents().then(setAgentList).catch(console.error);
   }, []);
 
   // Reload models when default provider changes.
@@ -169,6 +186,12 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
 
       // Persist global Discord config inline so it survives a plain "Save".
       if (discordBotToken.trim()) {
+        const builtMap: Record<string, string> = {};
+        for (const row of channelAgentRows) {
+          if (row.channelId.trim() && row.agentName.trim()) {
+            builtMap[row.channelId.trim()] = row.agentName.trim();
+          }
+        }
         next.globalDiscord = {
           botToken: discordBotToken.trim(),
           guildId: discordGuildId.trim() || undefined,
@@ -177,6 +200,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
             : undefined,
           enabled: discordEnabled,
           mode: discordMode,
+          channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
         };
       }
 
@@ -187,6 +211,44 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Build the Discord config object from current form state.
+  const buildDiscordConfig = () => {
+    const builtMap: Record<string, string> = {};
+    for (const row of channelAgentRows) {
+      if (row.channelId.trim() && row.agentName.trim()) {
+        builtMap[row.channelId.trim()] = row.agentName.trim();
+      }
+    }
+    return {
+      botToken: discordBotToken.trim(),
+      guildId: discordGuildId.trim() || undefined,
+      channelIds: discordChannelIds.trim()
+        ? discordChannelIds.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : undefined,
+      enabled: true,
+      mode: discordMode,
+      channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
+    };
+  };
+
+  // Stop → re-save config → Start in one click.
+  const handleRestartBridge = async () => {
+    setDiscordLoading(true); setDiscordError("");
+    try {
+      if (discordRunning) {
+        await window.solixApi?.discordGlobalStop?.();
+        setDiscordRunning(false);
+      }
+      const cfg = buildDiscordConfig();
+      await window.solixApi?.discordGlobalConfigWrite?.(cfg);
+      setDiscordEnabled(true);
+      await window.solixApi?.discordGlobalStart?.();
+      setDiscordRunning(true);
+      setDiscordNeedsRestart(false);
+    } catch (err) { setDiscordError((err as Error).message); }
+    finally { setDiscordLoading(false); }
   };
 
   return (
@@ -602,7 +664,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                 <div style={{ display: "flex", gap: 6 }}>
                   <input
                     value={discordBotToken}
-                    onChange={(e) => setDiscordBotToken(e.target.value)}
+                    onChange={(e) => { setDiscordBotToken(e.target.value); markDiscordDirty(); }}
                     placeholder="Paste your Discord bot token"
                     type={showDiscordToken ? "text" : "password"}
                     style={{ ...inputStyle, flex: 1 }}
@@ -625,7 +687,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                   <label style={labelStyle}>Guild (Server) ID</label>
                   <input
                     value={discordGuildId}
-                    onChange={(e) => setDiscordGuildId(e.target.value)}
+                    onChange={(e) => { setDiscordGuildId(e.target.value); markDiscordDirty(); }}
                     placeholder="Optional — restrict to a specific server"
                     style={inputStyle}
                   />
@@ -634,7 +696,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                   <label style={labelStyle}>Channel IDs</label>
                   <input
                     value={discordChannelIds}
-                    onChange={(e) => setDiscordChannelIds(e.target.value)}
+                    onChange={(e) => { setDiscordChannelIds(e.target.value); markDiscordDirty(); }}
                     placeholder="Comma-separated — blank = all visible channels"
                     style={inputStyle}
                   />
@@ -645,7 +707,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                     {(["bridge", "trigger"] as const).map((m) => (
                       <button
                         key={m}
-                        onClick={() => setDiscordMode(m)}
+                        onClick={() => { setDiscordMode(m); markDiscordDirty(); }}
                         style={{
                           flex: 1, padding: "8px 12px", borderRadius: 8,
                           background: discordMode === m ? "rgba(203,166,247,0.15)" : C.surface0,
@@ -662,13 +724,96 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                 </div>
               </div>
 
+              {/* Channel → Agent routing */}
+              <div style={sectionStyle}>
+                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Channel → Agent Routing</h4>
+                <p style={{ margin: 0, fontSize: 11, color: C.subtext0, lineHeight: 1.5 }}>
+                  Assign a specific agent to a Discord channel. Messages sent in that channel will go
+                  directly to the assigned agent — no name prefix required.
+                  Use the <strong>channel name</strong> (e.g. <code style={{ color: C.mauve }}>codi</code>) or its numeric ID.
+                  Channel names are matched case-insensitively.
+                </p>
+                {channelAgentRows.map((row, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      value={row.channelId}
+                      onChange={(e) => {
+                        const next = [...channelAgentRows];
+                        next[i] = { ...next[i], channelId: e.target.value };
+                        setChannelAgentRows(next);
+                        markDiscordDirty();
+                      }}
+                      placeholder="Channel name or ID"
+                      style={{ ...inputStyle, flex: 1 }}
+                    />
+                    <select
+                      value={row.agentName}
+                      onChange={(e) => {
+                        const next = [...channelAgentRows];
+                        next[i] = { ...next[i], agentName: e.target.value };
+                        setChannelAgentRows(next);
+                        markDiscordDirty();
+                      }}
+                      style={{ ...selectStyle, flex: 1 }}
+                    >
+                      <option value="">— Select agent —</option>
+                      {agentList.map((a) => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => { setChannelAgentRows(channelAgentRows.filter((_, j) => j !== i)); markDiscordDirty(); }}
+                      style={{
+                        background: "rgba(243,139,168,0.1)", border: `1px solid rgba(243,139,168,0.25)`,
+                        borderRadius: 6, padding: "6px 10px", color: C.red,
+                        cursor: "pointer", fontSize: 13, lineHeight: 1,
+                      }}
+                    >🗑</button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => { setChannelAgentRows([...channelAgentRows, { channelId: "", agentName: "" }]); markDiscordDirty(); }}
+                  style={{
+                    alignSelf: "flex-start", background: C.surface0, border: `1px solid ${C.surface1}`,
+                    borderRadius: 7, padding: "6px 14px", color: C.subtext1,
+                    cursor: "pointer", fontSize: 12,
+                  }}
+                >+ Add channel mapping</button>
+              </div>
+
               {/* Enable / status */}
               <div style={sectionStyle}>
                 <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bridge Status</h4>
+
+                {/* Dirty / needs-restart banner */}
+                {discordRunning && discordNeedsRestart && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "10px 14px", borderRadius: 8,
+                    background: "rgba(249,226,175,0.08)",
+                    border: "1px solid rgba(249,226,175,0.35)",
+                  }}>
+                    <span style={{ fontSize: 15 }}>⚠️</span>
+                    <span style={{ flex: 1, fontSize: 12, color: "#f9e2af", lineHeight: 1.4 }}>
+                      Settings changed — refresh the bridge to apply them.
+                    </span>
+                    <button
+                      disabled={discordLoading}
+                      onClick={handleRestartBridge}
+                      style={{
+                        padding: "5px 14px", borderRadius: 6, border: "1px solid rgba(249,226,175,0.4)",
+                        background: "rgba(249,226,175,0.12)", color: "#f9e2af",
+                        cursor: discordLoading ? "not-allowed" : "pointer",
+                        fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+                        opacity: discordLoading ? 0.5 : 1,
+                      }}
+                    >{discordLoading ? "Restarting…" : "Refresh Now"}</button>
+                  </div>
+                )}
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input
                     type="checkbox" id="gdc-enabled" checked={discordEnabled}
-                    onChange={(e) => setDiscordEnabled(e.target.checked)}
+                    onChange={(e) => { setDiscordEnabled(e.target.checked); markDiscordDirty(); }}
                     style={{ accentColor: C.mauve }}
                   />
                   <label htmlFor="gdc-enabled" style={{ fontSize: 13, color: C.text, cursor: "pointer" }}>
@@ -697,6 +842,12 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                       onClick={async () => {
                         setDiscordLoading(true); setDiscordError("");
                         try {
+                          const builtMap: Record<string, string> = {};
+                          for (const row of channelAgentRows) {
+                            if (row.channelId.trim() && row.agentName.trim()) {
+                              builtMap[row.channelId.trim()] = row.agentName.trim();
+                            }
+                          }
                           const cfg = {
                             botToken: discordBotToken.trim(),
                             guildId: discordGuildId.trim() || undefined,
@@ -705,11 +856,13 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                               : undefined,
                             enabled: true,
                             mode: discordMode,
+                            channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
                           };
                           await window.solixApi?.discordGlobalConfigWrite?.(cfg);
                           setDiscordEnabled(true);
                           await window.solixApi?.discordGlobalStart?.();
                           setDiscordRunning(true);
+                          setDiscordNeedsRestart(false);
                         } catch (err) { setDiscordError((err as Error).message); }
                         finally { setDiscordLoading(false); }
                       }}
@@ -721,23 +874,36 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                       }}
                     >{discordLoading ? "Connecting…" : "Start"}</button>
                   ) : (
-                    <button
-                      disabled={discordLoading}
-                      onClick={async () => {
-                        setDiscordLoading(true); setDiscordError("");
-                        try {
-                          await window.solixApi?.discordGlobalStop?.();
-                          setDiscordRunning(false);
-                        } catch (err) { setDiscordError((err as Error).message); }
-                        finally { setDiscordLoading(false); }
-                      }}
-                      style={{
-                        padding: "6px 16px", borderRadius: 7, border: "none",
-                        background: C.red, color: C.crust, fontWeight: 700,
-                        cursor: discordLoading ? "not-allowed" : "pointer",
-                        fontSize: 12, opacity: discordLoading ? 0.5 : 1,
-                      }}
-                    >{discordLoading ? "Stopping…" : "Stop"}</button>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        disabled={discordLoading || !discordBotToken.trim()}
+                        onClick={handleRestartBridge}
+                        style={{
+                          padding: "6px 16px", borderRadius: 7, border: "none",
+                          background: "#f9e2af", color: "#1e1e2e", fontWeight: 700,
+                          cursor: discordLoading || !discordBotToken.trim() ? "not-allowed" : "pointer",
+                          fontSize: 12, opacity: discordLoading || !discordBotToken.trim() ? 0.5 : 1,
+                        }}
+                      >{discordLoading ? "Restarting…" : "⟳ Refresh"}</button>
+                      <button
+                        disabled={discordLoading}
+                        onClick={async () => {
+                          setDiscordLoading(true); setDiscordError("");
+                          try {
+                            await window.solixApi?.discordGlobalStop?.();
+                            setDiscordRunning(false);
+                            setDiscordNeedsRestart(false);
+                          } catch (err) { setDiscordError((err as Error).message); }
+                          finally { setDiscordLoading(false); }
+                        }}
+                        style={{
+                          padding: "6px 16px", borderRadius: 7, border: "none",
+                          background: C.red, color: C.crust, fontWeight: 700,
+                          cursor: discordLoading ? "not-allowed" : "pointer",
+                          fontSize: 12, opacity: discordLoading ? 0.5 : 1,
+                        }}
+                      >{discordLoading ? "Stopping…" : "Stop"}</button>
+                    </div>
                   )}
                 </div>
 
