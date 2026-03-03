@@ -4,6 +4,7 @@ import matter from "gray-matter";
 
 import type { Skill, SkillFrontmatter } from "../../types/index.js";
 import { skillsDir, readTextFile, pathExists } from "../../utils/index.js";
+import { getInstalledItem } from "../marketplace/installed.js";
 
 /**
  * Scans ~/.solix/skills for skill.md files.
@@ -38,16 +39,40 @@ export async function loadSkills(): Promise<Skill[]> {
           continue;
         }
 
-        skills.push({
+        if (!fm.schema) {
+          console.warn(
+            `[SkillLoader] Skill "${fm.contributor}/${fm.name}" has no schema block — ` +
+            `add an inputs/outputs/verify section to enable contract validation.`,
+          );
+        }
+
+        const skill: any = {
           frontmatter: {
             name: fm.name,
             version: fm.version,
             contributor: fm.contributor,
             description: fm.description ?? "",
+            tags: Array.isArray(fm.tags) ? fm.tags : undefined,
+            schema: fm.schema ?? undefined,
+            config: Array.isArray(fm.config) ? fm.config : undefined,
           },
           body: parsed.content.trim(),
           filePath: skillPath,
-        });
+        };
+
+        // try to merge in installed metadata if available
+        try {
+          const meta = await getInstalledItem("skills", fm.contributor, fm.name);
+          if (meta) {
+            skill.hash = meta.hash;
+            skill.autoUpdate = meta.autoUpdate;
+            if (meta.version) skill.frontmatter.version = meta.version;
+          }
+        } catch {
+          // ignore
+        }
+
+        skills.push(skill);
       } catch (err) {
         console.warn(`[SkillLoader] Failed to parse ${skillPath}:`, err);
       }

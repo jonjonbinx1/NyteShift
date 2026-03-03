@@ -8,8 +8,10 @@ import { ToolList } from "./pages/ToolList.js";
 import { ProviderConfig } from "./pages/ProviderConfig.js";
 import { MarketplaceView } from "./pages/MarketplaceView.js";
 import { LogsView } from "./pages/LogsView.js";
+import { TriggersView } from "./pages/TriggersView.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { ChatStoreProvider } from "./stores/ChatStore.js";
+import { ThemeProvider, useTheme } from "./theme/ThemeContext.js";
 
 /** Adjusts main area layout depending on the current route. */
 function MainArea(): React.JSX.Element {
@@ -36,6 +38,7 @@ function MainArea(): React.JSX.Element {
           <Route path="/tools" element={<ToolList />} />
           <Route path="/providers" element={<ProviderConfig />} />
           <Route path="/marketplace" element={<MarketplaceView />} />
+          <Route path="/triggers" element={<TriggersView />} />
           <Route path="/logs" element={<LogsView />} />
         </Routes>
       </ErrorBoundary>
@@ -43,15 +46,24 @@ function MainArea(): React.JSX.Element {
   );
 }
 
+function Shell(): React.JSX.Element {
+  const { palette } = useTheme();
+  return (
+    <div style={{ display: "flex", height: "100vh", fontFamily: "system-ui, sans-serif", background: palette.base, color: palette.text }}>
+      <Sidebar />
+      <MainArea />
+    </div>
+  );
+}
+
 export function App(): React.JSX.Element {
   return (
     <HashRouter>
-      <ChatStoreProvider>
-        <div style={{ display: "flex", height: "100vh", fontFamily: "system-ui, sans-serif", background: "#1e1e2e" }}>
-          <Sidebar />
-          <MainArea />
-        </div>
-      </ChatStoreProvider>
+      <ThemeProvider>
+        <ChatStoreProvider>
+          <Shell />
+        </ChatStoreProvider>
+      </ThemeProvider>
     </HashRouter>
   );
 }

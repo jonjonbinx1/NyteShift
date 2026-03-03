@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import type { ToolContract } from "../../types/index.js";
 import { toolsDir, pathExists } from "../../utils/index.js";
+import { getInstalledItem } from "../marketplace/installed.js";
 
 /**
  * Scans ~/.solix/tools for tool.js modules.
@@ -34,11 +35,43 @@ export async function loadTools(): Promise<ToolContract[]> {
         const mod = await import(pathToFileURL(toolPath).href);
         const contract: ToolContract = mod.default ?? mod;
 
+        // Merge a named `spec` export onto the contract when the default
+        // export doesn't carry one (common authoring pattern:
+        //   export default { name, run, … };
+        //   export const spec = { inputSchema: { … } };
+        // ).
+        if (!contract.spec && mod.spec) {
+          contract.spec = mod.spec;
+        }
+
+        // Same pattern for config: merge a named `config` export.
+        if (!contract.config && mod.config) {
+          contract.config = mod.config;
+        }
+
         if (!contract.name || !contract.version || typeof contract.run !== "function") {
           console.warn(`[ToolLoader] Invalid contract in ${toolPath}, skipping.`);
           continue;
         }
 
+        if (!contract.spec) {
+          console.warn(
+            `[ToolLoader] Tool "${contract.contributor}/${contract.name}" has no spec — ` +
+            `input validation will be skipped.  Add a spec.inputSchema to enable it.`,
+          );
+        }
+
+        // attach install metadata if present
+        try {
+          const meta = await getInstalledItem("tools", contract.contributor, contract.name);
+          if (meta) {
+            (contract as any).hash = meta.hash;
+            (contract as any).autoUpdate = meta.autoUpdate;
+            if (meta.version) contract.version = meta.version;
+          }
+        } catch {
+          // ignore
+        }
         tools.push(contract);
       } catch (err) {
         console.warn(`[ToolLoader] Failed to import ${toolPath}:`, err);

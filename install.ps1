@@ -5,49 +5,47 @@ param()
 
 Push-Location $PSScriptRoot
 
-function Ensure-PackageManager {
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) { return 'pnpm' }
-    if (Get-Command npm -ErrorAction SilentlyContinue) { return 'npm' }
-    Write-Error 'Neither pnpm nor npm is installed. Install Node.js (which includes npm).' -ErrorAction Stop
+# Ensure npm is available (ships with Node.js)
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Error 'npm is not installed. Please install Node.js from https://nodejs.org' -ErrorAction Stop
 }
 
-$PM = Ensure-PackageManager
+Write-Host 'Installing dependencies...'
+npm install
 
-if ($PM -eq 'pnpm') {
-    # try reading configured bin dir
-    $bin = pnpm config get global-bin-dir 2>$null
-    if ([string]::IsNullOrWhiteSpace($bin) -or $bin -eq "undefined") {
-        $default = Join-Path $env:USERPROFILE "AppData\Roaming\npm"
-        Write-Host "PNPM global bin directory is not set; defaulting PNPM_HOME to $default"
-        $env:PNPM_HOME = $default
-        [Environment]::SetEnvironmentVariable('PNPM_HOME',$default,'User')
-        # ensure PATH includes it
-        if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $default })) {
-            Write-Host "You may need to add $default to your PATH or restart your shell."
-        }
-    }
-    try {
-        pnpm setup | Out-Null
-    } catch {
-        Write-Warning "pnpm global bin directory is still not configured."
-        Write-Warning "Set the PNPM_HOME environment variable and ensure it's on your PATH, e.g.:"
-        Write-Warning "  `$env:PNPM_HOME = \"$env:USERPROFILE\AppData\Roaming\npm\""
-        Write-Warning "Then re-run this script."
-    }
+Write-Host 'Building all packages...'
+npm run build
+
+# Install the CLI globally for the current user (no admin needed)
+$userNpm = "$env:USERPROFILE\npm"
+if (-not (Test-Path $userNpm)) { New-Item -ItemType Directory -Path $userNpm | Out-Null }
+
+# Repair user npm prefix if it looks wrong (common issue on Windows)
+$currentPrefix = npm config get prefix --location=user 2>$null
+if ([string]::IsNullOrWhiteSpace($currentPrefix) -or
+    -not ($currentPrefix -match [regex]::Escape($env:USERPROFILE)) -or
+    $currentPrefix -match '%USERPROFILE%') {
+    npm config set prefix $userNpm --location=user
+    Write-Host "Fixed npm user prefix -> $userNpm"
 }
 
-& $PM install
-& $PM run build
-
-if ($PM -eq 'pnpm') {
-    Push-Location packages\cli
-    pnpm link -g
-    Pop-Location
-    Write-Host "`nThe 'solix' command is now available globally."
-} else {
-    Write-Host "`nTo link the CLI globally run:`n  cd packages\cli; npm install -g ."
+# Add user npm bin to current session PATH
+if (-not ($env:PATH -split ';' | Where-Object { $_.TrimEnd('\') -eq $userNpm.TrimEnd('\') })) {
+    $env:PATH = "$userNpm;$env:PATH"
 }
 
-Write-Host "Bootstrap complete. You can run 'solix agent list' or start the UI with 'pnpm --filter @solix/ui dev'."
+# Persist to user PATH so new shells find it
+$persistedPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+if (-not ($persistedPath -split ';' | Where-Object { $_.TrimEnd('\') -eq $userNpm.TrimEnd('\') })) {
+    [Environment]::SetEnvironmentVariable('PATH', "$userNpm;$persistedPath", 'User')
+    Write-Host "Added $userNpm to your user PATH (restart shell to pick it up in new windows)."
+}
+
+Push-Location packages\cli
+npm install -g . --prefix $userNpm
+Pop-Location
+
+Write-Host "`nThe 'solix' command is now available globally."
+Write-Host "Bootstrap complete. You can run 'solix agent list' or start the UI with 'npm run dev:ui'."
 
 Pop-Location

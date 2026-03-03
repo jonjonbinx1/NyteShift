@@ -5,8 +5,8 @@ Command-line interface for SolixAI.
 ## Installation
 
 ```bash
-pnpm install
-pnpm build
+npm install
+npm run build
 ```
 
 After building, the `solix` binary is available at `packages/cli/bin/solix`.

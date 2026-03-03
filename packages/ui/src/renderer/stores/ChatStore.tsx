@@ -62,7 +62,7 @@ interface ChatStoreAPI {
   getSessionList(agentName: string): ChatSessionSummaryInfo[];
 }
 
-const ChatStoreContext = createContext<ChatStoreAPI | null>(null);
+const ChatStoreContext = createContext<{ api: ChatStoreAPI; v: number } | null>(null);
 
 // ── Provider ───────────────────────────────────────────────────────────
 
@@ -91,8 +91,8 @@ function createEmptySession(agentName: string): ChatSessionInfo {
 }
 
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
-  const [, forceRender] = useState(0);
-  const bump = useCallback(() => forceRender((n) => n + 1), []);
+  const [version, setVersion] = useState(0);
+  const bump = useCallback(() => setVersion((n) => n + 1), []);
 
   // Mutable refs so callbacks always see current state without stale closures
   const stateRef = useRef<ChatStoreState>({
@@ -120,47 +120,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
-  // Listen for background run completions and record the output
-  useEffect(() => {
-    if (!window.solixApi) return;
-    const apiAny = window.solixApi as any;
-    if (typeof apiAny.onRunCompleted !== "function") return;
-    apiAny.onRunCompleted((data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => {
-      const key = makeKey(data.agentName, data.sessionId);
-      stateRef.current.runningSet.delete(key);
-
-      // if the pipeline produced a result, append an assistant message
-      if (data.result && data.result.finalOutput !== undefined) {
-        const msg: ChatMessageInfo = {
-          id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
-          role: "assistant",
-          content: data.result.finalOutput,
-          thinking: data.result.thinking,
-          ts: Date.now(),
-          steps: data.result.steps,
-        };
-        // ensure the session exists; if not, try to load it from disk
-        if (!stateRef.current.sessions.has(key)) {
-          if (window.solixApi) {
-            window.solixApi.loadChatSession(data.agentName, data.sessionId).then((sess: any) => {
-              if (sess) {
-                stateRef.current.sessions.set(key, sess);
-                api.addMessage(data.agentName, data.sessionId, msg);
-                api.refreshSessionList(data.agentName);
-                bump();
-              }
-            }).catch(console.error);
-          }
-        } else {
-          api.addMessage(data.agentName, data.sessionId, msg);
-          api.refreshSessionList(data.agentName);
-        }
-      }
-
-      bump();
-    });
-  }, [bump, api]);
-
+  // create stable API object ref (must be declared before any effect that uses it)
   const api = useRef<ChatStoreAPI>({
     getOrCreateSession(agentName: string): ChatSessionInfo {
       const st = stateRef.current;
@@ -199,6 +159,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const key = makeKey(agentName, session.id);
       st.sessions.set(key, session);
       st.activeSessionIds.set(agentName, session.id);
+      scheduleSave(session);
       bump();
       return session;
     },
@@ -211,7 +172,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         st.activeSessionIds.delete(agentName);
       }
       await window.solixApi?.deleteChatSession(agentName, sessionId);
-      await this.refreshSessionList(agentName);
+      await api.current.refreshSessionList(agentName);
       bump();
     },
 
@@ -286,8 +247,47 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     },
   }).current;
 
+  // Listen for background run completions and record the output
+  useEffect(() => {
+    if (!window.solixApi) return;
+    const apiAny = window.solixApi as any;
+    if (typeof apiAny.onRunCompleted !== "function") return;
+    apiAny.onRunCompleted((data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => {
+      const key = makeKey(data.agentName, data.sessionId);
+      stateRef.current.runningSet.delete(key);
+
+      if (data.result && data.result.finalOutput !== undefined) {
+        const msg: ChatMessageInfo = {
+          id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+          role: "assistant",
+          content: data.result.finalOutput,
+          thinking: data.result.thinking,
+          ts: Date.now(),
+          steps: data.result.steps,
+        };
+        if (!stateRef.current.sessions.has(key)) {
+          if (window.solixApi) {
+            window.solixApi.loadChatSession(data.agentName, data.sessionId).then((sess: any) => {
+              if (sess) {
+                stateRef.current.sessions.set(key, sess);
+                api.current.addMessage(data.agentName, data.sessionId, msg);
+                api.current.refreshSessionList(data.agentName);
+                bump();
+              }
+            }).catch(console.error);
+          }
+        } else {
+          api.current.addMessage(data.agentName, data.sessionId, msg);
+          api.current.refreshSessionList(data.agentName);
+        }
+      }
+
+      bump();
+    });
+  }, [bump]);
+
   return (
-    <ChatStoreContext.Provider value={api}>
+    <ChatStoreContext.Provider value={{ api, v: version }}>
       {children}
     </ChatStoreContext.Provider>
   );
@@ -298,5 +298,5 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 export function useChatStore(): ChatStoreAPI {
   const ctx = useContext(ChatStoreContext);
   if (!ctx) throw new Error("useChatStore must be used within <ChatStoreProvider>");
-  return ctx;
+  return ctx.api;
 }

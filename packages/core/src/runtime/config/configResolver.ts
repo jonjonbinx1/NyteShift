@@ -23,6 +23,9 @@ const GLOBAL_DEFAULTS: SolixConfig = {
   defaultModel: "gpt-4o",
   temperature: 0.7,
   maxTokens: 4096,
+  autoUpdate: {
+    marketplace: false,
+  },
 };
 
 /**
@@ -78,4 +81,71 @@ export async function readAgentConfig(agentName: string): Promise<AgentConfig> {
 /** Write an agent's config.json. */
 export async function writeAgentConfig(agentName: string, config: AgentConfig): Promise<void> {
   await writeJsonFile(agentConfigPath(agentName), config);
+}
+
+// ── Skill / Tool Config (hierarchical) ─────────────────────────────────
+
+/**
+ * Read the resolved configuration values for a specific skill or tool.
+ *
+ * Resolution order (highest wins):
+ *   agent-level → global (user) level → defaults from field definitions
+ *
+ * @param kind      "skill" or "tool"
+ * @param qualifiedName  e.g. "base/search"
+ * @param agentName Optional — when provided, agent-level values override global.
+ */
+export async function readSkillToolConfig(
+  kind: "skill" | "tool",
+  qualifiedName: string,
+  agentName?: string,
+): Promise<Record<string, unknown>> {
+  const ns = kind === "skill" ? "skillConfig" : "toolConfig";
+
+  // Global layer
+  const globalCfg = await readGlobalConfig();
+  const globalValues: Record<string, unknown> =
+    ((globalCfg as any)[ns] as Record<string, Record<string, unknown>> | undefined)?.[qualifiedName] ?? {};
+
+  if (!agentName) return { ...globalValues };
+
+  // Agent layer
+  const agentCfg = await readAgentConfig(agentName) as Record<string, unknown>;
+  const agentValues: Record<string, unknown> =
+    ((agentCfg as any)[ns] as Record<string, Record<string, unknown>> | undefined)?.[qualifiedName] ?? {};
+
+  return { ...globalValues, ...agentValues };
+}
+
+/**
+ * Write configuration values for a specific skill or tool.
+ *
+ * @param kind      "skill" or "tool"
+ * @param qualifiedName  e.g. "base/search"
+ * @param values    Key-value pairs to persist
+ * @param agentName When provided, writes at the agent level; otherwise global.
+ */
+export async function writeSkillToolConfig(
+  kind: "skill" | "tool",
+  qualifiedName: string,
+  values: Record<string, unknown>,
+  agentName?: string,
+): Promise<void> {
+  const ns = kind === "skill" ? "skillConfig" : "toolConfig";
+
+  if (agentName) {
+    // Agent-level
+    const cfg = await readAgentConfig(agentName) as Record<string, unknown>;
+    const bucket = ((cfg as any)[ns] as Record<string, Record<string, unknown>>) ?? {};
+    bucket[qualifiedName] = { ...(bucket[qualifiedName] ?? {}), ...values };
+    (cfg as any)[ns] = bucket;
+    await writeAgentConfig(agentName, cfg as any);
+  } else {
+    // Global level
+    const cfg = await readGlobalConfig() as Record<string, unknown>;
+    const bucket = ((cfg as any)[ns] as Record<string, Record<string, unknown>>) ?? {};
+    bucket[qualifiedName] = { ...(bucket[qualifiedName] ?? {}), ...values };
+    (cfg as any)[ns] = bucket;
+    await writeGlobalConfig(cfg as any);
+  }
 }

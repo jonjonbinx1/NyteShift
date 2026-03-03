@@ -6,12 +6,20 @@
 
 import { readdir, cp, rm, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { pathExists, solixHome } from "../../utils/index.js";
+import { pathToFileURL } from "node:url";
+import { pathExists, solixHome, computeDirectoryHash } from "../../utils/index.js";
 import {
   readMarketplaceConfig,
   sourceCacheDir,
 } from "./marketplaceConfig.js";
 import type { MarketplaceItem, MarketplaceCategory } from "./types.js";
+import {
+  saveInstalledItem,
+  removeInstalledItem,
+  getInstalledItem,
+  hashOfCachePath,
+} from "./installed.js";
+import { readGlobalConfig } from "../config/configResolver.js";
 import matter from "gray-matter";
 
 /** Folders to skip when scanning the repo root (e.g. .git, README, LICENSE) */
@@ -60,6 +68,20 @@ export async function browseMarketplace(opts?: {
 
           const description = await extractDescription(itemPath, cat);
           const installed = await isInstalled(cat, contributor, itemName);
+          let autoUpdate: boolean | undefined = undefined;
+          let needsUpdate = false;
+          if (installed) {
+            try {
+              const meta = await getInstalledItem(cat, contributor, itemName);
+              if (meta) {
+                autoUpdate = meta.autoUpdate;
+                const cacheHash = await hashOfCachePath(itemPath);
+                needsUpdate = cacheHash !== meta.hash;
+              }
+            } catch {
+              // ignore
+            }
+          }
 
           allItems.push({
             source: source.name,
@@ -69,6 +91,8 @@ export async function browseMarketplace(opts?: {
             localPath: itemPath,
             installed,
             description,
+            needsUpdate,
+            autoUpdate,
           });
         }
       }
@@ -127,6 +151,43 @@ export async function installMarketplaceItem(item: {
 
   try {
     await cp(item.localPath, dest, { recursive: true, force: true });
+
+    // compute hash and optional version when installed
+    let version: string | undefined;
+    try {
+      if (item.category === "skills") {
+        const skillPath = join(dest, "skill.md");
+        if (await pathExists(skillPath)) {
+          const raw = await readFile(skillPath, "utf-8");
+          const parsed = matter(raw);
+          version = parsed.data?.version;
+        }
+      } else if (item.category === "tools") {
+        const toolPath = join(dest, "tool.js");
+        try {
+          const mod = await import(pathToFileURL(toolPath).href);
+          const contract = mod.default ?? mod;
+          version = contract.version;
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore version extraction failures
+    }
+
+    const hash = await computeDirectoryHash(dest);
+    const gcfg = await readGlobalConfig();
+    const defaultAuto = (gcfg.autoUpdate?.marketplace as boolean) ?? false;
+    await saveInstalledItem({
+      category: item.category,
+      contributor: item.contributor,
+      name: item.name,
+      version,
+      hash,
+      autoUpdate: defaultAuto,
+    });
+
     return { installed: true, path: dest, message: `Installed ${item.category}/${item.contributor}/${item.name}` };
   } catch (err) {
     return {
@@ -148,6 +209,7 @@ export async function uninstallMarketplaceItem(item: {
   const dest = join(solixHome(), item.category, item.contributor, item.name);
   try {
     await rm(dest, { recursive: true, force: true });
+    await removeInstalledItem(item.category, item.contributor, item.name);
     return { message: `Uninstalled ${item.category}/${item.contributor}/${item.name}` };
   } catch (err) {
     return { message: err instanceof Error ? err.message : String(err) };

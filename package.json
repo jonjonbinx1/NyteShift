@@ -4,17 +4,18 @@
   "version": "0.1.0",
   "description": "SolixAI — an agentic platform with autonomous and triggered modes",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "build": "pnpm -r build",
-    "build:all": "pnpm -r build",
-    "dev:cli": "pnpm --filter @solix/cli dev",
-    "dev:ui": "pnpm --filter @solix/ui dev",
-    "lint": "pnpm -r lint",
-    "clean": "pnpm -r clean"
+    "build": "npm run build --workspaces --if-present",
+    "build:all": "npm run build --workspace=@solix/core && npm run build --workspaces --if-present",
+    "dev:cli": "npm run dev --workspace=packages/cli",
+    "dev:ui": "npm run dev --workspace=packages/ui",
+    "lint": "npm run lint --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=9.0.0"
-  },
-  "packageManager": "pnpm@9.15.4"
+    "node": ">=20.0.0"
+  }
 }

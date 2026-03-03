@@ -1,613 +1,731 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import type {
   MarketplaceItemInfo,
   MarketplaceSourceConfig,
   MarketplaceSyncResultInfo,
 } from "../global.js";
+import { useTheme } from "../theme/ThemeContext.js";
 
-// ── Colour tokens ──────────────────────────────────────────────────────
-const c = {
-  bg: "#f8f9fa",
-  card: "#ffffff",
-  border: "#dee2e6",
-  accent: "#6c5ce7",
-  accentHover: "#5a4bd1",
-  danger: "#e74c3c",
-  success: "#27ae60",
-  muted: "#6c757d",
-  text: "#212529",
-  textLight: "#495057",
-  tagBg: "#e9ecef",
+const CAT_COLORS: Record<string, string> = {
+  skills: "#cba6f7",
+  tools: "#a6e3a1",
+  triggers: "#f9e2af",
+  souls: "#fab387",
+  "soul-templates": "#fab387",
+  themes: "#89b4fa",
+  "ui-themes": "#89b4fa",
 };
+const catColor = (c: string) => CAT_COLORS[c] ?? "#9399b2";
 
-const pillStyle: React.CSSProperties = {
-  display: "inline-block",
-  padding: "2px 10px",
-  borderRadius: 12,
-  fontSize: "0.78rem",
-  fontWeight: 600,
-  textTransform: "capitalize",
-};
-
-// ── Main component ─────────────────────────────────────────────────────
-
+/* ════════════════════════════════════════════════════════════════════════
+   MarketplaceView
+   ════════════════════════════════════════════════════════════════════════ */
 export function MarketplaceView(): React.JSX.Element {
-  // State
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+
+  /* ── data state ─────────────────────────────────────────────────── */
   const [items, setItems] = useState<MarketplaceItemInfo[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [activeCategory, setActiveCategory] = useState<string>("all");
-  const [search, setSearch] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [syncResults, setSyncResults] = useState<MarketplaceSyncResultInfo[]>([]);
   const [sources, setSources] = useState<MarketplaceSourceConfig[]>([]);
   const [showSources, setShowSources] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  // Debug log panel
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [pollCount, setPollCount] = useState(0);
-  const addLog = useCallback((...args: unknown[]) => {
-    const msg = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
-    setDebugLogs((l) => [...l, msg]);
-    console.log(...args);
-  }, []);
+  /* ── navigation state ───────────────────────────────────────────── */
+  const [activeContributor, setActiveContributor] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("all");
+  const [query, setQuery] = useState("");
 
-
-  // New source form
+  /* ── sources form ───────────────────────────────────────────────── */
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [newBranch, setNewBranch] = useState("main");
+  const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false);
+  const [installedIndex, setInstalledIndex] = useState<any>(null);
 
-  // note: window.solixApi may be undefined initially, so always access it when needed
-  const getApi = () => (window as any).solixApi; // typed as any to avoid TS errors
+  const api = () => (window as any).solixApi;
 
-  // ── Data loading ───────────────────────────────────────────────────
+  /* ── data loading ─────────────────────────────────────────────────── */
   const loadItems = useCallback(async () => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] loadItems: api not ready"); return; }
-    const opts: { category?: string; search?: string } = {};
-    if (activeCategory !== "all") opts.category = activeCategory;
-    if (search.trim()) opts.search = search.trim();
-    addLog("[Marketplace] loadItems — opts:", opts);
-    try {
-      const data = await api.marketplaceBrowse(opts);
-      addLog(`[Marketplace] loadItems — received ${data.length} item(s)`);
-      setItems(data);
-    } catch (err) {
-      addLog("[Marketplace] loadItems — ERROR:", err);
-    }
-  }, [activeCategory, search]);
-
-  const loadCategories = useCallback(async () => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] loadCategories: api not ready"); return; }
-    addLog("[Marketplace] loadCategories — calling");
-    try {
-      const cats = await api.marketplaceCategories();
-      addLog("[Marketplace] loadCategories — result:", cats);
-      setCategories(cats);
-    } catch (err) {
-      addLog("[Marketplace] loadCategories — ERROR:", err);
-    }
+    const a = api(); if (!a) return;
+    try { setItems(await a.marketplaceBrowse({})); } catch { /* */ }
   }, []);
 
   const loadSources = useCallback(async () => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] loadSources: api not ready"); return; }
-    addLog("[Marketplace] loadSources — calling");
+    const a = api(); if (!a) return;
+    try { setSources((await a.marketplaceConfigRead()).sources); } catch { /* */ }
+  }, []);
+
+  const loadInstalledIndex = useCallback(async () => {
+    const a = api(); if (!a) return;
     try {
-      const cfg = await api.marketplaceConfigRead();
-      addLog("[Marketplace] loadSources — sources:", cfg.sources.map((s: MarketplaceSourceConfig) => s.name));
-      setSources(cfg.sources);
-    } catch (err) {
-      addLog("[Marketplace] loadSources — ERROR:", err);
+      const idx = await a.marketplaceInstalled();
+      setInstalledIndex(idx);
+      if (typeof idx.globalAutoUpdate === "boolean") {
+        setGlobalAutoUpdate(!!idx.globalAutoUpdate);
+      } else {
+        // fallback to config
+        try {
+          const cfg = await a.readConfig();
+          setGlobalAutoUpdate(!!(cfg.autoUpdate?.marketplace));
+        } catch {
+          setGlobalAutoUpdate(false);
+        }
+      }
+    } catch {
+      // ignore
     }
   }, []);
 
-  // Track whether we've already attempted an auto-sync so we don't loop
-  const autoSyncedRef = React.useRef(false);
-
-  // On mount, if API isn't ready yet we poll until it shows up so we can load data
-  useEffect(() => {
-    addLog("[Marketplace] mount — preload flag:", (window as any).__preload_executed);
-    addLog("[Marketplace] mount — window.solixApi present:", !!window.solixApi);
-    if (getApi()) {
-      loadCategories();
-      loadSources();
-      loadItems();
-    } else {
-      addLog("[Marketplace] api not yet available, starting poll");
-      const interval = setInterval(() => {
-        const apiNow = getApi();
-        setPollCount((c) => c + 1);
-        addLog("[Marketplace] poll tick, api", apiNow);
-        if (apiNow) {
-          addLog("[Marketplace] api became available (poll)");
-          loadCategories();
-          loadSources();
-          loadItems();
-          clearInterval(interval);
-        }
-      }, 100);
-      return () => clearInterval(interval);
-    }
-  }, [loadCategories, loadSources, loadItems]);
-
-  useEffect(() => {
-    if (getApi()) loadItems();
-  }, [loadItems]);
-
-  // Auto-sync on first open when the cache is empty (no categories discovered yet)
-  useEffect(() => {
-    const api = getApi();
-    addLog(`[Marketplace] auto-sync check — api:${!!api} alreadySynced:${autoSyncedRef.current} syncing:${syncing} categories:${categories.length} items:${items.length}`);
-    if (!api || autoSyncedRef.current || syncing) return;
-    if (categories.length === 0 && items.length === 0) {
-      addLog("[Marketplace] auto-sync — triggering first-time sync");
-      autoSyncedRef.current = true;
-      setSyncing(true);
-      setSyncResults([]);
-      api.marketplaceSync()
-        .then(async (results: MarketplaceSyncResultInfo[]) => {
-          addLog("[Marketplace] auto-sync — sync finished:", results);
-          setSyncResults(results);
-          await loadCategories();
-          await loadItems();
-        })
-        .catch((err: Error) => {
-          addLog("[Marketplace] auto-sync — ERROR:", err);
-          setSyncResults([{ source: "?", status: "error", message: err.message }]);
-        })
-        .finally(() => {
-          addLog("[Marketplace] auto-sync — done, setSyncing(false)");
-          setSyncing(false);
-        });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categories.length, items.length, syncing]);
-
-  // ── Actions ────────────────────────────────────────────────────────
-  const handleSync = async () => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] handleSync: api not ready"); return; }
-    setSyncing(true);
-    setSyncResults([]);
+  const handleGlobalAutoToggle = async (en: boolean) => {
+    const a = api(); if (!a) return;
+    await a.marketplaceSetGlobalAutoUpdate(en);
+    setGlobalAutoUpdate(en);
+    // also write into global config so future installs use default
     try {
-      const results = await api.marketplaceSync();
-      setSyncResults(results);
-      await loadCategories();
-      await loadItems();
-    } catch (err) {
-      setSyncResults([{ source: "?", status: "error", message: (err as Error).message }]);
-    } finally {
-      setSyncing(false);
+      const cfg = await a.readConfig();
+      cfg.autoUpdate = cfg.autoUpdate ?? {};
+      cfg.autoUpdate.marketplace = en;
+      await a.writeConfig(cfg);
+    } catch {
+      // ignore
     }
+  };
+
+  const handleItemAutoToggle = async (item: MarketplaceItemInfo, en: boolean) => {
+    const a = api(); if (!a) return;
+    await a.marketplaceSetAutoUpdate({ category: item.category, contributor: item.contributor, name: item.name }, en);
+    await loadInstalledIndex();
+    await loadItems();
+  };
+
+  const handleUpdate = async (item?: MarketplaceItemInfo) => {
+    const a = api(); if (!a) return;
+    try {
+      const res = await a.marketplaceUpdate(item ? { category: item.category, contributor: item.contributor, name: item.name } : undefined);
+      if (item) {
+        flash(res.message || "Updated");
+      } else {
+        flash("Checked for updates");
+      }
+      await loadItems();
+      await loadInstalledIndex();
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    }
+  };
+
+  /* initial boot */
+  const autoSyncedRef = React.useRef(false);
+  useEffect(() => {
+    const boot = async (a: any) => {
+      await Promise.all([loadSources(), loadItems(), loadInstalledIndex()]);
+      if (!autoSyncedRef.current) {
+        const cats = await a.marketplaceCategories();
+        if (cats.length === 0) {
+          autoSyncedRef.current = true;
+          setSyncing(true);
+          try {
+            const res = await a.marketplaceSync();
+            setSyncResults(res);
+            await loadItems();
+            await loadInstalledIndex();
+          } catch (e: any) {
+            setSyncResults([{ source: "?", status: "error", message: e.message }]);
+          } finally { setSyncing(false); }
+        }
+      }
+      setLoading(false);
+    };
+    const a = api();
+    if (a) { boot(a); return; }
+    const id = setInterval(() => { const a2 = api(); if (a2) { clearInterval(id); boot(a2); } }, 80);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── derived grouping ─────────────────────────────────────────────── */
+  const byContributor = useMemo(() => {
+    const m = new Map<string, MarketplaceItemInfo[]>();
+    for (const item of items) {
+      if (!m.has(item.contributor)) m.set(item.contributor, []);
+      m.get(item.contributor)!.push(item);
+    }
+    return m;
+  }, [items]);
+
+  const allContributors = useMemo(() => Array.from(byContributor.keys()).sort(), [byContributor]);
+
+  const allCategories = useMemo(() => {
+    const s = new Set<string>();
+    for (const i of items) s.add(i.category);
+    return Array.from(s).sort();
+  }, [items]);
+
+  /* ── contributor view filtering ───────────────────────────────────── */
+  const filteredContributors = useMemo(() => {
+    return allContributors.filter((contrib) => {
+      const contribItems = byContributor.get(contrib)!;
+      if (activeTab !== "all" && !contribItems.some((i) => i.category === activeTab)) return false;
+      if (query.trim()) {
+        return contrib.toLowerCase().includes(query.toLowerCase());
+      }
+      return true;
+    });
+  }, [allContributors, byContributor, activeTab, query]);
+
+  /* ── drill-down filtering ─────────────────────────────────────────── */
+  const drillItems = useMemo(() => {
+    if (!activeContributor) return [];
+    let base = byContributor.get(activeContributor) ?? [];
+    if (activeTab !== "all") base = base.filter((i) => i.category === activeTab);
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      base = base.filter(
+        (i) => i.name.toLowerCase().includes(q) || (i.description ?? "").toLowerCase().includes(q),
+      );
+    }
+    return base;
+  }, [activeContributor, byContributor, activeTab, query]);
+
+  const drillCategories = useMemo(() => {
+    if (!activeContributor) return [];
+    const s = new Set<string>();
+    for (const i of byContributor.get(activeContributor) ?? []) s.add(i.category);
+    return Array.from(s).sort();
+  }, [activeContributor, byContributor]);
+
+  /* tab counts change meaning depending on which view we're in */
+  const tabCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    if (activeContributor) {
+      const base = byContributor.get(activeContributor) ?? [];
+      m.all = base.length;
+      for (const i of base) m[i.category] = (m[i.category] ?? 0) + 1;
+    } else {
+      m.all = filteredContributors.length;
+      for (const cat of allCategories) {
+        m[cat] = filteredContributors.filter((c) =>
+          (byContributor.get(c) ?? []).some((i) => i.category === cat),
+        ).length;
+      }
+    }
+    return m;
+  }, [activeContributor, byContributor, filteredContributors, allCategories]);
+
+  const tabCategories = activeContributor ? drillCategories : allCategories;
+
+  /* ── navigation ──────────────────────────────────────────────────── */
+  const drillInto = (contributor: string) => {
+    setActiveContributor(contributor);
+    // Preserve the active category tab if the contributor actually has items in it,
+    // otherwise fall back to "all"
+    const contribItems = byContributor.get(contributor) ?? [];
+    const hasTab = activeTab !== "all" && contribItems.some((i) => i.category === activeTab);
+    if (!hasTab) setActiveTab("all");
+    setQuery("");
+  };
+  const goBack = () => {
+    setActiveContributor(null); setActiveTab("all"); setQuery("");
+  };
+
+  /* ── actions ─────────────────────────────────────────────────────── */
+  const handleSync = async () => {
+    const a = api(); if (!a) return;
+    setSyncing(true); setSyncResults([]);
+    try {
+      setSyncResults(await a.marketplaceSync());
+      await loadItems();
+      await loadInstalledIndex();
+    } catch (e: any) {
+      setSyncResults([{ source: "?", status: "error", message: e.message }]);
+    } finally { setSyncing(false); }
   };
 
   const handleInstall = async (item: MarketplaceItemInfo) => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] handleInstall: api not ready"); return; }
-    const key = itemKey(item);
-    setBusy(key);
+    const a = api(); if (!a) return;
+    const k = ikey(item); setBusy(k);
     try {
-      const res = await api.marketplaceInstall({
-        category: item.category,
-        contributor: item.contributor,
-        name: item.name,
-        localPath: item.localPath,
-      });
-      showToast(res.message);
-      await loadItems();
-      // notify tools page if we installed a tool
-      if (item.category === "tools") {
-        api.notifyToolsChanged?.();
-      }
-    } catch (err) {
-      showToast(`Error: ${(err as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
+      const r = await a.marketplaceInstall({ category: item.category, contributor: item.contributor, name: item.name, localPath: item.localPath });
+      flash(r.message); await loadItems(); await loadInstalledIndex();
+      if (item.category === "tools") a.notifyToolsChanged?.();
+    } catch (e: any) { flash(`Error: ${e.message}`); }
+    finally { setBusy(null); }
   };
 
   const handleUninstall = async (item: MarketplaceItemInfo) => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] handleUninstall: api not ready"); return; }
-    const key = itemKey(item);
-    setBusy(key);
+    const a = api(); if (!a) return;
+    const k = ikey(item); setBusy(k);
     try {
-      const res = await api.marketplaceUninstall({
-        category: item.category,
-        contributor: item.contributor,
-        name: item.name,
-      });
-      showToast(res.message);
-      await loadItems();
-    } catch (err) {
-      showToast(`Error: ${(err as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
+      const r = await a.marketplaceUninstall({ category: item.category, contributor: item.contributor, name: item.name });
+      flash(r.message); await loadItems(); await loadInstalledIndex();
+    } catch (e: any) { flash(`Error: ${e.message}`); }
+    finally { setBusy(null); }
   };
 
   const handleAddSource = async () => {
-    const api = getApi();
-    if (!api || !newName.trim() || !newUrl.trim()) { addLog("[Marketplace] handleAddSource: api not ready or invalid input"); return; }
-    await api.marketplaceSourceAdd({
-      name: newName.trim(),
-      url: newUrl.trim(),
-      branch: newBranch.trim() || "main",
-      enabled: true,
-    });
-    setNewName("");
-    setNewUrl("");
-    setNewBranch("main");
-    await loadSources();
-    showToast(`Added source: ${newName.trim()}`);
+    const a = api(); if (!a || !newName.trim() || !newUrl.trim()) return;
+    await a.marketplaceSourceAdd({ name: newName.trim(), url: newUrl.trim(), branch: newBranch.trim() || "main", enabled: true });
+    setNewName(""); setNewUrl(""); setNewBranch("main");
+    await loadSources(); flash(`Added source: ${newName.trim()}`);
   };
 
   const handleRemoveSource = async (name: string) => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] handleRemoveSource: api not ready"); return; }
-    await api.marketplaceSourceRemove(name);
-    await loadSources();
-    showToast(`Removed source: ${name}`);
+    const a = api(); if (!a) return;
+    await a.marketplaceSourceRemove(name); await loadSources(); flash(`Removed: ${name}`);
   };
 
-  const handleToggleSource = async (name: string, enabled: boolean) => {
-    const api = getApi();
-    if (!api) { addLog("[Marketplace] handleToggleSource: api not ready"); return; }
-    await api.marketplaceSourceToggle(name, enabled);
-    await loadSources();
+  const handleToggleSource = async (name: string, en: boolean) => {
+    const a = api(); if (!a) return;
+    await a.marketplaceSourceToggle(name, en); await loadSources();
   };
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 3000);
-  };
+  const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
-  // ── Render ─────────────────────────────────────────────────────────
+  /* ── render ──────────────────────────────────────────────────────── */
   return (
-    <div style={{ maxWidth: 1000 }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h1 style={{ margin: 0 }}>Marketplace</h1>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => setShowSources(!showSources)} style={btnSecondary}>
-            {showSources ? "Hide Sources" : "Manage Sources"}
-          </button>
-          <button onClick={handleSync} disabled={syncing} style={btnPrimary}>
-            {syncing ? "Syncing…" : "Sync All"}
-          </button>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", color: t.text, overflow: "hidden" }}>
+
+      {/* ▸ HEADER ──────────────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 0 20px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {activeContributor && (
+            <button onClick={goBack} style={{
+              background: "none", border: `1px solid ${t.border}`, color: t.subtext,
+              borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: "0.82rem",
+            }}>
+              ← Back
+            </button>
+          )}
+          <div>
+            {activeContributor ? (
+              <>
+                <div style={{ fontSize: "0.76rem", color: t.dim, marginBottom: 2 }}>
+                  <span style={{ cursor: "pointer", textDecoration: "underline" }} onClick={goBack}>Marketplace</span>
+                  {" / "}
+                  <span style={{ color: t.accent }}>{activeContributor}</span>
+                </div>
+                <h1 style={{ margin: 0, fontSize: "1.4rem", fontWeight: 700, letterSpacing: "-0.02em" }}>{activeContributor}</h1>
+              </>
+            ) : (
+              <>
+                <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700, letterSpacing: "-0.02em" }}>Marketplace</h1>
+                <p style={{ margin: "2px 0 0", color: t.subtext, fontSize: "0.84rem" }}>
+                  {allContributors.length} contributor{allContributors.length !== 1 ? "s" : ""} · {items.length} extension{items.length !== 1 ? "s" : ""}
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Btn variant="ghost" onClick={() => setShowSources((v) => !v)}>
+            {showSources ? "✕ Close" : "⚙ Sources"}
+          </Btn>
+          <Btn variant="accent" onClick={handleSync} disabled={syncing}>
+            {syncing ? <><Spinner /> Syncing…</> : "↻ Sync All"}
+          </Btn>
+          <Btn variant="ghost" onClick={() => handleUpdate()} disabled={syncing}>
+            Check updates
+          </Btn>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, color: t.subtext, fontSize: "0.84rem" }}>
+            <input type="checkbox" checked={globalAutoUpdate} onChange={(e) => handleGlobalAutoToggle(e.target.checked)}
+              style={{ accentColor: t.accent, width: 14, height: 14 }} />
+            auto‑update
+          </label>
         </div>
       </div>
 
-      {/* Toast */}
+      {/* ▸ TOAST ───────────────────────────────────────────────────── */}
       {toast && (
         <div style={{
-          position: "fixed", bottom: 24, right: 24, background: c.accent, color: "#fff",
-          padding: "10px 20px", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-          zIndex: 1000, fontSize: "0.9rem",
+          position: "fixed", bottom: 28, right: 28, background: t.card, color: t.text,
+          padding: "11px 22px", borderRadius: 10, border: `1px solid ${t.accent}`,
+          boxShadow: `0 8px 28px ${t.overlay}90`, zIndex: 9999, fontSize: "0.86rem",
+          maxWidth: 380, animation: "fadeIn .2s ease",
         }}>
           {toast}
         </div>
       )}
-      {/* debug helpers */}
-      <button
-        onClick={() => addLog("manual check api", getApi())}
-        style={{ position: "fixed", bottom: 24, left: 24, padding: "4px 8px", fontSize: "0.75rem" }}
-      >
-        Check API
-      </button>
-      {/* show waiting warning after a few failed polls */}
-      {pollCount > 20 && !getApi() && (
-        <div style={{ color: c.danger, marginTop: 10, fontSize: "0.85rem" }}>
-          Still waiting for backend preload. Check DevTools console for errors.
-        </div>
-      )}
 
-      {/* Debug log panel (also printed to console) */}
-      {debugLogs.length > 0 && (
-        <div style={{
-          marginBottom: 16,
-          padding: 12,
-          background: "#f1f3f5",
-          color: c.textLight,
-          borderRadius: 8,
-          fontSize: "0.75rem",
-          maxHeight: 120,
-          overflow: "auto",
-          whiteSpace: "pre-wrap",
-        }}>
-          <strong>Debug:</strong>
-          {debugLogs.map((l, i) => (
-            <div key={i}>{l}</div>
+      {/* ▸ SYNC RESULTS ────────────────────────────────────────────── */}
+      {syncResults.length > 0 && (
+        <div style={{ flexShrink: 0, marginBottom: 16, padding: "12px 16px", background: t.surface, borderRadius: 10, border: `1px solid ${t.border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontWeight: 600, fontSize: "0.88rem" }}>Sync Results</span>
+            <Btn variant="ghost" style={{ padding: "1px 8px", fontSize: "0.74rem" }} onClick={() => setSyncResults([])}>Dismiss</Btn>
+          </div>
+          {syncResults.map((r, i) => (
+            <div key={i} style={{ fontSize: "0.84rem", padding: "2px 0", color: r.status === "error" ? t.danger : t.success }}>
+              {r.status === "error" ? "✗" : "✓"} <b>{r.source}</b> — <span style={{ color: t.subtext }}>{r.message}</span>
+            </div>
           ))}
         </div>
       )}
 
-      {/* Sync results */}
-      {syncResults.length > 0 && (
-        <div style={{ marginBottom: 16, padding: 12, background: c.bg, borderRadius: 8, border: `1px solid ${c.border}` }}>
-          <strong>Sync Results:</strong>
-          <ul style={{ margin: "8px 0 0 0", padding: "0 0 0 20px", listStyle: "disc" }}>
-            {syncResults.map((r, i) => (
-              <li key={i} style={{ color: r.status === "error" ? c.danger : c.success, fontSize: "0.9rem" }}>
-                <strong>{r.source}</strong>: {r.status} — {r.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Sources panel */}
+      {/* ▸ SOURCES PANEL ───────────────────────────────────────────── */}
       {showSources && (
-        <div style={{ marginBottom: 24, padding: 16, background: c.card, borderRadius: 10, border: `1px solid ${c.border}` }}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Marketplace Sources</h2>
-          <p style={{ color: c.muted, fontSize: "0.85rem", marginBottom: 12 }}>
-            Add git repositories that contain skills, tools, triggers, and other SolixAI extensions.
-          </p>
-
-          {/* Existing sources */}
-          {sources.length > 0 && (
-            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 16 }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: `2px solid ${c.border}` }}>
-                  <th style={th}>Name</th>
-                  <th style={th}>URL</th>
-                  <th style={th}>Branch</th>
-                  <th style={th}>Enabled</th>
-                  <th style={th}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {sources.map((s) => (
-                  <tr key={s.name} style={{ borderBottom: `1px solid ${c.border}` }}>
-                    <td style={td}>{s.name}</td>
-                    <td style={{ ...td, fontSize: "0.82rem", color: c.muted, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {s.url}
-                    </td>
-                    <td style={td}>{s.branch ?? "main"}</td>
-                    <td style={td}>
-                      <input
-                        type="checkbox"
-                        checked={s.enabled}
-                        onChange={(e) => handleToggleSource(s.name, e.target.checked)}
-                      />
-                    </td>
-                    <td style={td}>
-                      <button onClick={() => handleRemoveSource(s.name)} style={{ ...btnDanger, padding: "2px 10px", fontSize: "0.8rem" }}>
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {/* Add source form */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="Source name"
-              style={inputStyle}
-            />
-            <input
-              value={newUrl}
-              onChange={(e) => setNewUrl(e.target.value)}
-              placeholder="Git URL (https://…)"
-              style={{ ...inputStyle, flex: 2 }}
-            />
-            <input
-              value={newBranch}
-              onChange={(e) => setNewBranch(e.target.value)}
-              placeholder="Branch"
-              style={{ ...inputStyle, width: 80, flex: "none" }}
-            />
-            <button onClick={handleAddSource} style={btnPrimary}>
-              Add Source
-            </button>
+        <div style={{ flexShrink: 0, marginBottom: 18, padding: 18, background: t.surface, borderRadius: 12, border: `1px solid ${t.border}` }}>
+          <h2 style={{ margin: "0 0 4px", fontSize: "1.05rem", fontWeight: 600 }}>Marketplace Sources</h2>
+          <p style={{ color: t.dim, fontSize: "0.82rem", margin: "0 0 14px" }}>Git repos containing SolixAI extensions.</p>
+          {sources.map((s) => (
+            <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", marginBottom: 6, background: t.card, borderRadius: 8, border: `1px solid ${t.border}` }}>
+              <input type="checkbox" checked={s.enabled} onChange={(e) => handleToggleSource(s.name, e.target.checked)}
+                style={{ accentColor: t.accent, width: 15, height: 15, cursor: "pointer" }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{s.name}</div>
+                <div style={{ fontSize: "0.75rem", color: t.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {s.url} <span style={{ color: t.subtext }}>({s.branch ?? "main"})</span>
+                </div>
+              </div>
+              <Btn variant="danger" style={{ padding: "3px 10px", fontSize: "0.76rem" }} onClick={() => handleRemoveSource(s.name)}>Remove</Btn>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            <MiniInput value={newName} onChange={setNewName} placeholder="Name" style={{ flex: 1 }} />
+            <MiniInput value={newUrl} onChange={setNewUrl} placeholder="Git URL (https://…)" style={{ flex: 2 }} />
+            <MiniInput value={newBranch} onChange={setNewBranch} placeholder="Branch" style={{ flex: "0 0 80px" }} />
+            <Btn variant="accent" onClick={handleAddSource}>+ Add</Btn>
           </div>
         </div>
       )}
 
-      {/* Search + category filter bar */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search marketplace…"
-          style={{ ...inputStyle, flex: 1, minWidth: 200 }}
-        />
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          <CategoryButton label="all" active={activeCategory === "all"} onClick={() => setActiveCategory("all")} />
-          {categories.map((cat) => (
-            <CategoryButton key={cat} label={cat} active={activeCategory === cat} onClick={() => setActiveCategory(cat)} />
-          ))}
+      {/* ▸ SEARCH ──────────────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, marginBottom: 14 }}>
+        <div style={{ position: "relative", maxWidth: 520 }}>
+          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: t.dim, pointerEvents: "none", fontSize: "0.88rem" }}>🔍</span>
+          <input
+            value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder={activeContributor ? `Search ${activeContributor}'s extensions…` : "Search contributors…"}
+            style={{
+              width: "100%", boxSizing: "border-box", padding: "10px 16px 10px 38px",
+              borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface,
+              color: t.text, fontSize: "0.88rem", outline: "none", transition: "border-color .15s",
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = t.accent; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = t.border; }}
+          />
         </div>
       </div>
 
-      {/* Items grid */}
-      {items.length === 0 ? (
-        <EmptyState syncing={syncing} synced={syncResults.length > 0 || categories.length > 0} />
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
-          {items.map((item) => {
-            const key = itemKey(item);
-            return (
-              <div key={key} style={{
-                background: c.card,
-                borderRadius: 10,
-                border: `1px solid ${c.border}`,
-                padding: 16,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-                transition: "box-shadow 0.15s",
-              }}>
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                    <span style={{ fontWeight: 600, fontSize: "1rem", color: c.text }}>{item.name}</span>
-                    <span style={{ ...pillStyle, background: categoryColor(item.category), color: "#fff" }}>
-                      {item.category}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: "0.82rem", color: c.muted, marginBottom: 6 }}>
-                    by <strong>{item.contributor}</strong>
-                    {item.source !== "Official SolixAI" && (
-                      <span style={{ ...pillStyle, background: c.tagBg, color: c.textLight, marginLeft: 6 }}>{item.source}</span>
-                    )}
-                  </div>
-                  {item.description && (
-                    <p style={{ fontSize: "0.88rem", color: c.textLight, margin: "8px 0 0" }}>
-                      {item.description}
-                    </p>
-                  )}
-                </div>
+      {/* ▸ CATEGORY TABS ───────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, display: "flex", gap: 0, marginBottom: 18, borderBottom: `1px solid ${t.border}`, overflowX: "auto" }}>
+        <TabBtn label="All" count={tabCounts.all ?? 0} active={activeTab === "all"} onClick={() => setActiveTab("all")} />
+        {tabCategories.map((cat) => (
+          <TabBtn key={cat} label={prettyCat(cat)} count={tabCounts[cat] ?? 0} active={activeTab === cat} onClick={() => setActiveTab(cat)} />
+        ))}
+      </div>
 
-                <div style={{ marginTop: 14 }}>
-                  {item.installed ? (
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ ...pillStyle, background: c.success, color: "#fff" }}>Installed</span>
-                      <button
-                        onClick={() => handleUninstall(item)}
-                        disabled={busy === key}
-                        style={{ ...btnDanger, padding: "4px 12px", fontSize: "0.82rem" }}
-                      >
-                        {busy === key ? "…" : "Uninstall"}
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => handleInstall(item)}
-                      disabled={busy === key}
-                      style={btnPrimary}
-                    >
-                      {busy === key ? "Installing…" : "Install"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* ▸ CONTENT ─────────────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 24 }}>
+        {loading || syncing ? (
+          <SkeletonGrid itemCards={!!activeContributor} />
+        ) : activeContributor ? (
+          drillItems.length === 0 ? (
+            <EmptyMsg>No extensions match your search.</EmptyMsg>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+              {drillItems.map((item) => (
+                <ItemCard key={ikey(item)} item={item} busy={busy === ikey(item)}
+                  onInstall={() => handleInstall(item)} onUninstall={() => handleUninstall(item)}
+                  onUpdate={() => handleUpdate(item)}
+                  onAutoToggle={(en) => handleItemAutoToggle(item, en)} />
+              ))}
+            </div>
+          )
+        ) : items.length === 0 ? (
+          <EmptyState />
+        ) : filteredContributors.length === 0 ? (
+          <EmptyMsg>No contributors match your search.</EmptyMsg>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+            {filteredContributors.map((contrib) => (
+              <ContributorCard
+                key={contrib}
+                contributor={contrib}
+                items={byContributor.get(contrib)!}
+                onClick={() => drillInto(contrib)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════
+   Sub-components
+   ═══════════════════════════════════════════════════════════════════════ */
 
-function CategoryButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+/* ── Contributor card ────────────────────────────────────────────────── */
+function ContributorCard({ contributor, items, onClick }: {
+  contributor: string; items: MarketplaceItemInfo[]; onClick: () => void;
+}) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  const [hovered, setHovered] = useState(false);
+  const installedCount = items.filter((i) => i.installed).length;
+  const cats = Array.from(new Set(items.map((i) => i.category)));
+  const preview = items.slice(0, 4);
+
   return (
-    <button
+    <div
       onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
-        padding: "5px 14px",
-        borderRadius: 16,
-        border: `1px solid ${active ? c.accent : c.border}`,
-        background: active ? c.accent : "transparent",
-        color: active ? "#fff" : c.textLight,
-        cursor: "pointer",
-        fontSize: "0.84rem",
-        fontWeight: active ? 600 : 400,
-        textTransform: "capitalize",
-        transition: "all 0.15s",
+        background: hovered ? t.cardHover : t.card,
+        borderRadius: 14, border: `1px solid ${hovered ? t.borderHover : t.border}`,
+        padding: 20, cursor: "pointer",
+        transition: "background .12s, border-color .15s",
+        display: "flex", flexDirection: "column", gap: 10,
       }}
     >
+      {/* avatar + counts */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 12,
+          background: "rgba(203,166,247,0.14)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontWeight: 800, fontSize: "1.1rem", color: t.accent,
+        }}>
+          {contributor.slice(0, 1).toUpperCase()}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+          <span style={{ fontSize: "0.72rem", fontWeight: 700, padding: "2px 9px", borderRadius: 14, background: t.accent, color: "#1e1e2e" }}>
+            {items.length} extension{items.length !== 1 ? "s" : ""}
+          </span>
+          {installedCount > 0 && (
+            <span style={{ fontSize: "0.68rem", fontWeight: 600, padding: "1px 7px", borderRadius: 14, background: `${t.success}20`, color: t.success }}>
+              {installedCount} installed
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* name */}
+      <div style={{ fontWeight: 700, fontSize: "0.96rem" }}>{contributor}</div>
+
+      {/* category pills */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {cats.map((c) => (
+          <span key={c} style={{
+            fontSize: "0.68rem", fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+            background: catColor(c) + "22", color: catColor(c), border: `1px solid ${catColor(c)}40`,
+          }}>
+            {prettyCat(c)}
+          </span>
+        ))}
+      </div>
+
+      {/* item name preview */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {preview.map((i) => (
+          <span key={i.name} style={{
+            fontSize: "0.71rem", padding: "2px 8px", borderRadius: 8,
+            background: t.surface, color: t.subtext, border: `1px solid ${t.border}`,
+          }}>
+            {i.name}
+          </span>
+        ))}
+        {items.length > 4 && (
+          <span style={{ fontSize: "0.71rem", padding: "2px 8px", borderRadius: 8, color: t.dim }}>
+            +{items.length - 4} more
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Item card (drill-down) ──────────────────────────────────────────── */
+function ItemCard({ item, busy, onInstall, onUninstall, onUpdate, onAutoToggle }: {
+  item: MarketplaceItemInfo;
+  busy: boolean;
+  onInstall: () => void;
+  onUninstall: () => void;
+  onUpdate?: () => void;
+  onAutoToggle?: (enabled: boolean) => void;
+}) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  const [hovered, setHovered] = useState(false);
+  const color = catColor(item.category);
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{
+        background: hovered ? t.cardHover : t.card,
+        borderRadius: 12, border: `1px solid ${hovered ? t.borderHover : t.border}`,
+        padding: "18px 18px 14px", display: "flex", flexDirection: "column",
+        justifyContent: "space-between", minHeight: 150,
+        transition: "background .12s, border-color .15s",
+      }}
+    >
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: "0.96rem", lineHeight: 1.3 }}>{item.name}</span>
+          <span style={{
+            flexShrink: 0, padding: "2px 9px", borderRadius: 14, fontSize: "0.7rem",
+            fontWeight: 700, textTransform: "capitalize", background: color, color: "#1e1e2e",
+          }}>{prettyCat(item.category)}</span>
+        </div>
+        {item.source !== "Official SolixAI" && (
+          <span style={{ fontSize: "0.7rem", padding: "0 6px", borderRadius: 4, background: t.surface, color: t.dim, marginBottom: 6, display: "inline-block" }}>
+            {item.source}
+          </span>
+        )}
+        {item.description && (
+          <p style={{
+            fontSize: "0.84rem", color: t.subtext, margin: "6px 0 0", lineHeight: 1.45,
+            display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden",
+          }}>
+            {item.description}
+          </p>
+        )}
+      </div>
+      <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {item.installed ? (
+          <>
+            <span style={{ padding: "3px 10px", borderRadius: 14, fontSize: "0.74rem", fontWeight: 700, background: `${t.success}18`, color: t.success }}>
+              ✓ Installed
+            </span>
+            {item.needsUpdate && onUpdate && (
+              <Btn variant="accent" style={{ padding: "4px 12px", fontSize: "0.78rem" }} onClick={onUpdate} disabled={busy}>
+                {busy ? "…" : "Update"}
+              </Btn>
+            )}
+            <Btn variant="danger" style={{ padding: "4px 12px", fontSize: "0.78rem" }} onClick={onUninstall} disabled={busy}>
+              {busy ? "…" : "Uninstall"}
+            </Btn>
+            {onAutoToggle && (
+              <label style={{ fontSize: "0.72rem", marginLeft: 8, display: "flex", alignItems: "center", gap: 4 }}>
+                <input type="checkbox" checked={!!item.autoUpdate} onChange={(e) => onAutoToggle(e.target.checked)}
+                  style={{ accentColor: t.accent }} /> auto‑update
+              </label>
+            )}
+          </>
+        ) : (
+          <Btn variant="accent" onClick={onInstall} disabled={busy}>
+            {busy ? <><Spinner /> Installing…</> : "Install"}
+          </Btn>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Tab button ──────────────────────────────────────────────────────── */
+function TabBtn({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  return (
+    <button onClick={onClick} style={{
+      padding: "8px 18px", background: "transparent", border: "none",
+      borderBottom: active ? `2px solid ${t.accent}` : "2px solid transparent",
+      color: active ? t.accent : t.dim, fontWeight: active ? 700 : 500,
+      fontSize: "0.86rem", cursor: "pointer", transition: "color .12s, border-color .12s",
+      display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+    }}>
       {label}
+      <span style={{
+        fontSize: "0.68rem", padding: "1px 6px", borderRadius: 8, fontWeight: 700,
+        background: active ? t.accent : t.border, color: active ? "#1e1e2e" : t.dim,
+      }}>{count}</span>
     </button>
   );
 }
 
-function EmptyState({ syncing, synced }: { syncing: boolean; synced: boolean }) {
-  if (syncing) {
-    return (
-      <div style={{ textAlign: "center", padding: "3rem 1rem", color: c.muted }}>
-        <p style={{ fontSize: "1.1rem", fontWeight: 500 }}>Syncing marketplace…</p>
-        <p>Cloning marketplace repository, this may take a moment.</p>
-      </div>
-    );
-  }
+/* ── Skeleton grid ───────────────────────────────────────────────────── */
+function SkeletonGrid({ itemCards }: { itemCards: boolean }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
   return (
-    <div style={{
-      textAlign: "center",
-      padding: "3rem 1rem",
-      color: c.muted,
-    }}>
-      {synced ? (
-        <>
-          <p style={{ fontSize: "1.1rem", fontWeight: 500 }}>No items found</p>
-          <p>Try a different search or category filter.</p>
-        </>
-      ) : (
-        <>
-          <p style={{ fontSize: "1.1rem", fontWeight: 500 }}>Marketplace not synced yet</p>
-          <p>Click <strong>Sync All</strong> to clone the marketplace repositories and discover available skills, tools, and more.</p>
-          <p style={{ fontSize: "0.85rem" }}>
-            The default source is <code>https://github.com/jonjonbinx1/SolixAI-Marketplace.git</code>.
-            <br />Use <strong>Manage Sources</strong> to add more.
-          </p>
-        </>
-      )}
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${itemCards ? 280 : 260}px, 1fr))`, gap: 14 }}>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} style={{
+          background: t.card, borderRadius: 12, border: `1px solid ${t.border}`,
+          padding: 18, minHeight: itemCards ? 150 : 170, animation: "pulse 1.5s ease-in-out infinite",
+        }}>
+          <div style={{ width: "50%", height: 14, borderRadius: 6, background: t.border, marginBottom: 12 }} />
+          <div style={{ width: "30%", height: 10, borderRadius: 6, background: t.border, marginBottom: 16 }} />
+          <div style={{ width: "85%", height: 10, borderRadius: 6, background: t.border, marginBottom: 8 }} />
+          <div style={{ width: "65%", height: 10, borderRadius: 6, background: t.border }} />
+        </div>
+      ))}
     </div>
   );
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function itemKey(item: MarketplaceItemInfo): string {
-  return `${item.source}::${item.category}/${item.contributor}/${item.name}`;
+/* ── Empty states ────────────────────────────────────────────────────── */
+function EmptyState() {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  return (
+    <div style={{ textAlign: "center", padding: "4rem 1rem", color: t.dim }}>
+      <p style={{ fontSize: "1.15rem", fontWeight: 700, marginBottom: 6 }}>Welcome to the Marketplace</p>
+      <p style={{ fontSize: "0.88rem", maxWidth: 400, margin: "0 auto 14px", color: t.subtext }}>
+        Click <b style={{ color: t.accent }}>Sync All</b> to fetch extensions from your configured sources.
+      </p>
+      <p style={{ fontSize: "0.78rem" }}>Use <b>Sources</b> to add or manage repositories.</p>
+    </div>
+  );
+}
+function EmptyMsg({ children }: { children: React.ReactNode }) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  return (
+    <div style={{ textAlign: "center", padding: "3rem 1rem", color: t.dim }}>
+      <p style={{ fontSize: "1rem", fontWeight: 500 }}>{children}</p>
+    </div>
+  );
 }
 
-const CAT_COLORS: Record<string, string> = {
-  skills: "#6c5ce7",
-  tools: "#00b894",
-  triggers: "#fdcb6e",
-  souls: "#e17055",
-  themes: "#0984e3",
-  "soul-templates": "#e17055",
-  "ui-themes": "#0984e3",
-};
-
-function categoryColor(cat: string): string {
-  return CAT_COLORS[cat] ?? "#636e72";
+/* ── Spinner ─────────────────────────────────────────────────────────── */
+function Spinner() {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  return <span style={{
+    display: "inline-block", width: 13, height: 13, marginRight: 4,
+    border: `2px solid ${t.dim}`, borderTopColor: t.accent,
+    borderRadius: "50%", animation: "spin .55s linear infinite",
+  }} />;
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────
+/* ── Shared button ───────────────────────────────────────────────────── */
+function Btn({ variant, children, style, ...rest }: {
+  variant: "accent" | "ghost" | "danger"; children: React.ReactNode; style?: React.CSSProperties;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  const base: React.CSSProperties = {
+    display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer",
+    padding: "7px 18px", borderRadius: 8, fontSize: "0.84rem", fontWeight: 700,
+    border: "none", transition: "opacity .12s",
+    ...(variant === "accent" ? { background: t.accent, color: "#1e1e2e" } :
+      variant === "danger" ? { background: t.danger, color: "#1e1e2e" } :
+      { background: "transparent", border: `1px solid ${t.border}`, color: t.subtext }),
+    ...style,
+  };
+  return <button style={base} {...rest}>{children}</button>;
+}
 
-const btnPrimary: React.CSSProperties = {
-  padding: "7px 18px",
-  borderRadius: 6,
-  border: "none",
-  background: c.accent,
-  color: "#fff",
-  cursor: "pointer",
-  fontWeight: 600,
-  fontSize: "0.88rem",
-};
+/* ── Mini input (sources form) ───────────────────────────────────────── */
+function MiniInput({ value, onChange, placeholder, style }: {
+  value: string; onChange: (v: string) => void; placeholder: string; style?: React.CSSProperties;
+}) {
+  const { palette: P } = useTheme();
+  const t = { bg: P.base, surface: P.mantle, card: P.surface0, cardHover: P.surface1, border: P.surface1, borderHover: P.mauve, accent: P.mauve, danger: P.red, success: P.green, muted: P.surface2, text: P.text, subtext: P.subtext0, dim: P.overlay0, overlay: P.crust };
+  return (
+    <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+      style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${t.border}`,
+        background: t.card, color: t.text, fontSize: "0.86rem", outline: "none", ...style }} />
+  );
+}
 
-const btnSecondary: React.CSSProperties = {
-  ...btnPrimary,
-  background: "transparent",
-  border: `1px solid ${c.border}`,
-  color: c.textLight,
-};
-
-const btnDanger: React.CSSProperties = {
-  ...btnPrimary,
-  background: c.danger,
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "7px 12px",
-  borderRadius: 6,
-  border: `1px solid ${c.border}`,
-  fontSize: "0.9rem",
-  flex: 1,
-};
-
-const th: React.CSSProperties = { padding: "6px 10px", fontSize: "0.84rem", color: c.muted };
-const td: React.CSSProperties = { padding: "8px 10px", fontSize: "0.9rem" };
+/* ── Helpers ─────────────────────────────────────────────────────────── */
+function ikey(i: MarketplaceItemInfo) { return `${i.source}::${i.category}/${i.contributor}/${i.name}`; }
+function prettyCat(c: string) { return c.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()); }

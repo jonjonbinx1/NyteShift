@@ -2,6 +2,7 @@ import type {
   AutonomousTaskOptions,
   PipelineResult,
   PipelineStep,
+  SubAgentResult,
   Message,
 } from "../../types/index.js";
 import { resolveConfig } from "../config/configResolver.js";
@@ -10,6 +11,8 @@ import { injectSoul } from "../soul/soulInjector.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { loadSkills } from "../skills/skillLoader.js";
 import { loadTools } from "../tools/toolLoader.js";
+import { createMemoryTools } from "../memory/memoryTools.js";
+import { createSubAgentTools } from "../subagent/subagentTools.js";
 
 // ── Structured logging ─────────────────────────────────────────────────────
 const log  = (...args: unknown[]) => console.log("[pipeline:autonomous]",  ...args);
@@ -57,7 +60,56 @@ function stripThinkingTags(text: string): { content: string; thinking: string } 
   });
   return { content: cleaned.trim(), thinking };
 }
+// ── Tool-call input validator ────────────────────────────────────────────────────
 
+/**
+ * Validates a tool call’s input object against the tool’s inputSchema.
+ * Checks required fields and, where provided, type / enum constraints.
+ * Returns an array of human-readable error strings; empty means valid.
+ */
+function validateToolInput(
+  input: Record<string, unknown>,
+  inputSchema: Record<string, unknown>,
+): string[] {
+  const errors: string[] = [];
+  const properties = inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
+  const required   = inputSchema.required   as string[] | undefined;
+
+  // Required-field check.
+  if (required) {
+    for (const field of required) {
+      if (input[field] === undefined || input[field] === null) {
+        errors.push(`Missing required field: "${field}"`);
+      }
+    }
+  }
+
+  // Per-property type / enum checks.
+  if (properties) {
+    for (const [key, schema] of Object.entries(properties)) {
+      if (input[key] === undefined) continue;
+
+      const allowedValues = schema.enum as unknown[] | undefined;
+      if (allowedValues && !allowedValues.includes(input[key])) {
+        errors.push(
+          `Field "${key}" must be one of: ${allowedValues.join(", ")} (got "${input[key]}")`,
+        );
+      }
+
+      const expectedType = schema.type as string | undefined;
+      if (expectedType && expectedType !== "array" && expectedType !== "object") {
+        // eslint-disable-next-line valid-typeof
+        if (typeof input[key] !== expectedType) {
+          errors.push(
+            `Field "${key}" must be of type ${expectedType} (got ${typeof input[key]})`,
+          );
+        }
+      }
+    }
+  }
+
+  return errors;
+}
 // ── System-prompt builder ──────────────────────────────────────────────────
 
 /**
@@ -168,6 +220,27 @@ function buildSystemPrompt(
     "",
   );
 
+  // ── 6. Sub-agent delegation guidelines ─────────────────────────────
+  sections.push(
+    "# Sub-Agent Delegation",
+    "",
+    "You can delegate sub-tasks to other agents using the `sub_agent_run` tool.",
+    "This follows the orchestrator-workers pattern:",
+    "",
+    "• **When to delegate**: complex tasks that benefit from decomposition, or when a",
+    "  specialised agent exists for a particular domain (e.g. research, code review).",
+    "• **When NOT to delegate**: simple questions, tasks you can answer directly,",
+    "  or when the overhead of spawning a sub-agent outweighs the benefit.",
+    '• Use `sub_agent_list` to discover available agents before delegating.',
+    '• Use `agent="self"` to delegate to yourself with a tightly-scoped sub-prompt',
+    "  (useful for divide-and-conquer on multi-part problems).",
+    "• Write **self-contained** task descriptions — sub-agents do NOT see your",
+    "  conversation history.  Include all necessary context in the task.",
+    "• Sub-agent results are returned as tool results — synthesise them into",
+    "  a coherent final answer for the user.",
+    "",
+  );
+
   return sections.join("\n");
 }
 
@@ -210,14 +283,64 @@ export async function runAutonomousTask(
   log(`  config resolved — provider="${providerId}" model="${model}" temperature=${temperature} maxTokens=${maxTokens} maxSteps=${maxSteps}`);
 
   // ── Load skills & tools ───────────────────────────────────────────────
-  const [skills, tools] = await Promise.all([loadSkills(), loadTools()]);
-  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s)`);
+  // Marketplace tools are combined with built-in tools (solix/*):
+  //   • Memory tools  — persistent key-value storage
+  //   • Sub-agent tools — orchestrator-workers delegation (Anthropic pattern)
+  // Both are always available without marketplace installation.
+  const currentDepth = options._depth ?? 0;
+  const maxDepthLimit = options.maxDepth ?? 3;
+  const runId = `${agentName}:${Date.now()}`;
+
+  const [skills, marketplaceTools] = await Promise.all([loadSkills(), loadTools()]);
+  const memoryTools = createMemoryTools(agentName);
+  const subAgentTools = createSubAgentTools({
+    parentAgentName: agentName,
+    currentDepth,
+    maxDepth: maxDepthLimit,
+    parentProvider: providerId,
+    parentModel: model,
+    signal,
+    parentRunId: options.parentRunId ?? runId,
+    allowAsync: (agentCfg.allowAsyncSubAgents as boolean | undefined) ?? false,
+    onSubAgentStep: (childAgent, step) => {
+      log(`  [sub-agent:${childAgent}] step ${step.index}: ${step.action}`);
+    },
+  });
+  const tools = [...memoryTools, ...subAgentTools, ...marketplaceTools];
+  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s) (${memoryTools.length} memory + ${subAgentTools.length} sub-agent${(agentCfg.allowAsyncSubAgents as boolean | undefined) ? " [async]" : ""} + ${marketplaceTools.length} marketplace)`);
+  if (currentDepth > 0) {
+    log(`  ↳ sub-agent run — depth=${currentDepth}/${maxDepthLimit} parent="${options.parentAgent ?? "unknown"}"`);
+  }
 
   const skillList = skills
     .map((s) => `• ${s.frontmatter.contributor}/${s.frontmatter.name}: ${s.frontmatter.description}`)
     .join("\n");
   const toolList = tools
-    .map((t) => `• ${t.contributor}/${t.name}: ${t.description}`)
+    .map((t) => {
+      let entry = `• ${t.contributor}/${t.name}: ${t.description}`;
+
+      // Append parameter information from the tool spec so the model knows
+      // exactly which field names and values are accepted.
+      if (t.spec?.inputSchema) {
+        const schema   = t.spec.inputSchema as Record<string, unknown>;
+        const required = schema.required as string[] | undefined;
+        const props    = schema.properties as Record<string, Record<string, unknown>> | undefined;
+        if (props) {
+          const params = Object.entries(props)
+            .map(([k, v]) => {
+              const req      = required?.includes(k) ? " (required)" : " (optional)";
+              const typeInfo = v.enum
+                ? `one of: ${(v.enum as unknown[]).join(", ")}`
+                : (v.type as string ?? "any");
+              return `    - ${k}${req}: ${typeInfo}`;
+            })
+            .join("\n");
+          entry += `\n  Parameters:\n${params}`;
+        }
+      }
+
+      return entry;
+    })
     .join("\n");
 
   // ── Build opening conversation ────────────────────────────────────────
@@ -225,18 +348,29 @@ export async function runAutonomousTask(
   // Soul personality is injected *into* the system prompt (as a Persona
   // section) rather than as a separate message — this follows Anthropic's
   // guidance to keep all behavioural instructions in the system message.
+  //
+  // Prior conversation history (user/assistant turns from the chat session)
+  // is injected between the system prompt and the current user message so
+  // the model retains full context across turns.
+  const historyMessages: Message[] = (options.chatHistory ?? []).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
   let messages: Message[] = [
     { role: "system", content: buildSystemPrompt(skillList, toolList, maxSteps) },
+    ...historyMessages,
     { role: "user",   content: task },
   ];
   messages = await injectSoul(agentName, messages);
 
-  log(`  conversation primed — ${messages.length} message(s)`);
+  log(`  conversation primed — ${messages.length} message(s) (history=${historyMessages.length})`);
   log(`  system prompt length: ${messages[0]?.content?.length ?? 0} chars`);
   log(`  user message: "${task.slice(0, 150).replace(/\n/g, "↵")}"`);
 
   // ── ReAct loop ────────────────────────────────────────────────────────
   const steps: PipelineStep[] = [];
+  const subAgentRuns: SubAgentResult[] = [];
   let aborted   = false;
   let finalOutput = "";
   let allThinking = "";
@@ -356,17 +490,110 @@ export async function runAutonomousTask(
         toolOutput = `Tool "${toolCall.name}" not found. Available tools: ${available}`;
         logW(`  tool "${toolCall.name}" not found`);
       } else {
+        // ── Input validation ─────────────────────────────────────────────
+        if (toolDef.spec?.inputSchema) {
+          const validationErrors = validateToolInput(
+            toolCall.input as Record<string, unknown>,
+            toolDef.spec.inputSchema,
+          );
+          if (validationErrors.length > 0) {
+            const validationMsg = [
+              `Tool "${toolDef.contributor}/${toolDef.name}" call rejected — invalid input:`,
+              ...validationErrors.map((e) => `  • ${e}`),
+              `Re-read the tool’s parameter list in the system prompt and correct your call.`,
+            ].join("\n");
+            logW(`  input validation failed (${validationErrors.length} error(s)):`, validationErrors);
+            messages.push({ role: "user", content: `<tool_result>\n${validationMsg}\n</tool_result>` });
+            log(`  validation error injected — continuing to step ${i + 2}`);
+            continue;
+          }
+        }
+
         log(`  executing tool "${toolDef.name}"…`);
+        let rawResultCapture: unknown = null;
         try {
           const rawResult = await toolDef.run({ input: toolCall.input, context: {} });
-          toolOutput =
-            typeof rawResult === "string"
-              ? rawResult
-              : JSON.stringify(rawResult, null, 2);
-          log(`  tool result (${toolOutput.length} chars): "${toolOutput.slice(0, 200).replace(/\n/g, "↵")}"`);
+          rawResultCapture = rawResult;
+
+          // ── ok:false guard ─────────────────────────────────────────────
+          const resultObj =
+            typeof rawResult === "object" && rawResult !== null
+              ? (rawResult as Record<string, unknown>)
+              : null;
+
+          if (resultObj && resultObj.ok === false) {
+            const errDetail =
+              typeof resultObj.error === "string"
+                ? resultObj.error
+                : JSON.stringify(rawResult, null, 2);
+            toolOutput = [
+              `Tool "${toolDef.contributor}/${toolDef.name}" returned a failure:`,
+              errDetail,
+              `You MUST handle this error.  Do NOT claim success.  Try an alternative approach or explain clearly what went wrong.`,
+            ].join("\n");
+            logW(`  tool returned ok=false — ${errDetail}`);
+          } else {
+            toolOutput =
+              typeof rawResult === "string"
+                ? rawResult
+                : JSON.stringify(rawResult, null, 2);
+            log(`  tool result (${toolOutput.length} chars): "${toolOutput.slice(0, 200).replace(/\n/g, "↵")}"`);
+
+            // ── Post-action verify ────────────────────────────────────────
+            if (toolDef.spec?.verify?.length) {
+              const verifyResults: string[] = [];
+              for (const verifyName of toolDef.spec.verify) {
+                const verifyTool = tools.find(
+                  (t) => t.name === verifyName || `${t.contributor}/${t.name}` === verifyName,
+                );
+                if (!verifyTool) {
+                  logW(`  verify tool "${verifyName}" not found — skipping`);
+                  continue;
+                }
+                try {
+                  const vResult = await verifyTool.run({ input: toolCall.input, context: {} });
+                  const vStr =
+                    typeof vResult === "string" ? vResult : JSON.stringify(vResult, null, 2);
+                  const vObj =
+                    typeof vResult === "object" && vResult !== null
+                      ? (vResult as Record<string, unknown>)
+                      : null;
+                  if (vObj && vObj.ok === false) {
+                    verifyResults.push(`⚠ Verify "${verifyName}" FAILED: ${vObj.error ?? vStr}`);
+                    logW(`  verify "${verifyName}" failed — ${vObj.error ?? vStr}`);
+                  } else {
+                    verifyResults.push(`✓ Verify "${verifyName}" passed.`);
+                    log(`  verify "${verifyName}" passed`);
+                  }
+                } catch (vErr) {
+                  verifyResults.push(
+                    `⚠ Verify "${verifyName}" threw: ${(vErr as Error).message}`,
+                  );
+                  logW(`  verify "${verifyName}" error:`, vErr);
+                }
+              }
+              if (verifyResults.length) {
+                toolOutput += `\n\nVerification:\n${verifyResults.join("\n")}`;
+              }
+            }
+          }
         } catch (toolErr) {
           toolOutput = `Error running tool "${toolDef.name}": ${(toolErr as Error).message}`;
           logE(`  tool execution error:`, toolErr);
+        }
+
+        // ── Capture sub-agent result for lineage tracking ─────────────
+        // When the tool is sub_agent_run, the result contains a
+        // `_subAgentResult` field with the full SubAgentResult.
+        // Attach it to the current step for UI observability and
+        // record it in the run-level subAgentRuns array.
+        if (toolDef.name === "sub_agent_run" && typeof rawResultCapture === "object" && rawResultCapture !== null) {
+          const sar = (rawResultCapture as Record<string, unknown>)._subAgentResult as SubAgentResult | undefined;
+          if (sar) {
+            step.subAgentResult = sar;
+            subAgentRuns.push(sar);
+            log(`  sub-agent result captured — agent="${sar.agentName}" steps=${sar.stepCount} elapsed=${sar.elapsedMs}ms`);
+          }
         }
       }
 
@@ -414,5 +641,9 @@ export async function runAutonomousTask(
     finalOutput,
     thinking: allThinking || undefined,
     aborted,
+    parentAgent: options.parentAgent,
+    parentRunId: options.parentRunId,
+    depth: currentDepth,
+    subAgentRuns: subAgentRuns.length > 0 ? subAgentRuns : undefined,
   };
 }

@@ -35,6 +35,9 @@ import {
   readSoul,
   writeSoul,
 
+  // Sub-Agent Delegation
+  createSubAgentTools,
+
   // Triggers
   listTriggers,
   fireTrigger,
@@ -57,6 +60,7 @@ import {
 | `AgentController` | AbortController-based cancel/stop mechanism |
 | `Pipeline (autonomous)` | **ReAct loop** — Reason → Act (tool call or final answer) → Observe → repeat |
 | `Pipeline (triggered)` | Sequential step execution on events |
+| `SubAgentTools` | Built-in tools for orchestrator-workers delegation between agents |
 
 ## Autonomous Pipeline — ReAct Loop
 
@@ -105,6 +109,41 @@ Your complete answer here.
 ```
 
 If neither tag appears the full response is treated as the final answer (graceful fallback).
+
+### Sub-Agent Delegation (Orchestrator-Workers)
+
+Agents can delegate sub-tasks to other agents following Anthropic's
+**orchestrator-workers** pattern.  Two built-in tools are available to every agent:
+
+| Tool | Description |
+|------|-------------|
+| `solix/sub_agent_run` | Spawn a named agent with a self-contained task |
+| `solix/sub_agent_list` | List available agents and their configurations |
+
+**How it works:**
+
+```
+Parent agent (orchestrator)
+  │
+  ├─ Reasons about the user’s request
+  ├─ Decides to delegate a sub-task
+  ├─ <tool_call> { name: "sub_agent_run", input: { agent: "researcher", task: "..." } }
+  │     │
+  │     └─ Child agent runs its own ReAct loop
+  │        └─ Returns finalOutput as <tool_result>
+  │
+  ├─ Synthesises child result with other information
+  └─ <final_answer> to the user
+```
+
+**Key design decisions:**
+
+- **Depth-bounded**: Maximum nesting depth (default 3) prevents infinite loops
+- **Isolated contexts**: Each sub-agent has its own message history
+- **Config inheritance**: Sub-agents inherit parent’s provider/model unless overridden
+- **Self-delegation**: `agent="self"` enables divide-and-conquer on complex problems
+- **Full observability**: Sub-agent results are captured in the step tree for UI drill-down
+- **AbortSignal propagation**: Cancelling the parent also cancels all children
 
 ### Loop Termination
 

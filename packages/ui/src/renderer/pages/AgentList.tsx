@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { CreateAgentModal } from "../components/CreateAgentModal.js";
+import { useTheme } from "../theme/ThemeContext.js";
 
 export function AgentList(): React.JSX.Element {
+  const { palette: C } = useTheme();
   const [agents, setAgents] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -40,8 +42,8 @@ export function AgentList(): React.JSX.Element {
             padding: "8px 18px",
             borderRadius: 6,
             border: "none",
-            background: "#cba6f7",
-            color: "#1e1e2e",
+            background: C.mauve,
+            color: C.base,
             fontWeight: 700,
             cursor: "pointer",
             fontSize: 14,
@@ -59,9 +61,9 @@ export function AgentList(): React.JSX.Element {
         style={{
           padding: "7px 12px",
           borderRadius: 6,
-          border: "1px solid #45475a",
-          background: "#181825",
-          color: "#cdd6f4",
+          border: `1px solid ${C.surface1}`,
+          background: C.mantle,
+          color: C.text,
           width: "100%",
           boxSizing: "border-box",
           fontSize: 14,
@@ -70,7 +72,7 @@ export function AgentList(): React.JSX.Element {
       />
 
       {filtered.length === 0 ? (
-        <p style={{ color: "#585b70" }}>
+        <p style={{ color: C.surface2 }}>
           {agents.length === 0 ? "No agents yet. Click \"+ New Agent\" to create one." : "No agents match your search."}
         </p>
       ) : (
@@ -83,20 +85,20 @@ export function AgentList(): React.JSX.Element {
                 justifyContent: "space-between",
                 alignItems: "center",
                 padding: "10px 14px",
-                borderBottom: "1px solid #313244",
+                borderBottom: `1px solid ${C.surface0}`,
                 borderRadius: 6,
               }}
             >
               <Link
                 to={`/agents/${name}`}
-                style={{ fontWeight: 600, color: "#cba6f7", textDecoration: "none" }}
+                style={{ fontWeight: 600, color: C.mauve, textDecoration: "none" }}
               >
                 {name}
               </Link>
               <button
                 onClick={() => handleDelete(name)}
                 style={{
-                  color: "#f38ba8",
+                  color: C.red,
                   background: "none",
                   border: "none",
                   cursor: "pointer",

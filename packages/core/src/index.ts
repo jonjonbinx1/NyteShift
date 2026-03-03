@@ -51,6 +51,8 @@ export {
   writeGlobalConfig,
   readAgentConfig,
   writeAgentConfig,
+  readSkillToolConfig,
+  writeSkillToolConfig,
 } from "./runtime/config/configResolver.js";
 export { ensureSolixDirs } from "./runtime/config/ensureDirs.js";
 
@@ -61,15 +63,60 @@ export {
   readSoul,
   writeSoul,
 } from "./runtime/soul/soulInjector.js";
-
+// ── Memory ──────────────────────────────────────────────
+export {
+  writeMemory,
+  readMemory,
+  listMemories,
+  deleteMemory,
+  clearAllMemories,
+  searchMemories,
+} from "./runtime/memory/memoryManager.js";
+export type { MemoryEntry } from "./runtime/memory/memoryManager.js";
 // ── Triggers ───────────────────────────────────────────────────────────
-export { listTriggers, fireTrigger } from "./runtime/triggers/triggerRunner.js";
+export { listTriggers, fireTrigger } from "./runtime/triggers/triggerRunner.js";export {
+  listAllTriggers,
+  readAgentTriggers,
+  writeAgentTriggers,
+  createTriggerDefinition,
+  updateTriggerDefinition,
+  deleteTriggerDefinition,
+  getTriggerDefinition,
+} from "./runtime/triggers/triggerStore.js";
+export { TriggerEngine, getTriggerEngine } from "./runtime/triggers/triggerEngine.js";
+export type { TriggerEngineOptions } from "./runtime/triggers/triggerEngine.js";
+
+// ── Discord ────────────────────────────────────────────────────────────
+export {
+  DiscordBridge,
+  readBridgeConfig,
+  writeBridgeConfig,
+  deleteBridgeConfig,
+  startBridge,
+  stopBridge,
+  isBridgeRunning,
+  getActiveBridges,
+  // Global Discord bridge
+  GlobalDiscordBridge,
+  parseAgentFromMessage,
+  readGlobalDiscordConfig,
+  writeGlobalDiscordConfig,
+  startGlobalBridge,
+  stopGlobalBridge,
+  isGlobalBridgeRunning,
+  getGlobalBridge,
+} from "./runtime/discord/discordBridge.js";
+export type { DiscordBridgeOptions } from "./runtime/discord/discordBridge.js";
 
 // ── Control ────────────────────────────────────────────────────────────
 export { AgentController } from "./runtime/control/controller.js";
 
 // ── Utils (selective) ──────────────────────────────────────────────────
 export { toKebab, solixHome } from "./utils/index.js";
+
+// ── Sub-Agent Delegation ───────────────────────────────────────────────
+export { createSubAgentTools } from "./runtime/subagent/subagentTools.js";
+export type { SubAgentToolsOptions } from "./runtime/subagent/subagentTools.js";
 
 // ── Marketplace ────────────────────────────────────────────────────────
 export type {
@@ -91,4 +138,12 @@ export {
   listMarketplaceCategories,
   installMarketplaceItem,
   uninstallMarketplaceItem,
+  // update/auto helpers
+  readInstalledIndex,
+  getInstalledItem,
+  setItemAutoUpdate,
+  setGlobalAutoUpdate,
+  checkAndUpdateItem,
+  autoUpdateInstalledItems,
+  reconcileInstalledItems,
 } from "./runtime/marketplace/index.js";
