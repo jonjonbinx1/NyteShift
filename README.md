@@ -18,6 +18,7 @@ SolixAI lets you create **agents** that can:
 | **Providers**| LLM backends — OpenAI, Anthropic, OpenRouter (built-in) |
 | **Soul.md**  | Per-agent system prompt injected into every conversation |
 | **Triggers** | Event-driven pipeline starters (`~/.solix/triggers`) |
+| **Sub-Agents** | Orchestrator-workers delegation — agents can spawn other agents as tool calls |
 
 ## Monorepo Structure
 

@@ -2,6 +2,7 @@ import type {
   AutonomousTaskOptions,
   PipelineResult,
   PipelineStep,
+  SubAgentResult,
   Message,
 } from "../../types/index.js";
 import { resolveConfig } from "../config/configResolver.js";
@@ -11,6 +12,7 @@ import { callProvider } from "../providers/providerRouter.js";
 import { loadSkills } from "../skills/skillLoader.js";
 import { loadTools } from "../tools/toolLoader.js";
 import { createMemoryTools } from "../memory/memoryTools.js";
+import { createSubAgentTools } from "../subagent/subagentTools.js";
 
 // ── Structured logging ─────────────────────────────────────────────────────
 const log  = (...args: unknown[]) => console.log("[pipeline:autonomous]",  ...args);
@@ -218,6 +220,27 @@ function buildSystemPrompt(
     "",
   );
 
+  // ── 6. Sub-agent delegation guidelines ─────────────────────────────
+  sections.push(
+    "# Sub-Agent Delegation",
+    "",
+    "You can delegate sub-tasks to other agents using the `sub_agent_run` tool.",
+    "This follows the orchestrator-workers pattern:",
+    "",
+    "• **When to delegate**: complex tasks that benefit from decomposition, or when a",
+    "  specialised agent exists for a particular domain (e.g. research, code review).",
+    "• **When NOT to delegate**: simple questions, tasks you can answer directly,",
+    "  or when the overhead of spawning a sub-agent outweighs the benefit.",
+    '• Use `sub_agent_list` to discover available agents before delegating.',
+    '• Use `agent="self"` to delegate to yourself with a tightly-scoped sub-prompt',
+    "  (useful for divide-and-conquer on multi-part problems).",
+    "• Write **self-contained** task descriptions — sub-agents do NOT see your",
+    "  conversation history.  Include all necessary context in the task.",
+    "• Sub-agent results are returned as tool results — synthesise them into",
+    "  a coherent final answer for the user.",
+    "",
+  );
+
   return sections.join("\n");
 }
 
@@ -260,12 +283,34 @@ export async function runAutonomousTask(
   log(`  config resolved — provider="${providerId}" model="${model}" temperature=${temperature} maxTokens=${maxTokens} maxSteps=${maxSteps}`);
 
   // ── Load skills & tools ───────────────────────────────────────────────
-  // Marketplace tools are combined with built-in memory tools (solix/*)
-  // which are always available without installation.
+  // Marketplace tools are combined with built-in tools (solix/*):
+  //   • Memory tools  — persistent key-value storage
+  //   • Sub-agent tools — orchestrator-workers delegation (Anthropic pattern)
+  // Both are always available without marketplace installation.
+  const currentDepth = options._depth ?? 0;
+  const maxDepthLimit = options.maxDepth ?? 3;
+  const runId = `${agentName}:${Date.now()}`;
+
   const [skills, marketplaceTools] = await Promise.all([loadSkills(), loadTools()]);
   const memoryTools = createMemoryTools(agentName);
-  const tools = [...memoryTools, ...marketplaceTools];
-  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s) (${memoryTools.length} built-in + ${marketplaceTools.length} marketplace)`);
+  const subAgentTools = createSubAgentTools({
+    parentAgentName: agentName,
+    currentDepth,
+    maxDepth: maxDepthLimit,
+    parentProvider: providerId,
+    parentModel: model,
+    signal,
+    parentRunId: options.parentRunId ?? runId,
+    allowAsync: (agentCfg.allowAsyncSubAgents as boolean | undefined) ?? false,
+    onSubAgentStep: (childAgent, step) => {
+      log(`  [sub-agent:${childAgent}] step ${step.index}: ${step.action}`);
+    },
+  });
+  const tools = [...memoryTools, ...subAgentTools, ...marketplaceTools];
+  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s) (${memoryTools.length} memory + ${subAgentTools.length} sub-agent${(agentCfg.allowAsyncSubAgents as boolean | undefined) ? " [async]" : ""} + ${marketplaceTools.length} marketplace)`);
+  if (currentDepth > 0) {
+    log(`  ↳ sub-agent run — depth=${currentDepth}/${maxDepthLimit} parent="${options.parentAgent ?? "unknown"}"`);
+  }
 
   const skillList = skills
     .map((s) => `• ${s.frontmatter.contributor}/${s.frontmatter.name}: ${s.frontmatter.description}`)
@@ -325,6 +370,7 @@ export async function runAutonomousTask(
 
   // ── ReAct loop ────────────────────────────────────────────────────────
   const steps: PipelineStep[] = [];
+  const subAgentRuns: SubAgentResult[] = [];
   let aborted   = false;
   let finalOutput = "";
   let allThinking = "";
@@ -464,8 +510,10 @@ export async function runAutonomousTask(
         }
 
         log(`  executing tool "${toolDef.name}"…`);
+        let rawResultCapture: unknown = null;
         try {
           const rawResult = await toolDef.run({ input: toolCall.input, context: {} });
+          rawResultCapture = rawResult;
 
           // ── ok:false guard ─────────────────────────────────────────────
           const resultObj =
@@ -533,6 +581,20 @@ export async function runAutonomousTask(
           toolOutput = `Error running tool "${toolDef.name}": ${(toolErr as Error).message}`;
           logE(`  tool execution error:`, toolErr);
         }
+
+        // ── Capture sub-agent result for lineage tracking ─────────────
+        // When the tool is sub_agent_run, the result contains a
+        // `_subAgentResult` field with the full SubAgentResult.
+        // Attach it to the current step for UI observability and
+        // record it in the run-level subAgentRuns array.
+        if (toolDef.name === "sub_agent_run" && typeof rawResultCapture === "object" && rawResultCapture !== null) {
+          const sar = (rawResultCapture as Record<string, unknown>)._subAgentResult as SubAgentResult | undefined;
+          if (sar) {
+            step.subAgentResult = sar;
+            subAgentRuns.push(sar);
+            log(`  sub-agent result captured — agent="${sar.agentName}" steps=${sar.stepCount} elapsed=${sar.elapsedMs}ms`);
+          }
+        }
       }
 
       // Inject tool result as the next user turn.
@@ -579,5 +641,9 @@ export async function runAutonomousTask(
     finalOutput,
     thinking: allThinking || undefined,
     aborted,
+    parentAgent: options.parentAgent,
+    parentRunId: options.parentRunId,
+    depth: currentDepth,
+    subAgentRuns: subAgentRuns.length > 0 ? subAgentRuns : undefined,
   };
 }

@@ -198,6 +198,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
   const [maxSteps, setMaxSteps] = useState("30");
   const [description, setDescription] = useState("");
   const [autonomyLevel, setAutonomyLevel] = useState<"full" | "supervised" | "manual">("full");
+  const [allowAsyncSubAgents, setAllowAsyncSubAgents] = useState(false);
 
   // Discord bridge
   const [discordBotToken, setDiscordBotToken] = useState("");
@@ -226,6 +227,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       setMaxSteps(String(c.maxSteps ?? 30));
       setDescription((c.description as string) ?? "");
       setAutonomyLevel((c.autonomyLevel as any) ?? "full");
+      setAllowAsyncSubAgents((c.allowAsyncSubAgents as boolean) ?? false);
       const perms = (c.permissions as Record<string, PermLevel>) || {};
       setFsPermission(perms.filesystem ?? "allow");
       setNetPermission(perms.network ?? "allow");
@@ -268,6 +270,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
         description,
         maxSteps: parseInt(maxSteps, 10) || 30,
         autonomyLevel,
+        allowAsyncSubAgents,
         permissions: {
           filesystem: fsPermission,
           network: netPermission,
@@ -726,6 +729,48 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* ── Sub-Agents ── */}
+              <div style={sectionStyle}>
+                <h3 style={{ margin: 0, fontSize: 14, color: C.text }}>Sub-Agents</h3>
+                <p style={{ margin: 0, fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
+                  This agent can delegate tasks to other agents via <code>sub_agent_run</code>.
+                  By default delegation is synchronous — the parent waits for the child to finish.
+                  Enable async mode to let the agent fire sub-agents in the background and
+                  continue its own work, then collect results later with <code>sub_agent_collect</code>.
+                </p>
+                <label style={{
+                  display: "flex", alignItems: "center", gap: 12, cursor: "pointer",
+                  background: allowAsyncSubAgents ? "rgba(166,227,161,0.08)" : C.surface0,
+                  border: `1px solid ${allowAsyncSubAgents ? "rgba(166,227,161,0.3)" : "transparent"}`,
+                  borderRadius: 8, padding: "12px 14px",
+                  transition: "background 0.15s, border-color 0.15s",
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={allowAsyncSubAgents}
+                    onChange={(e) => setAllowAsyncSubAgents(e.target.checked)}
+                    style={{ width: 16, height: 16, accentColor: C.green, flexShrink: 0 }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: allowAsyncSubAgents ? C.green : C.text }}>
+                      Allow async sub-agents
+                    </div>
+                    <div style={{ fontSize: 11, color: C.subtext0, marginTop: 2 }}>
+                      Injects the <code>sub_agent_collect</code> tool and enables the <code>async</code> flag on
+                      {" "}<code>sub_agent_run</code>. The agent can fire multiple sub-agents concurrently and
+                      synthesise their results when ready.
+                    </div>
+                  </div>
+                  <span style={{
+                    fontSize: 10, padding: "2px 8px", borderRadius: 20, flexShrink: 0,
+                    background: allowAsyncSubAgents ? "rgba(166,227,161,0.18)" : C.surface1,
+                    color: allowAsyncSubAgents ? C.green : C.overlay0, fontWeight: 700,
+                  }}>
+                    {allowAsyncSubAgents ? "Enabled" : "Disabled"}
+                  </span>
+                </label>
               </div>
 
               <div style={{

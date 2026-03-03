@@ -35,13 +35,39 @@ export interface ModelInfo {
   provider?: string;
 }
 
+// ── Sub-Agent Delegation ──────────────────────────────────────────
+
+/**
+ * Lightweight record of a completed sub-agent delegation.
+ * Mirrors the core SubAgentResult type for renderer consumption.
+ */
+export interface SubAgentResultInfo {
+  agentName: string;
+  task: string;
+  finalOutput: string;
+  stepCount: number;
+  elapsedMs: number;
+  aborted: boolean;
+  depth: number;
+  steps?: Array<{ index: number; action: string; output: unknown; thinking?: string; subAgentResult?: SubAgentResultInfo }>;
+  children?: SubAgentResultInfo[];
+  /** True when the sub-agent was launched asynchronously. */
+  isAsync?: boolean;
+  /** Stable run identifier for async runs (used with sub_agent_collect). */
+  runId?: string;
+  /** Lifecycle state. Sync runs always arrive as "completed". */
+  status?: "running" | "completed" | "failed";
+  /** Error description when status is "failed". */
+  error?: string;
+}
+
 export interface ChatMessageInfo {
   id: string;
   role: "user" | "assistant" | "error";
   content: string;
   thinking?: string;
   ts: number;
-  steps?: Array<{ index: number; action: string; output: unknown; thinking?: string }>;
+  steps?: Array<{ index: number; action: string; output: unknown; thinking?: string; subAgentResult?: SubAgentResultInfo }>;
 }
 
 export interface ChatSessionInfo {
@@ -147,8 +173,11 @@ export interface SolixApi {
   runAutonomous(name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }): Promise<{
     finalOutput: string;
     thinking?: string;
-    steps: Array<{ index: number; action: string; output: unknown; thinking?: string }>;
+    steps: Array<{ index: number; action: string; output: unknown; thinking?: string; subAgentResult?: SubAgentResultInfo }>;
     aborted: boolean;
+    subAgentRuns?: SubAgentResultInfo[];
+    depth?: number;
+    parentAgent?: string;
   }>;
   getRunStatus(agentName: string): Promise<Array<{ runId: string; agentName: string; sessionId: string; status: string; result?: any; error?: string }>>;
   clearRun(runId: string): Promise<void>;

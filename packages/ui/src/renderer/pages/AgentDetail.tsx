@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { useChatStore } from "../stores/ChatStore.js";
-import type { ChatMessageInfo, ChatSessionSummaryInfo } from "../global.js";
+import type { ChatMessageInfo, ChatSessionSummaryInfo, SubAgentResultInfo } from "../global.js";
 import { AgentSettingsModal } from "../components/AgentSettingsModal.js";
 import { useTheme } from "../theme/ThemeContext.js";
 
@@ -33,10 +33,221 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ── Step detail card (inside run details) ───────────────────────────────────
-function StepCard({ step }: { step: { index: number; action: string; output: unknown; thinking?: string } }) {
+// ── Sub-agent result card (nested delegation view) ─────────────────────────
+function SubAgentCard({ result, depth = 0 }: { result: SubAgentResultInfo; depth?: number }) {
   const { palette: C } = useTheme();
   const [open, setOpen] = useState(false);
+  const depthColors = [C.mauve, C.blue, C.green, C.peach];
+  const borderColor = depthColors[depth % depthColors.length] ?? C.mauve;
+
+  const isRunning = result.status === "running";
+  const isFailed  = result.status === "failed";
+
+  return (
+    <div style={{
+      background: C.surface0,
+      borderRadius: 6,
+      borderLeft: `3px solid ${isFailed ? C.red : isRunning ? C.yellow : borderColor}`,
+      overflow: "hidden",
+      marginBottom: 6,
+      marginLeft: depth > 0 ? 12 : 0,
+    }}>
+      <button
+        onClick={() => setOpen((x) => !x)}
+        style={{
+          width: "100%", background: "none", border: "none", cursor: "pointer",
+          padding: "8px 10px", display: "flex", justifyContent: "space-between",
+          alignItems: "center", gap: 8,
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 13 }}>
+            {isRunning ? "⏳" : isFailed ? "❌" : "🤖"}
+          </span>
+          <span style={{ fontSize: 11, color: isFailed ? C.red : isRunning ? C.yellow : borderColor, fontWeight: 700 }}>
+            {result.isAsync ? "Async sub-agent" : "Sub-agent"}: {result.agentName}
+          </span>
+          <span style={{
+            fontSize: 9, color: C.overlay0, background: C.surface1,
+            padding: "1px 6px", borderRadius: 8,
+          }}>
+            depth {result.depth}
+          </span>
+          {result.isAsync && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 8,
+              background: "rgba(250,179,135,0.15)", color: C.peach,
+            }}>async</span>
+          )}
+          {isRunning && (
+            <span style={{ fontSize: 9, color: C.yellow, fontWeight: 700 }}>RUNNING</span>
+          )}
+          {isFailed && (
+            <span style={{ fontSize: 9, color: C.red, fontWeight: 700 }}>FAILED</span>
+          )}
+          {result.aborted && !isRunning && !isFailed && (
+            <span style={{ fontSize: 9, color: C.red, fontWeight: 700 }}>ABORTED</span>
+          )}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {!isRunning && (
+            <span style={{ fontSize: 9, color: C.overlay0 }}>
+              {result.stepCount} step{result.stepCount !== 1 ? "s" : ""} · {(result.elapsedMs / 1000).toFixed(1)}s
+            </span>
+          )}
+          <span style={{ fontSize: 10, color: C.overlay0 }}>{open ? "▲" : "▼"}</span>
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: "6px 10px", borderTop: `1px solid ${C.surface1}` }}>
+          {/* Task description */}
+          <div style={{
+            fontSize: 10, color: C.overlay0, marginBottom: 6,
+            padding: "4px 6px", background: "rgba(137,180,250,0.06)",
+            borderRadius: 4, fontFamily: "monospace",
+            whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            📋 Task: {result.task}
+          </div>
+          {/* Run ID for async */}
+          {result.runId && (
+            <div style={{
+              fontSize: 9, color: C.overlay0, marginBottom: 6,
+              fontFamily: "monospace", letterSpacing: "0.03em",
+            }}>
+              runId: {result.runId}
+            </div>
+          )}
+          {/* Status / output */}
+          {isRunning ? (
+            <div style={{ fontSize: 11, color: C.yellow, fontStyle: "italic" }}>
+              ⏳ Sub-agent is still running…
+            </div>
+          ) : isFailed ? (
+            <div style={{
+              fontSize: 11, color: C.red, background: "rgba(243,139,168,0.08)",
+              padding: "6px 8px", borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>
+              {result.error ?? "Unknown error"}
+            </div>
+          ) : (
+            <div style={{
+              fontSize: 11, color: C.subtext0, whiteSpace: "pre-wrap",
+              wordBreak: "break-word", maxHeight: 200, overflowY: "auto",
+              marginBottom: 6,
+            }}>
+              {result.finalOutput}
+            </div>
+          )}
+          {/* Nested steps */}
+          {result.steps && result.steps.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ fontSize: 9, color: C.overlay0, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Steps
+              </div>
+              {result.steps.map((s, i) => (
+                <StepCard key={i} step={s} />
+              ))}
+            </div>
+          )}
+          {/* Nested sub-agent results */}
+          {result.children && result.children.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ fontSize: 9, color: C.overlay0, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Nested Delegations
+              </div>
+              {result.children.map((child, i) => (
+                <SubAgentCard key={i} result={child} depth={depth + 1} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Async sub-agent launch card (fire-and-forget step) ──────────────────────
+function AsyncSubAgentLaunchCard({ output }: {
+  output: { agentName?: string; task?: string; runId?: string; startedAt?: number };
+}) {
+  const { palette: C } = useTheme();
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{
+      background: C.surface0, borderRadius: 6, overflow: "hidden",
+      marginBottom: 6, borderLeft: `3px solid ${C.peach}`,
+    }}>
+      <button
+        onClick={() => setOpen((x) => !x)}
+        style={{
+          width: "100%", background: "none", border: "none", cursor: "pointer",
+          padding: "8px 10px", display: "flex", justifyContent: "space-between",
+          alignItems: "center", gap: 8,
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 13 }}>🚀</span>
+          <span style={{ fontSize: 11, color: C.peach, fontWeight: 700 }}>
+            Async launch: {output.agentName ?? "unknown"}
+          </span>
+          <span style={{
+            fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 8,
+            background: "rgba(250,179,135,0.15)", color: C.peach,
+          }}>async</span>
+        </span>
+        <span style={{ fontSize: 10, color: C.overlay0 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div style={{ padding: "6px 10px", borderTop: `1px solid ${C.surface1}` }}>
+          {output.task && (
+            <div style={{
+              fontSize: 10, color: C.overlay0, marginBottom: 6,
+              padding: "4px 6px", background: "rgba(137,180,250,0.06)",
+              borderRadius: 4, fontFamily: "monospace",
+              whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>
+              📋 Task: {output.task}
+            </div>
+          )}
+          {output.runId && (
+            <div style={{
+              fontSize: 9, color: C.overlay0, marginBottom: 4,
+              fontFamily: "monospace", letterSpacing: "0.03em",
+            }}>
+              runId: {output.runId}
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: C.subtext0, fontStyle: "italic" }}>
+            ⏳ Sub-agent is running in the background. The agent will collect the result
+            using <span style={{ fontFamily: "monospace", color: C.peach }}>sub_agent_collect</span>.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Step detail card (inside run details) ───────────────────────────────────
+function StepCard({ step }: { step: { index: number; action: string; output: unknown; thinking?: string; subAgentResult?: SubAgentResultInfo } }) {
+  const { palette: C } = useTheme();
+  const [open, setOpen] = useState(false);
+  const outputAny = step.output as Record<string, unknown> | null | undefined;
+  const isAsyncLaunch = step.action.startsWith("tool-call:sub_agent_run") && outputAny?.async === true;
+  const isCollect     = step.action.startsWith("tool-call:sub_agent_collect");
+  const isSubAgent    = (step.action.startsWith("tool-call:sub_agent_run") && !isAsyncLaunch) || !!step.subAgentResult;
+  const collectDone   = isCollect && !!step.subAgentResult;
+  const collectRunning = isCollect && outputAny?.status === "running";
+
+  const stepIcon  = isAsyncLaunch ? "🚀 " : isSubAgent || collectDone ? "🤖 " : collectRunning ? "⏳ " : "";
+  const stepColor = isAsyncLaunch
+    ? C.peach
+    : isSubAgent || collectDone
+      ? C.blue
+      : collectRunning
+        ? C.yellow
+        : C.mauve;
+
   return (
     <div style={{ background: C.surface0, borderRadius: 6, overflow: "hidden", marginBottom: 4 }}>
       <button
@@ -47,8 +258,8 @@ function StepCard({ step }: { step: { index: number; action: string; output: unk
           alignItems: "center",
         }}
       >
-        <span style={{ fontSize: 11, color: C.mauve, fontWeight: 700 }}>
-          Step {step.index + 1}: {step.action}
+        <span style={{ fontSize: 11, color: stepColor, fontWeight: 700 }}>
+          {stepIcon}Step {step.index + 1}: {step.action}
         </span>
         <span style={{ fontSize: 10, color: C.overlay0 }}>{open ? "▲" : "▼"}</span>
       </button>
@@ -62,6 +273,34 @@ function StepCard({ step }: { step: { index: number; action: string; output: unk
               maxHeight: 80, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
             }}>
               💭 {typeof step.thinking === "string" ? step.thinking.slice(0, 500) : ""}
+            </div>
+          )}
+          {/* Async sub-agent launch */}
+          {isAsyncLaunch && outputAny && (
+            <div style={{ marginBottom: 6 }}>
+              <AsyncSubAgentLaunchCard output={outputAny as Parameters<typeof AsyncSubAgentLaunchCard>[0]["output"]} />
+            </div>
+          )}
+          {/* Collected sub-agent result (sub_agent_collect) */}
+          {isCollect && step.subAgentResult && (
+            <div style={{ marginBottom: 6 }}>
+              <SubAgentCard result={step.subAgentResult} />
+            </div>
+          )}
+          {/* Collect called but agent still running */}
+          {isCollect && !step.subAgentResult && collectRunning && (
+            <div style={{
+              fontSize: 11, color: C.yellow, fontStyle: "italic",
+              padding: "4px 6px", background: "rgba(249,226,175,0.06)",
+              borderRadius: 4, marginBottom: 4,
+            }}>
+              ⏳ Sub-agent "{(outputAny?.agentName as string) ?? "?"}" is still running…
+            </div>
+          )}
+          {/* Sync sub-agent delegation result */}
+          {step.subAgentResult && !isCollect && (
+            <div style={{ marginBottom: 6 }}>
+              <SubAgentCard result={step.subAgentResult} />
             </div>
           )}
           <div style={{ fontSize: 11, color: C.subtext0, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 200, overflowY: "auto" }}>
