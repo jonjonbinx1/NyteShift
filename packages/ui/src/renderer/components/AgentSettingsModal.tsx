@@ -280,17 +280,28 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       await window.solixApi.writeAgentConfig(agentName, next);
       setConfig(next as Record<string, any>);
 
-      // Persist Discord bridge config alongside agent config.
-      if (discordBotToken.trim()) {
-        await window.solixApi.discordBridgeConfigWrite?.(agentName, {
-          botToken: discordBotToken.trim(),
-          agentName,
-          guildId: discordGuildId.trim() || undefined,
-          channelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-          mentionOnly: discordMentionOnly,
-          enabled: discordEnabled,
-        });
+      // Persist Discord bridge config alongside agent config.  We used to only
+      // write the settings when a non-empty bot token was supplied. that meant
+      // toggling "enabled" without a token would never be saved, and the UI
+      // could show the bridge enabled even though the underlying config was
+      // unchanged. the start button was also disabled unless a token was
+      // present which led to reports like "the bridge is enabled but start is
+      // greyed out". write whatever state the user has provided; the core side
+      // will ignore missing tokens when starting.
+      const cfg: Record<string, any> = {
+        agentName,
+        guildId: discordGuildId.trim() || undefined,
+        channelIds: discordChannelIds.trim()
+          ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean)
+          : undefined,
+        mentionOnly: discordMentionOnly,
+        enabled: discordEnabled,
+      };
+      const trimmedToken = discordBotToken.trim();
+      if (trimmedToken) {
+        cfg.botToken = trimmedToken;
       }
+      await window.solixApi.discordBridgeConfigWrite?.(agentName, cfg);
 
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
