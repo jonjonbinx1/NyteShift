@@ -196,6 +196,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
 
   // Advanced
   const [maxSteps, setMaxSteps] = useState("30");
+  const [unbounded, setUnbounded] = useState(false);
   const [description, setDescription] = useState("");
   const [autonomyLevel, setAutonomyLevel] = useState<"full" | "supervised" | "manual">("full");
   const [allowAsyncSubAgents, setAllowAsyncSubAgents] = useState(false);
@@ -225,6 +226,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       setSelectedSkills((c.skills as string[]) || []);
       setSelectedTools((c.tools as string[]) || []);
       setMaxSteps(String(c.maxSteps ?? 30));
+      setUnbounded((c.unbounded as boolean) ?? false);
       setDescription((c.description as string) ?? "");
       setAutonomyLevel((c.autonomyLevel as any) ?? "full");
       setAllowAsyncSubAgents((c.allowAsyncSubAgents as boolean) ?? false);
@@ -269,6 +271,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
         tools: selectedTools,
         description,
         maxSteps: parseInt(maxSteps, 10) || 30,
+        unbounded,
         autonomyLevel,
         allowAsyncSubAgents,
         permissions: {
@@ -712,34 +715,70 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
 
               <div style={sectionStyle}>
                 <h3 style={{ margin: 0, fontSize: 14, color: C.text }}>Execution Limits</h3>
-                <div>
-                  <label style={labelStyle}>
-                    Max Steps
-                    <span style={{ marginLeft: 6, color: C.mauve, fontWeight: 700 }}>{maxSteps}</span>
-                  </label>
-                  <p style={{ margin: "0 0 8px", fontSize: 11, color: C.subtext0, lineHeight: 1.4 }}>
-                    Maximum number of tool-use steps the agent may take per request before stopping.
-                  </p>
+
+                {/* Unbounded toggle */}
+                <label style={{
+                  display: "flex", alignItems: "center", gap: 12, cursor: "pointer",
+                  background: unbounded ? "rgba(243,139,168,0.08)" : C.surface0,
+                  border: `1px solid ${unbounded ? "rgba(243,139,168,0.35)" : "transparent"}`,
+                  borderRadius: 8, padding: "12px 14px",
+                  transition: "background 0.15s, border-color 0.15s",
+                }}>
                   <input
-                    type="range" min="1" max="100" step="1"
-                    value={maxSteps}
-                    onChange={(e) => setMaxSteps(e.target.value)}
-                    style={{ width: "100%", accentColor: C.mauve, marginBottom: 4 }}
+                    type="checkbox"
+                    checked={unbounded}
+                    onChange={(e) => setUnbounded(e.target.checked)}
+                    style={{ width: 16, height: 16, accentColor: C.red, flexShrink: 0 }}
                   />
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.overlay0 }}>
-                    <span>1 (Minimal)</span>
-                    <span>50</span>
-                    <span>100 (Unrestricted)</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: unbounded ? C.red : C.text }}>
+                      Unbounded run
+                    </div>
+                    <div style={{ fontSize: 11, color: C.subtext0, marginTop: 2 }}>
+                      Removes the step limit — the agent loops until it finishes or you cancel it.
+                      Will consume API credits continuously; use with caution.
+                    </div>
                   </div>
-                  <div style={{ marginTop: 8 }}>
+                  <span style={{
+                    fontSize: 10, padding: "2px 8px", borderRadius: 20, flexShrink: 0,
+                    background: unbounded ? "rgba(243,139,168,0.18)" : C.surface1,
+                    color: unbounded ? C.red : C.overlay0, fontWeight: 700,
+                  }}>
+                    {unbounded ? "On" : "Off"}
+                  </span>
+                </label>
+
+                {/* Max Steps (hidden when unbounded) */}
+                {!unbounded && (
+                  <div>
+                    <label style={labelStyle}>
+                      Max Steps
+                      <span style={{ marginLeft: 6, color: C.mauve, fontWeight: 700 }}>{maxSteps}</span>
+                    </label>
+                    <p style={{ margin: "0 0 8px", fontSize: 11, color: C.subtext0, lineHeight: 1.4 }}>
+                      Maximum number of tool-use steps the agent may take per request before stopping.
+                    </p>
                     <input
-                      type="number" min={1} max={200}
+                      type="range" min="1" max="100" step="1"
                       value={maxSteps}
                       onChange={(e) => setMaxSteps(e.target.value)}
-                      style={{ ...inputStyle, width: 100 }}
+                      style={{ width: "100%", accentColor: C.mauve, marginBottom: 4 }}
                     />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.overlay0 }}>
+                      <span>1 (Minimal)</span>
+                      <span>50</span>
+                      <span>100 (Max)</span>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <input
+                        type="number" min={1} max={200}
+                        value={maxSteps}
+                        onChange={(e) => setMaxSteps(e.target.value)}
+                        style={{ ...inputStyle, width: 100 }}
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* ── Sub-Agents ── */}

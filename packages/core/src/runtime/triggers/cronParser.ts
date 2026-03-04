@@ -122,3 +122,99 @@ export function classifySchedule(schedule: string): "cron" | "interval" {
   parseCron(schedule);
   return "cron";
 }
+
+// ── Monthly matching ───────────────────────────────────────────────────
+
+/**
+ * Check whether `date` falls on the given day-of-month, hour, and minute.
+ * Used by the engine for "monthly on day X" triggers.
+ */
+export function matchesMonthlyDay(
+  day: number,
+  hour: number,
+  minute: number,
+  date: Date,
+): boolean {
+  return (
+    date.getDate() === day &&
+    date.getHours() === hour &&
+    date.getMinutes() === minute
+  );
+}
+
+/**
+ * Return the calendar date (1–31) of the nth occurrence of a weekday
+ * pattern within `year`/`month`.
+ *
+ * @param year     Full 4-digit year.
+ * @param month    0-indexed month (JS Date convention).
+ * @param weekday  0–6 (Sun–Sat) | -1 (any day) | -2 (Mon–Fri) | -3 (Sat–Sun).
+ * @param ordinal  "first" | "second" | "third" | "fourth" | "last".
+ * @returns        The calendar day number, or `null` if it doesn't exist
+ *                 (e.g. "fifth Monday" in a short month).
+ */
+function ordinalDayInMonth(
+  year: number,
+  month: number,
+  weekday: number,
+  ordinal: "first" | "second" | "third" | "fourth" | "last",
+): number | null {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  function isMatch(d: number): boolean {
+    const dow = new Date(year, month, d).getDay();
+    if (weekday >= 0)  return dow === weekday;
+    if (weekday === -1) return true;                       // any day
+    if (weekday === -2) return dow >= 1 && dow <= 5;      // Mon–Fri
+    if (weekday === -3) return dow === 0 || dow === 6;    // Sat–Sun
+    return false;
+  }
+
+  if (ordinal === "last") {
+    for (let d = daysInMonth; d >= 1; d--) {
+      if (isMatch(d)) return d;
+    }
+    return null;
+  }
+
+  const nth = { first: 1, second: 2, third: 3, fourth: 4 }[ordinal];
+  let count = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (isMatch(d)) {
+      count++;
+      if (count === nth) return d;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check whether `date` matches an ordinal-weekday monthly pattern
+ * (e.g. "first Monday of each month at 09:00").
+ *
+ * @param ordinal  Ordinal position.
+ * @param weekday  0–6 (Sun–Sat) | -1 (day) | -2 (weekday) | -3 (weekend day).
+ * @param hour     0–23.
+ * @param minute   0–59.
+ * @param date     Moment to test.
+ */
+export function matchesMonthlyOrdinal(
+  ordinal: "first" | "second" | "third" | "fourth" | "last",
+  weekday: number,
+  hour: number,
+  minute: number,
+  date: Date,
+): boolean {
+  const target = ordinalDayInMonth(
+    date.getFullYear(),
+    date.getMonth(),
+    weekday,
+    ordinal,
+  );
+  if (target === null) return false;
+  return (
+    date.getDate() === target &&
+    date.getHours() === hour &&
+    date.getMinutes() === minute
+  );
+}

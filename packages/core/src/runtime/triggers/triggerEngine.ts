@@ -39,6 +39,8 @@ import {
   parseCron,
   matchesCron,
   classifySchedule,
+  matchesMonthlyDay,
+  matchesMonthlyOrdinal,
   type CronFields,
 } from "./cronParser.js";
 import { DiscordBridge, type DiscordBridgeOptions } from "../discord/discordBridge.js";
@@ -108,6 +110,11 @@ interface ActiveCronEntry {
   cronFields?: CronFields;
 }
 
+interface ActiveMonthlyEntry {
+  trigger: TriggerDefinition;
+  timerId: ReturnType<typeof setInterval>;
+}
+
 export class TriggerEngine extends EventEmitter {
   private running = false;
   private webhookServer: Server | null = null;
@@ -116,6 +123,18 @@ export class TriggerEngine extends EventEmitter {
 
   /** Interval timers for cron-type triggers. */
   private cronEntries = new Map<string, ActiveCronEntry>();
+
+  /** One-off trigger timeouts keyed by trigger id. */
+  private oneoffTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Monthly trigger intervals keyed by trigger id. */
+  private monthlyEntries = new Map<string, ActiveMonthlyEntry>();
+
+  /**
+   * Tracks the "YYYY-MM" string of the last month a monthly trigger fired,
+   * so the 60 s tick loop cannot fire it twice within the same minute.
+   */
+  private monthlyFiredKey = new Map<string, string>();
 
   /** Webhook triggers indexed by their normalised path. */
   private webhookTriggers = new Map<string, TriggerDefinition>();
@@ -153,6 +172,8 @@ export class TriggerEngine extends EventEmitter {
     let hasWebhooks = false;
     for (const t of enabled) {
       if (t.type === "cron") this.startCron(t);
+      if (t.type === "oneoff") this.startOneOff(t);
+      if (t.type === "monthly") this.startMonthly(t);
       if (t.type === "webhook") {
         this.registerWebhook(t);
         hasWebhooks = true;
@@ -181,6 +202,18 @@ export class TriggerEngine extends EventEmitter {
       clearInterval(entry.timerId);
     }
     this.cronEntries.clear();
+
+    for (const [, timer] of this.oneoffTimers) {
+      clearTimeout(timer);
+    }
+    this.oneoffTimers.clear();
+
+    for (const [, entry] of this.monthlyEntries) {
+      clearInterval(entry.timerId);
+    }
+    this.monthlyEntries.clear();
+    this.monthlyFiredKey.clear();
+
     this.webhookTriggers.clear();
 
     // Stop all Discord bridges.
@@ -218,6 +251,10 @@ export class TriggerEngine extends EventEmitter {
 
     if (trigger.type === "cron") {
       this.startCron(trigger);
+    } else if (trigger.type === "oneoff") {
+      this.startOneOff(trigger);
+    } else if (trigger.type === "monthly") {
+      this.startMonthly(trigger);
     } else if (trigger.type === "webhook") {
       this.registerWebhook(trigger);
       // Start webhook server if not already running.
@@ -237,6 +274,17 @@ export class TriggerEngine extends EventEmitter {
     if (cronEntry) {
       clearInterval(cronEntry.timerId);
       this.cronEntries.delete(triggerId);
+    }
+    const oneoffTimer = this.oneoffTimers.get(triggerId);
+    if (oneoffTimer !== undefined) {
+      clearTimeout(oneoffTimer);
+      this.oneoffTimers.delete(triggerId);
+    }
+    const monthlyEntry = this.monthlyEntries.get(triggerId);
+    if (monthlyEntry) {
+      clearInterval(monthlyEntry.timerId);
+      this.monthlyEntries.delete(triggerId);
+      this.monthlyFiredKey.delete(triggerId);
     }
     // Remove from webhook map (iterate to find by id).
     for (const [path, t] of this.webhookTriggers) {
@@ -295,6 +343,122 @@ export class TriggerEngine extends EventEmitter {
       timestamp: Date.now(),
     };
     this.executeTrigger(trigger, event).catch(logE);
+  }
+
+  // ── One-off scheduling ──────────────────────────────────────
+
+  private startOneOff(trigger: TriggerDefinition): void {
+    if (!trigger.runAt) {
+      logW(`one-off trigger "${trigger.name}" has no runAt timestamp — skipping`);
+      return;
+    }
+
+    const delay = trigger.runAt - Date.now();
+
+    // If the fire time has already passed by more than 60 s, skip it and
+    // disable the trigger so it doesn't re-arm on the next engine start.
+    if (delay < -60_000) {
+      logW(`one-off trigger "${trigger.name}" runAt is in the past — disabling`);
+      import("./triggerStore.js").then(({ updateTriggerDefinition }) => {
+        updateTriggerDefinition(trigger.id, { enabled: false }).catch(logE);
+      }).catch(logE);
+      return;
+    }
+
+    const effectiveDelay = Math.max(0, delay);
+    log(`one-off "${trigger.name}" fires in ${Math.round(effectiveDelay / 1000)}s`);
+
+    const timerId = setTimeout(() => {
+      this.oneoffTimers.delete(trigger.id);
+      const event: TriggerEvent = {
+        type: "oneoff",
+        payload: { runAt: trigger.runAt },
+        timestamp: Date.now(),
+      };
+      this.executeTrigger(trigger, event)
+        .then(() => {
+          // Auto-disable so it never fires again.
+          import("./triggerStore.js").then(({ updateTriggerDefinition }) => {
+            updateTriggerDefinition(trigger.id, { enabled: false }).catch(logE);
+          }).catch(logE);
+        })
+        .catch(logE);
+    }, effectiveDelay);
+
+    this.oneoffTimers.set(trigger.id, timerId);
+  }
+
+  // ── Monthly scheduling ────────────────────────────────────────
+
+  private startMonthly(trigger: TriggerDefinition): void {
+    const hour   = trigger.monthlyHour   ?? 9;
+    const minute = trigger.monthlyMinute ?? 0;
+    log(`monthly "${trigger.name}" — type:${trigger.monthlyType} h:${hour} m:${minute}`);
+
+    const timerId = setInterval(() => {
+      const now = new Date();
+      let matches = false;
+
+      if (trigger.monthlyType === "day") {
+        const day = trigger.monthlyDay ?? 1;
+        matches = matchesMonthlyDay(day, hour, minute, now);
+      } else if (trigger.monthlyType === "ordinal") {
+        const ordinal  = trigger.monthlyOrdinal  ?? "first";
+        const weekday  = trigger.monthlyWeekday  ?? 1;  // Monday default
+        matches = matchesMonthlyOrdinal(ordinal, weekday, hour, minute, now);
+      }
+
+      if (!matches) return;
+
+      // Guard: only fire once per calendar month.
+      const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      if (this.monthlyFiredKey.get(trigger.id) === monthKey) return;
+      this.monthlyFiredKey.set(trigger.id, monthKey);
+
+      const event: TriggerEvent = {
+        type: "monthly",
+        payload: {
+          monthlyType:    trigger.monthlyType,
+          monthlyDay:     trigger.monthlyDay,
+          monthlyOrdinal: trigger.monthlyOrdinal,
+          monthlyWeekday: trigger.monthlyWeekday,
+          hour,
+          minute,
+        },
+        timestamp: Date.now(),
+      };
+      this.executeTrigger(trigger, event).catch(logE);
+    }, 60_000);
+
+    this.monthlyEntries.set(trigger.id, { trigger, timerId });
+
+    // Check immediately on registration (handles the case where the engine
+    // restarted during the exact fire minute).
+    const now = new Date();
+    let immediateMatch = false;
+    if (trigger.monthlyType === "day") {
+      immediateMatch = matchesMonthlyDay(trigger.monthlyDay ?? 1, hour, minute, now);
+    } else if (trigger.monthlyType === "ordinal") {
+      immediateMatch = matchesMonthlyOrdinal(
+        trigger.monthlyOrdinal ?? "first",
+        trigger.monthlyWeekday ?? 1,
+        hour,
+        minute,
+        now,
+      );
+    }
+    if (immediateMatch) {
+      const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      if (this.monthlyFiredKey.get(trigger.id) !== monthKey) {
+        this.monthlyFiredKey.set(trigger.id, monthKey);
+        const event: TriggerEvent = {
+          type: "monthly",
+          payload: { monthlyType: trigger.monthlyType, hour, minute },
+          timestamp: Date.now(),
+        };
+        this.executeTrigger(trigger, event).catch(logE);
+      }
+    }
   }
 
   // ── Webhook ────────────────────────────────────────────────────────
@@ -555,6 +719,8 @@ export class TriggerEngine extends EventEmitter {
   } {
     const isActive =
       this.cronEntries.has(trigger.id) ||
+      this.oneoffTimers.has(trigger.id) ||
+      this.monthlyEntries.has(trigger.id) ||
       [...this.webhookTriggers.values()].some((t) => t.id === trigger.id) ||
       (this.discordBridges.get(trigger.id)?.isRunning ?? false);
 

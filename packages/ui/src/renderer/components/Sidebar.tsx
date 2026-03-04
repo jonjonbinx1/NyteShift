@@ -4,6 +4,7 @@ import { GlobalSettingsModal } from "./GlobalSettingsModal.js";
 import { useTheme } from "../theme/ThemeContext.js";
 
 const links = [
+  { to: "/", label: "Home" },
   { to: "/agents", label: "Agents" },
   { to: "/triggers", label: "Triggers" },
   { to: "/skills", label: "Skills" },

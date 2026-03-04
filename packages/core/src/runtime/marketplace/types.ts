@@ -48,8 +48,17 @@ export interface MarketplaceItem {
   contributor: string;
   /** Item folder name */
   name: string;
-  /** Full path on disk inside the cached repo */
-  localPath: string;
+  /**
+   * Path inside the remote repository (e.g. "skills/contributor/itemname").
+   * Used to download files on install.  Present for all remote-browsed items.
+   */
+  remotePath?: string;
+  /**
+   * Full path on disk inside a locally-cloned cache.
+   * @deprecated No longer used — items are downloaded on-demand from the remote.
+   * Kept for backward compatibility with CLI callers that still clone repos.
+   */
+  localPath?: string;
   /** Whether this item is already installed in ~/.solix/<category>/<contributor>/<name> */
   installed: boolean;
   /** Optional description from README.md or frontmatter */

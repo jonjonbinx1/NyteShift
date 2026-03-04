@@ -53,6 +53,14 @@ contextBridge.exposeInMainWorld("solixApi", {
   listProviders: () => ipcRenderer.invoke("providers:list"),
   listProviderModels: (providerId: string) => ipcRenderer.invoke("providers:listModels", providerId),
 
+  // Direct single-turn chat (no ReAct wrapping)
+  chat: (opts: { systemPrompt: string; messages: Array<{ role: "user" | "assistant"; content: string }>; provider?: string; model?: string; temperature?: number; maxTokens?: number }) =>
+    ipcRenderer.invoke("chat:complete", opts),
+
+  // Tool config actions
+  toolRunConfigAction: (qualifiedName: string, key: string) =>
+    ipcRenderer.invoke("tool:configAction", qualifiedName, key),
+
   // Run
   runAutonomous: (name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) =>
     ipcRenderer.invoke("run:autonomous", name, task, opts),
@@ -74,7 +82,7 @@ contextBridge.exposeInMainWorld("solixApi", {
   marketplaceBrowse: (opts?: { category?: string; search?: string }) =>
     ipcRenderer.invoke("marketplace:browse", opts),
   marketplaceCategories: () => ipcRenderer.invoke("marketplace:categories"),
-  marketplaceInstall: (item: { category: string; contributor: string; name: string; localPath: string }) =>
+  marketplaceInstall: (item: { category: string; contributor: string; name: string; remotePath?: string; localPath?: string; source?: string }) =>
     ipcRenderer.invoke("marketplace:install", item),
   marketplaceUninstall: (item: { category: string; contributor: string; name: string }) =>
     ipcRenderer.invoke("marketplace:uninstall", item),
@@ -119,6 +127,13 @@ contextBridge.exposeInMainWorld("solixApi", {
     enabled: boolean;
     taskTemplate: string;
     schedule?: string;
+    runAt?: number;
+    monthlyType?: string;
+    monthlyDay?: number;
+    monthlyOrdinal?: string;
+    monthlyWeekday?: number;
+    monthlyHour?: number;
+    monthlyMinute?: number;
     webhookPath?: string;
     webhookSecret?: string;
     provider?: string;

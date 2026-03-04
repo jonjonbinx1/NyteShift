@@ -138,6 +138,7 @@ function buildSystemPrompt(
   toolList: string,
   maxSteps: number,
   soulSnippet?: string,
+  unbounded?: boolean,
 ): string {
   const sections: string[] = [];
 
@@ -208,7 +209,7 @@ function buildSystemPrompt(
   sections.push(
     "# Operating Guidelines",
     "",
-    `• You have a budget of **${maxSteps}** reasoning steps.  Use them wisely.`,
+    `• ${unbounded ? "This run has **no step limit** — continue until you are truly finished." : `You have a budget of **${maxSteps}** reasoning steps.  Use them wisely.`}`,
     "• Think before you act.  Plan your approach, then execute.",
     "• If no tools are available or relevant, answer directly using your own knowledge.",
     "• If a tool fails, explain the error and try an alternative approach.",
@@ -277,10 +278,11 @@ export async function runAutonomousTask(
   const model       = options.model       ?? (agentCfg.model       as string | undefined) ?? config.defaultModel     ?? "gpt-4o";
   const temperature = options.temperature ?? (agentCfg.temperature as number | undefined) ?? (config.temperature as number | undefined) ?? 0.7;
   const maxTokens   = options.maxTokens   ?? (agentCfg.maxTokens   as number | undefined) ?? (config.maxTokens   as number | undefined) ?? 4096;
-  const maxSteps    = options.maxSteps ?? 10;
+  const maxSteps    = options.maxSteps ?? (agentCfg.maxSteps as number | undefined) ?? 10;
+  const unbounded   = options.unbounded  ?? (agentCfg.unbounded  as boolean | undefined) ?? false;
   const signal      = options.signal;
 
-  log(`  config resolved — provider="${providerId}" model="${model}" temperature=${temperature} maxTokens=${maxTokens} maxSteps=${maxSteps}`);
+  log(`  config resolved — provider="${providerId}" model="${model}" temperature=${temperature} maxTokens=${maxTokens} maxSteps=${unbounded ? "∞ (unbounded)" : maxSteps}`);
 
   // ── Load skills & tools ───────────────────────────────────────────────
   // Marketplace tools are combined with built-in tools (solix/*):
@@ -358,7 +360,7 @@ export async function runAutonomousTask(
   }));
 
   let messages: Message[] = [
-    { role: "system", content: buildSystemPrompt(skillList, toolList, maxSteps) },
+    { role: "system", content: buildSystemPrompt(skillList, toolList, maxSteps, undefined, unbounded) },
     ...historyMessages,
     { role: "user",   content: task },
   ];
@@ -377,7 +379,7 @@ export async function runAutonomousTask(
   let totalPromptTokens     = 0;
   let totalCompletionTokens = 0;
 
-  for (let i = 0; i < maxSteps; i++) {
+  for (let i = 0; unbounded || i < maxSteps; i++) {
     if (signal?.aborted) {
       log(`  step ${i + 1}: AbortSignal fired — stopping early`);
       aborted = true;
@@ -385,7 +387,7 @@ export async function runAutonomousTask(
     }
 
     const stepStart = Date.now();
-    log(`  ── step ${i + 1}/${maxSteps} ──────────────────────────────────`);
+    log(`  ── step ${i + 1}${unbounded ? "" : `/${maxSteps}`} ──────────────────────────────────`);
     log(`  calling provider="${providerId}" model="${model}" msgCount=${messages.length}`);
 
     // ── LLM call ──────────────────────────────────────────────────────

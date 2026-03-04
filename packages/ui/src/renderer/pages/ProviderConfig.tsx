@@ -46,7 +46,12 @@ export function ProviderConfig(): React.JSX.Element {
     window.solixApi.listProviderModels(selectedProvider)
       .then((m: ModelInfo[]) => {
         setModels(m || []);
-        if (m && m.length && !selectedModel) setSelectedModel(m[0].id);
+        if (m && m.length) {
+          // pick a model when none selected or current model isn't available
+          if (!selectedModel || !m.some((x) => x.id === selectedModel)) {
+            setSelectedModel(m[0].id);
+          }
+        }
       })
       .catch((err) => {
         console.error(err);

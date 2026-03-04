@@ -1,105 +1,179 @@
 /**
- * Marketplace browser — reads the cached repo directories and discovers
- * all available items.  Also handles installing (copying) items into
- * ~/.solix/<category>/<contributor>/<name>.
+ * Marketplace browser — fetches the remote repo index via the GitHub API and
+ * discovers all available items without cloning or storing anything locally.
+ *
+ * Files are only downloaded to the user's machine when they explicitly choose
+ * to install an item.  Installed items land in ~/.solix/<category>/<contributor>/<name>
+ * exactly as before — the user-visible behaviour is unchanged.
  */
 
-import { readdir, cp, rm, readFile } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { rm, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { pathExists, solixHome, computeDirectoryHash } from "../../utils/index.js";
-import {
-  readMarketplaceConfig,
-  sourceCacheDir,
-} from "./marketplaceConfig.js";
+import { readMarketplaceConfig } from "./marketplaceConfig.js";
 import type { MarketplaceItem, MarketplaceCategory } from "./types.js";
 import {
   saveInstalledItem,
   removeInstalledItem,
   getInstalledItem,
-  hashOfCachePath,
 } from "./installed.js";
 import { readGlobalConfig } from "../config/configResolver.js";
+import {
+  parseGithubUrl,
+  fetchRepoTree,
+  downloadItemFiles,
+  fetchRawFile,
+  type GitTreeEntry,
+} from "./marketplaceRemote.js";
 import matter from "gray-matter";
 
-/** Folders to skip when scanning the repo root (e.g. .git, README, LICENSE) */
-const SKIP = new Set([".git", ".github", "node_modules", ".vscode"]);
+/** Top-level folders that are not marketplace categories */
+const SKIP = new Set([".git", ".github", "node_modules", ".vscode", "LICENSE", "README.md", "CHANGELOG.md"]);
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Given a flat list of GitTreeEntry objects, extract unique item directories
+ * at depth-3 (category/contributor/name).
+ */
+function extractItemPaths(entries: GitTreeEntry[]): Array<{
+  category: string;
+  contributor: string;
+  name: string;
+  itemPath: string;
+  hasReadme: boolean;
+}> {
+  const seen = new Set<string>();
+  const items: Array<{
+    category: string;
+    contributor: string;
+    name: string;
+    itemPath: string;
+    hasReadme: boolean;
+  }> = [];
+
+  const readmePaths = new Set(
+    entries
+      .filter((e) => e.type === "blob" && e.path.endsWith("/README.md"))
+      .map((e) => e.path),
+  );
+
+  for (const entry of entries) {
+    if (entry.type !== "blob") continue;
+    const parts = entry.path.split("/");
+    if (parts.length < 4) continue; // need category/contributor/name/<file>
+
+    const [category, contributor, name] = parts;
+    if (SKIP.has(category)) continue;
+    if (!category || !contributor || !name) continue;
+
+    const itemPath = `${category}/${contributor}/${name}`;
+    if (seen.has(itemPath)) continue;
+    seen.add(itemPath);
+
+    items.push({ category, contributor, name, itemPath, hasReadme: readmePaths.has(`${itemPath}/README.md`) });
+  }
+  return items;
+}
+
+function descriptionFromReadme(content: string): string {
+  const lines = content.split("\n").filter((l) => l.trim() && !l.startsWith("#"));
+  return (lines[0] ?? "").trim().slice(0, 200);
+}
+
+async function isInstalled(category: string, contributor: string, name: string): Promise<boolean> {
+  return pathExists(join(solixHome(), category, contributor, name));
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Browse all items across all enabled marketplace sources.
- * Optionally filter by category and/or search query.
+ *
+ * Fetches the GitHub API repo tree (lightweight path listing — no file
+ * contents) and reads README files in parallel for descriptions.
+ * Nothing is written to disk.
  */
 export async function browseMarketplace(opts?: {
   category?: string;
   search?: string;
 }): Promise<MarketplaceItem[]> {
   const cfg = await readMarketplaceConfig();
-  console.log(`[Marketplace:browse] sources: ${cfg.sources.map(s => s.name).join(", ")}`);
+  console.log(`[Marketplace:browse] sources: ${cfg.sources.map((s) => s.name).join(", ")}`);
   const allItems: MarketplaceItem[] = [];
 
   for (const source of cfg.sources) {
-    if (!source.enabled) { console.log(`[Marketplace:browse] skipping disabled: ${source.name}`); continue; }
+    if (!source.enabled) {
+      console.log(`[Marketplace:browse] skipping disabled: ${source.name}`);
+      continue;
+    }
 
-    const dir = sourceCacheDir(source.name);
-    const exists = await pathExists(dir);
-    console.log(`[Marketplace:browse] source "${source.name}" cache dir: ${dir} exists: ${exists}`);
-    if (!exists) continue;
+    const coords = parseGithubUrl(source.url);
+    if (!coords) {
+      console.warn(`[Marketplace:browse] source "${source.name}" has a non-GitHub URL — skipping`);
+      continue;
+    }
 
-    const categories = await safeReadDir(dir);
+    const branch = source.branch ?? "main";
+    let entries: GitTreeEntry[];
+    try {
+      entries = await fetchRepoTree(coords.owner, coords.repo, branch);
+    } catch (err) {
+      console.error(`[Marketplace:browse] failed to fetch tree for "${source.name}":`, err);
+      continue;
+    }
 
-    for (const cat of categories) {
-      if (SKIP.has(cat)) continue;
-      // Check it's actually a directory
-      const catPath = join(dir, cat);
-      if (!(await isDir(catPath))) continue;
+    const itemMetas = extractItemPaths(entries);
+    console.log(`[Marketplace:browse] source "${source.name}" — ${itemMetas.length} item(s) found`);
 
-      // If category filter given, skip non-matching
-      if (opts?.category && cat !== opts.category) continue;
+    // Fetch README content in parallel for all items that have one
+    const readmeMap = new Map<string, string>();
+    await Promise.allSettled(
+      itemMetas
+        .filter((m) => m.hasReadme)
+        .map(async (m) => {
+          try {
+            const content = await fetchRawFile(coords.owner, coords.repo, branch, `${m.itemPath}/README.md`);
+            readmeMap.set(m.itemPath, content);
+          } catch { /* description stays empty */ }
+        }),
+    );
 
-      const contributors = await safeReadDir(catPath);
-      for (const contributor of contributors) {
-        const contribPath = join(catPath, contributor);
-        if (!(await isDir(contribPath))) continue;
+    for (const meta of itemMetas) {
+      if (opts?.category && meta.category !== opts.category) continue;
 
-        const items = await safeReadDir(contribPath);
-        for (const itemName of items) {
-          const itemPath = join(contribPath, itemName);
-          if (!(await isDir(itemPath))) continue;
+      const description = readmeMap.has(meta.itemPath)
+        ? descriptionFromReadme(readmeMap.get(meta.itemPath)!)
+        : "";
 
-          const description = await extractDescription(itemPath, cat);
-          const installed = await isInstalled(cat, contributor, itemName);
-          let autoUpdate: boolean | undefined = undefined;
-          let needsUpdate = false;
-          if (installed) {
-            try {
-              const meta = await getInstalledItem(cat, contributor, itemName);
-              if (meta) {
-                autoUpdate = meta.autoUpdate;
-                const cacheHash = await hashOfCachePath(itemPath);
-                needsUpdate = cacheHash !== meta.hash;
-              }
-            } catch {
-              // ignore
-            }
-          }
-
-          allItems.push({
-            source: source.name,
-            category: cat,
-            contributor,
-            name: itemName,
-            localPath: itemPath,
-            installed,
-            description,
-            needsUpdate,
-            autoUpdate,
-          });
-        }
+      const installed = await isInstalled(meta.category, meta.contributor, meta.name);
+      let autoUpdate: boolean | undefined;
+      // needsUpdate is expensive to check without local cache; set false here.
+      // Use checkAndUpdateItem / autoUpdateInstalledItems for explicit update checks.
+      const needsUpdate = false;
+      if (installed) {
+        try {
+          const installedMeta = await getInstalledItem(meta.category, meta.contributor, meta.name);
+          if (installedMeta) autoUpdate = installedMeta.autoUpdate;
+        } catch { /* ignore */ }
       }
+
+      allItems.push({
+        source: source.name,
+        category: meta.category,
+        contributor: meta.contributor,
+        name: meta.name,
+        remotePath: meta.itemPath,
+        localPath: "",
+        installed,
+        description,
+        needsUpdate,
+        autoUpdate,
+      });
     }
   }
 
-  // Apply search filter
   if (opts?.search) {
     const q = opts.search.toLowerCase();
     return allItems.filter(
@@ -115,7 +189,7 @@ export async function browseMarketplace(opts?: {
 }
 
 /**
- * List available categories across all synced marketplaces.
+ * List available categories across all enabled marketplace sources.
  */
 export async function listMarketplaceCategories(): Promise<MarketplaceCategory[]> {
   const cfg = await readMarketplaceConfig();
@@ -123,15 +197,21 @@ export async function listMarketplaceCategories(): Promise<MarketplaceCategory[]
 
   for (const source of cfg.sources) {
     if (!source.enabled) continue;
-    const dir = sourceCacheDir(source.name);
-    if (!(await pathExists(dir))) continue;
+    const coords = parseGithubUrl(source.url);
+    if (!coords) continue;
+    const branch = source.branch ?? "main";
 
-    const entries = await safeReadDir(dir);
-    for (const entry of entries) {
-      if (SKIP.has(entry)) continue;
-      if (await isDir(join(dir, entry))) {
-        cats.add(entry);
+    try {
+      const entries = await fetchRepoTree(coords.owner, coords.repo, branch);
+      for (const entry of entries) {
+        if (entry.type !== "blob") continue;
+        const parts = entry.path.split("/");
+        if (parts.length < 4) continue;
+        const [cat] = parts;
+        if (!SKIP.has(cat) && cat) cats.add(cat);
       }
+    } catch (err) {
+      console.error(`[Marketplace:categories] failed for "${source.name}":`, err);
     }
   }
 
@@ -139,20 +219,59 @@ export async function listMarketplaceCategories(): Promise<MarketplaceCategory[]
 }
 
 /**
- * Install a marketplace item: copy it from the cache into ~/.solix/<category>/<contributor>/<name>.
+ * Install a marketplace item.
+ *
+ * Downloads all files for the item from the remote GitHub repo into
+ * ~/.solix/<category>/<contributor>/<name>.
+ *
+ * Accepts `remotePath` (preferred, new callers) or falls back to legacy
+ * `localPath` for CLI callers that still use a locally-cloned cache.
  */
 export async function installMarketplaceItem(item: {
   category: string;
   contributor: string;
   name: string;
-  localPath: string;
+  /** Path inside the repo, e.g. "skills/contributor/itemname" */
+  remotePath?: string;
+  /** @deprecated Only used when calling from CLI with a locally-cloned cache. */
+  localPath?: string;
+  /** Name of the source to install from (defaults to first enabled source). */
+  source?: string;
 }): Promise<{ installed: boolean; path: string; message: string }> {
   const dest = join(solixHome(), item.category, item.contributor, item.name);
 
-  try {
-    await cp(item.localPath, dest, { recursive: true, force: true });
+  // These are populated during the remote download path
+  let remoteTreeSha: string | undefined;
+  let sourceN: string | undefined;
 
-    // compute hash and optional version when installed
+  try {
+    if (item.remotePath) {
+      const cfg = await readMarketplaceConfig();
+      const source = item.source
+        ? cfg.sources.find((s) => s.name === item.source)
+        : cfg.sources.find((s) => s.enabled);
+      if (!source) throw new Error("No enabled marketplace source found");
+
+      const coords = parseGithubUrl(source.url);
+      if (!coords) throw new Error(`Source "${source.name}" does not use a GitHub URL`);
+
+      const branch = source.branch ?? "main";
+      const entries = await fetchRepoTree(coords.owner, coords.repo, branch);
+      await downloadItemFiles(coords.owner, coords.repo, branch, item.remotePath, dest, entries);
+
+      // Capture the git tree SHA of the item directory for future update detection
+      remoteTreeSha = entries.find(
+        (e) => e.type === "tree" && e.path === item.remotePath,
+      )?.sha;
+      sourceN = source.name;
+    } else if (item.localPath) {
+      const { cp } = await import("node:fs/promises");
+      await cp(item.localPath, dest, { recursive: true, force: true });
+    } else {
+      throw new Error("Either remotePath or localPath must be provided");
+    }
+
+    // Extract version from installed files
     let version: string | undefined;
     try {
       if (item.category === "skills") {
@@ -165,16 +284,12 @@ export async function installMarketplaceItem(item: {
       } else if (item.category === "tools") {
         const toolPath = join(dest, "tool.js");
         try {
-          const mod = await import(pathToFileURL(toolPath).href);
+          const mod = await import(`${pathToFileURL(toolPath).href}?t=${Date.now()}`);
           const contract = mod.default ?? mod;
           version = contract.version;
-        } catch {
-          // ignore
-        }
+        } catch { /* ignore */ }
       }
-    } catch {
-      // ignore version extraction failures
-    }
+    } catch { /* ignore version extraction failures */ }
 
     const hash = await computeDirectoryHash(dest);
     const gcfg = await readGlobalConfig();
@@ -186,9 +301,15 @@ export async function installMarketplaceItem(item: {
       version,
       hash,
       autoUpdate: defaultAuto,
+      remoteTreeSha,
+      sourceN,
     });
 
-    return { installed: true, path: dest, message: `Installed ${item.category}/${item.contributor}/${item.name}` };
+    return {
+      installed: true,
+      path: dest,
+      message: `Installed ${item.category}/${item.contributor}/${item.name}`,
+    };
   } catch (err) {
     return {
       installed: false,
@@ -199,7 +320,8 @@ export async function installMarketplaceItem(item: {
 }
 
 /**
- * Uninstall a marketplace item: remove ~/.solix/<category>/<contributor>/<name>.
+ * Uninstall a marketplace item: remove ~/.solix/<category>/<contributor>/<name>
+ * and remove it from the installed index.
  */
 export async function uninstallMarketplaceItem(item: {
   category: string;
@@ -216,56 +338,17 @@ export async function uninstallMarketplaceItem(item: {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-
-async function isDir(p: string): Promise<boolean> {
-  try {
-    const { stat } = await import("node:fs/promises");
-    return (await stat(p)).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-async function safeReadDir(p: string): Promise<string[]> {
-  try {
-    return await readdir(p);
-  } catch {
-    return [];
-  }
-}
-
-async function isInstalled(category: string, contributor: string, name: string): Promise<boolean> {
-  return pathExists(join(solixHome(), category, contributor, name));
-}
-
 /**
- * Try to extract a description from the item folder:
- * 1. If a README.md exists, use first non-heading line
- * 2. If a .md file with frontmatter exists, use frontmatter.description
- * 3. Otherwise return ""
+ * Extract a description from an already-installed item directory.
+ * Used for reconciling items that were installed before the index system.
  */
-async function extractDescription(itemPath: string, _category: string): Promise<string> {
-  // Try README.md
+export async function extractDescriptionFromDir(itemPath: string): Promise<string> {
   const readmePath = join(itemPath, "README.md");
   if (await pathExists(readmePath)) {
     try {
       const content = await readFile(readmePath, "utf-8");
-      const lines = content.split("\n").filter((l) => l.trim() && !l.startsWith("#"));
-      return lines[0]?.trim().slice(0, 200) ?? "";
+      return descriptionFromReadme(content);
     } catch { /* ignore */ }
   }
-
-  // Try any .md file with frontmatter
-  const files = await safeReadDir(itemPath);
-  for (const f of files) {
-    if (!f.endsWith(".md") || f === "README.md") continue;
-    try {
-      const content = await readFile(join(itemPath, f), "utf-8");
-      const parsed = matter(content);
-      if (parsed.data?.description) return String(parsed.data.description).slice(0, 200);
-    } catch { /* ignore */ }
-  }
-
   return "";
 }

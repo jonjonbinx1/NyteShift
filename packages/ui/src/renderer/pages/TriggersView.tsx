@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import type { TriggerDefinitionInfo, TriggerRunInfo, TriggerType } from "../global.js";
-import { CreateTriggerModal, describeSchedule } from "../components/CreateTriggerModal.js";
+import { CreateTriggerModal, describeTriggerSchedule } from "../components/CreateTriggerModal.js";
 import { useTheme } from "../theme/ThemeContext.js";
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
@@ -274,7 +274,9 @@ export function TriggersView(): React.JSX.Element {
                       <span>{typeLabel(t.type)}</span>
                       <span style={{ color: c.dim }}>→</span>
                       <span style={{ color: c.accent }}>{t.agentName}</span>
-                      {t.schedule && <span style={{ color: c.muted }}>({describeSchedule(t.schedule)})</span>}
+                      {describeTriggerSchedule(t) && (
+                        <span style={{ color: c.muted }}>({describeTriggerSchedule(t)})</span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -297,7 +299,9 @@ export function TriggersView(): React.JSX.Element {
                   <DetailRow label="Type" value={typeLabel(selectedTrigger.type)} />
                   <DetailRow label="Agent" value={selectedTrigger.agentName} accent />
                   <DetailRow label="Status" value={selectedTrigger.enabled ? "Enabled" : "Disabled"} />
-                  {selectedTrigger.schedule && <DetailRow label="Schedule" value={describeSchedule(selectedTrigger.schedule)} />}
+                  {describeTriggerSchedule(selectedTrigger) && (
+                    <DetailRow label="Schedule" value={describeTriggerSchedule(selectedTrigger)} />
+                  )}
                   {selectedTrigger.webhookPath && <DetailRow label="Webhook" value={selectedTrigger.webhookPath} />}
                   {selectedTrigger.type === "discord" && (
                     <>

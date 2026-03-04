@@ -119,25 +119,15 @@ export function MarketplaceView(): React.JSX.Element {
   };
 
   /* initial boot */
-  const autoSyncedRef = React.useRef(false);
   useEffect(() => {
     const boot = async (a: any) => {
-      await Promise.all([loadSources(), loadItems(), loadInstalledIndex()]);
-      if (!autoSyncedRef.current) {
-        const cats = await a.marketplaceCategories();
-        if (cats.length === 0) {
-          autoSyncedRef.current = true;
-          setSyncing(true);
-          try {
-            const res = await a.marketplaceSync();
-            setSyncResults(res);
-            await loadItems();
-            await loadInstalledIndex();
-          } catch (e: any) {
-            setSyncResults([{ source: "?", status: "error", message: e.message }]);
-          } finally { setSyncing(false); }
-        }
-      }
+      // Sources + installed index are fast (local file reads) — kick off in background
+      loadSources();
+      loadInstalledIndex();
+      // Items come from the remote GitHub API — show skeleton until done
+      try {
+        await loadItems();
+      } catch { /* errors handled inside loadItems */ }
       setLoading(false);
     };
     const a = api();
@@ -249,7 +239,13 @@ export function MarketplaceView(): React.JSX.Element {
     const a = api(); if (!a) return;
     const k = ikey(item); setBusy(k);
     try {
-      const r = await a.marketplaceInstall({ category: item.category, contributor: item.contributor, name: item.name, localPath: item.localPath });
+      const r = await a.marketplaceInstall({
+        category: item.category,
+        contributor: item.contributor,
+        name: item.name,
+        remotePath: item.remotePath,
+        source: item.source,
+      });
       flash(r.message); await loadItems(); await loadInstalledIndex();
       if (item.category === "tools") a.notifyToolsChanged?.();
     } catch (e: any) { flash(`Error: ${e.message}`); }
@@ -325,7 +321,7 @@ export function MarketplaceView(): React.JSX.Element {
             {showSources ? "✕ Close" : "⚙ Sources"}
           </Btn>
           <Btn variant="accent" onClick={handleSync} disabled={syncing}>
-            {syncing ? <><Spinner /> Syncing…</> : "↻ Sync All"}
+            {syncing ? <><Spinner /> Refreshing…</> : "↻ Refresh"}
           </Btn>
           <Btn variant="ghost" onClick={() => handleUpdate()} disabled={syncing}>
             Check updates
@@ -420,7 +416,15 @@ export function MarketplaceView(): React.JSX.Element {
 
       {/* ▸ CONTENT ─────────────────────────────────────────────────── */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: 24 }}>
-        {loading || syncing ? (
+        {loading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--subtext0, #a6adc8)", fontSize: "0.85rem", marginBottom: 4 }}>
+              <Spinner />
+              <span>Fetching marketplace index…</span>
+            </div>
+            <SkeletonGrid itemCards={!!activeContributor} />
+          </div>
+        ) : syncing ? (
           <SkeletonGrid itemCards={!!activeContributor} />
         ) : activeContributor ? (
           drillItems.length === 0 ? (
@@ -668,7 +672,8 @@ function EmptyState() {
     <div style={{ textAlign: "center", padding: "4rem 1rem", color: t.dim }}>
       <p style={{ fontSize: "1.15rem", fontWeight: 700, marginBottom: 6 }}>Welcome to the Marketplace</p>
       <p style={{ fontSize: "0.88rem", maxWidth: 400, margin: "0 auto 14px", color: t.subtext }}>
-        Click <b style={{ color: t.accent }}>Sync All</b> to fetch extensions from your configured sources.
+        Extensions are loaded live from the configured source repositories.
+        Click <b style={{ color: t.accent }}>↻ Refresh</b> to force a fresh fetch.
       </p>
       <p style={{ fontSize: "0.78rem" }}>Use <b>Sources</b> to add or manage repositories.</p>
     </div>

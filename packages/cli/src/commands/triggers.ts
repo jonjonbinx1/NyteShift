@@ -65,9 +65,16 @@ export function registerTriggerCommands(program: Command): void {
     .description("Create a new trigger definition")
     .requiredOption("-n, --name <name>", "Trigger name")
     .requiredOption("-a, --agent <agent>", "Agent name")
-    .requiredOption("-t, --type <type>", "Trigger type: cron | webhook | manual | discord")
+    .requiredOption("-t, --type <type>", "Trigger type: cron | webhook | manual | discord | oneoff | monthly")
     .requiredOption("--task <template>", "Task template (supports {{payload}} interpolation)")
     .option("-s, --schedule <schedule>", "Cron expression or interval (e.g. '5m', '*/30 * * * *')")
+    .option("--run-at <iso|ms>", "One-off run time (ISO string or milliseconds since epoch)")
+    .option("--monthly-type <type>", "Monthly mode: day | ordinal")
+    .option("--monthly-day <n>", "Day of month (1-31)")
+    .option("--monthly-ordinal <ordinal>", "Ordinal: first|second|third|fourth|last")
+    .option("--monthly-weekday <n>", "Weekday for ordinal: 0=Sun..6=Sat, or -1=day, -2=weekday, -3=weekend")
+    .option("--monthly-hour <n>", "Hour of day (0-23)")
+    .option("--monthly-minute <n>", "Minute of hour (0-59)")
     .option("--webhook-path <path>", "Webhook URL path (e.g. /hooks/my-agent)")
     .option("--webhook-secret <secret>", "Webhook HMAC-SHA256 secret")
     .option("--discord-token <token>", "Discord bot token")
@@ -89,6 +96,13 @@ export function registerTriggerCommands(program: Command): void {
           return;
         }
 
+        // Parse optional fields
+        const parsedRunAt = opts.runAt ? (isNaN(Number(opts.runAt)) ? Date.parse(opts.runAt) : Number(opts.runAt)) : undefined;
+        const monthlyDay = opts.monthlyDay ? parseInt(opts.monthlyDay, 10) : undefined;
+        const monthlyWeekday = opts.monthlyWeekday ? parseInt(opts.monthlyWeekday, 10) : undefined;
+        const monthlyHour = opts.monthlyHour ? parseInt(opts.monthlyHour, 10) : undefined;
+        const monthlyMinute = opts.monthlyMinute ? parseInt(opts.monthlyMinute, 10) : undefined;
+
         const trigger = await createTriggerDefinition({
           name: opts.name,
           agentName: opts.agent,
@@ -96,6 +110,13 @@ export function registerTriggerCommands(program: Command): void {
           enabled: !opts.disabled,
           taskTemplate: opts.task,
           schedule: opts.schedule,
+          runAt: parsedRunAt,
+          monthlyType: opts.monthlyType as any,
+          monthlyDay,
+          monthlyOrdinal: opts.monthlyOrdinal,
+          monthlyWeekday,
+          monthlyHour,
+          monthlyMinute,
           webhookPath: opts.webhookPath,
           webhookSecret: opts.webhookSecret,
           provider: opts.provider,
