@@ -58,7 +58,7 @@ export interface ConfigFieldDefinition {
   /** Human-readable label shown in the UI. */
   label: string;
   /** Determines the rendered control. */
-  type: "string" | "secret" | "number" | "boolean" | "select" | "multiselect" | "textarea";
+  type: "string" | "secret" | "number" | "boolean" | "select" | "multiselect" | "textarea" | "action";
   /** Brief help text displayed below the control. */
   description?: string;
   /** Whether the field must be provided before the skill/tool can run. */
@@ -75,6 +75,20 @@ export interface ConfigFieldDefinition {
   step?: number;
   /** Placeholder text for string / secret / textarea inputs. */
   placeholder?: string;
+  // ── Action-type extras ────────────────────────────────────────────
+  /** Label shown on the action button (falls back to label). */
+  actionLabel?: string;
+  /**
+   * Message shown in the confirmation dialog before the action executes.
+   * Defaults to a generic "Run <label>?" prompt.
+   */
+  actionConfirmText?: string;
+  /**
+   * Human-readable source snippet displayed when the user expands
+   * "Review code" in the confirmation dialog.  For transparency only —
+   * the actual implementation lives in the tool\'s configAction() method.
+   */
+  actionCode?: string;
 }
 
 // ── Skill ──────────────────────────────────────────────────────────────
@@ -149,6 +163,13 @@ export interface ToolContract {
    * Declared as an array on the tool's default export or as a named export.
    */
   config?: ConfigFieldDefinition[];
+  /**
+   * Optional handler for config fields of type "action".
+   * Called with the field\'s `key` when the user confirms the action in the
+   * UI.  Should return a human-readable result string or
+   * `{ ok: boolean; message: string }` on completion.
+   */
+  configAction?(key: string): Promise<unknown>;
   run(ctx: ToolRunContext): Promise<unknown>;
 }
 
@@ -170,6 +191,13 @@ export interface AgentConfig {
    * synchronous Anthropic orchestrator-workers behaviour.
    */
   allowAsyncSubAgents?: boolean;
+  /**
+   * When true the ReAct loop has no fixed step budget — it continues
+   * until the model signals completion or the AbortSignal is fired.
+   * Use with caution: an unbounded run will consume API credits until
+   * cancelled or until the model decides it is done.
+   */
+  unbounded?: boolean;
   [key: string]: unknown;
 }
 
@@ -219,6 +247,9 @@ export interface AutonomousTaskOptions {
   temperature?: number;
   maxTokens?: number;
   maxSteps?: number;
+  /** When true the step budget is ignored; the loop runs until the model
+   *  finishes or the AbortSignal fires. */
+  unbounded?: boolean;
   signal?: AbortSignal;
   onStep?: (step: PipelineStep) => void;
   /** Prior conversation turns to prepend so the agent retains context. */
@@ -321,7 +352,7 @@ export interface SubAgentResult {
 
 // ── Trigger ────────────────────────────────────────────────────────────
 
-export type TriggerType = "cron" | "webhook" | "manual" | "discord";
+export type TriggerType = "cron" | "webhook" | "manual" | "discord" | "oneoff" | "monthly";
 
 export interface TriggerEvent {
   type: string;
@@ -345,6 +376,44 @@ export interface TriggerDefinition {
 
   /** Cron expression (e.g. every-5-min) or interval shorthand ("5m", "1h"). */
   schedule?: string;
+
+  /**
+   * Unix timestamp (ms) for one-off triggers.  The trigger fires once when this
+   * moment is reached, then automatically disables itself.
+   */
+  runAt?: number;
+
+  // ── Monthly trigger fields ─────────────────────────────────────────────
+
+  /**
+   * Whether a monthly trigger fires on a specific calendar day or on an
+   * ordinal weekday (e.g. "first Monday").
+   */
+  monthlyType?: "day" | "ordinal";
+
+  /** Day of month 1–31 for monthlyType "day". */
+  monthlyDay?: number;
+
+  /**
+   * Ordinal position for monthlyType "ordinal".
+   * Corresponds to "first" | "second" | "third" | "fourth" | "last".
+   */
+  monthlyOrdinal?: "first" | "second" | "third" | "fourth" | "last";
+
+  /**
+   * Target weekday for monthlyType "ordinal".
+   *  0–6  → Sun–Sat (matches JS Date.getDay())
+   * -1    → any day
+   * -2    → weekday (Mon–Fri)
+   * -3    → weekend day (Sat–Sun)
+   */
+  monthlyWeekday?: number;
+
+  /** Hour (0–23) to fire monthly / one-off triggers. */
+  monthlyHour?: number;
+
+  /** Minute (0–59) to fire monthly / one-off triggers. */
+  monthlyMinute?: number;
 
   /** URL path for webhook triggers (e.g. "/hooks/my-agent"). */
   webhookPath?: string;

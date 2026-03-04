@@ -12,7 +12,10 @@ export interface MarketplaceItemInfo {
   category: string;
   contributor: string;
   name: string;
-  localPath: string;
+  /** Path inside the remote repo (e.g. "skills/contributor/name"). Present for remote items. */
+  remotePath?: string;
+  /** @deprecated No longer populated for remote items. */
+  localPath?: string;
   installed: boolean;
   description: string;
   version?: string;
@@ -100,14 +103,14 @@ export interface MemoryEntryInfo {
 }
 // ── Triggers ────────────────────────────────────────────────────────
 
-export type TriggerType = "cron" | "webhook" | "manual" | "discord";
+export type TriggerType = "cron" | "webhook" | "manual" | "discord" | "oneoff" | "monthly";
 
 // ── Configurable Field Contract ─────────────────────────────────────
 
 export interface ConfigFieldDefinitionInfo {
   key: string;
   label: string;
-  type: "string" | "secret" | "number" | "boolean" | "select" | "multiselect" | "textarea";
+  type: "string" | "secret" | "number" | "boolean" | "select" | "multiselect" | "textarea" | "action";
   description?: string;
   required?: boolean;
   default?: unknown;
@@ -116,6 +119,9 @@ export interface ConfigFieldDefinitionInfo {
   max?: number;
   step?: number;
   placeholder?: string;
+  actionLabel?: string;
+  actionConfirmText?: string;
+  actionCode?: string;
 }
 
 export interface TriggerDefinitionInfo {
@@ -125,6 +131,17 @@ export interface TriggerDefinitionInfo {
   agentName: string;
   enabled: boolean;
   schedule?: string;
+  /** Unix timestamp (ms) for one-off triggers. */
+  runAt?: number;
+  /** Monthly trigger sub-type. */
+  monthlyType?: "day" | "ordinal";
+  /** Day of month 1–31 for monthlyType "day". */
+  monthlyDay?: number;
+  monthlyOrdinal?: "first" | "second" | "third" | "fourth" | "last";
+  /** 0–6 (Sun–Sat) | -1 (day) | -2 (weekday) | -3 (weekend day). */
+  monthlyWeekday?: number;
+  monthlyHour?: number;
+  monthlyMinute?: number;
   webhookPath?: string;
   webhookSecret?: string;
   taskTemplate: string;
@@ -170,6 +187,10 @@ export interface SolixApi {
   listProviders(): Promise<Array<{ id: string }>>;
   /** Fetch models from a specific provider (or all if omitted). */
   listProviderModels(providerId?: string): Promise<ModelInfo[]>;
+  /** Direct single-turn chat — bypasses the ReAct pipeline. */
+  chat(opts: { systemPrompt: string; messages: Array<{ role: "user" | "assistant"; content: string }>; provider?: string; model?: string; temperature?: number; maxTokens?: number }): Promise<{ output: string }>;
+  /** Run a config action declared by a tool (type: "action" fields). Requires user confirmation in the UI first. */
+  toolRunConfigAction(qualifiedName: string, key: string): Promise<unknown>;
   runAutonomous(name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }): Promise<{
     finalOutput: string;
     thinking?: string;
@@ -194,7 +215,7 @@ export interface SolixApi {
   marketplaceSync(): Promise<MarketplaceSyncResultInfo[]>;
   marketplaceBrowse(opts?: { category?: string; search?: string }): Promise<MarketplaceItemInfo[]>;
   marketplaceCategories(): Promise<string[]>;
-  marketplaceInstall(item: { category: string; contributor: string; name: string; localPath: string }): Promise<{ installed: boolean; path: string; message: string }>;
+  marketplaceInstall(item: { category: string; contributor: string; name: string; remotePath?: string; localPath?: string; source?: string }): Promise<{ installed: boolean; path: string; message: string }>;
   marketplaceUninstall(item: { category: string; contributor: string; name: string }): Promise<{ message: string }>;
   marketplaceConfigRead(): Promise<{ sources: MarketplaceSourceConfig[] }>;
   marketplaceConfigWrite(cfg: { sources: MarketplaceSourceConfig[] }): Promise<void>;
@@ -225,6 +246,13 @@ export interface SolixApi {
     enabled: boolean;
     taskTemplate: string;
     schedule?: string;
+    runAt?: number;
+    monthlyType?: "day" | "ordinal";
+    monthlyDay?: number;
+    monthlyOrdinal?: "first" | "second" | "third" | "fourth" | "last";
+    monthlyWeekday?: number;
+    monthlyHour?: number;
+    monthlyMinute?: number;
     webhookPath?: string;
     webhookSecret?: string;
     provider?: string;

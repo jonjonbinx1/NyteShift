@@ -22,7 +22,14 @@ export {
   marketplaceCacheDir,
 } from "./marketplaceConfig.js";
 
-// Sync
+// Remote utilities
+export {
+  parseGithubUrl,
+  invalidateTreeCache,
+  fetchRepoTree,
+} from "./marketplaceRemote.js";
+
+// Sync / Refresh
 export {
   syncAllMarketplaces,
   syncMarketplaceSource,
@@ -34,6 +41,7 @@ export {
   listMarketplaceCategories,
   installMarketplaceItem,
   uninstallMarketplaceItem,
+  extractDescriptionFromDir,
 } from "./marketplaceBrowser.js";
 
 // Installed-item metadata / auto-update helpers
@@ -45,4 +53,5 @@ export {
   checkAndUpdateItem,
   autoUpdateInstalledItems,
   reconcileInstalledItems,
+  hashOfCachePath,
 } from "./installed.js";

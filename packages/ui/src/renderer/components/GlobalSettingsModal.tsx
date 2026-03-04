@@ -49,6 +49,17 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
   // Inference
   const [defaultProvider, setDefaultProvider] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
+
+  // Ensure our chosen model stays valid when provider changes
+  useEffect(() => {
+    if (!defaultProvider) return;
+    // refresh model list when provider flips (models state is managed elsewhere)
+    if (models && models.length) {
+      if (!defaultModel || !models.some((m) => m.id === defaultModel)) {
+        setDefaultModel(models[0].id);
+      }
+    }
+  }, [defaultProvider, models]);
   const [temperature, setTemperature] = useState("0.7");
   const [maxTokens, setMaxTokens] = useState("4096");
 
@@ -427,7 +438,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                   <label style={labelStyle}>Default Provider</label>
                   <select
                     value={defaultProvider}
-                    onChange={(e) => { setDefaultProvider(e.target.value); setDefaultModel(""); }}
+                    onChange={(e) => { setDefaultProvider(e.target.value); /* defaultModel will auto-reset via effect */ }}
                     style={selectStyle}
                   >
                     <option value="">— select —</option>

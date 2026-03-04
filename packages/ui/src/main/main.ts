@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { fork } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import {
   listAgents,
@@ -17,6 +18,7 @@ import {
   listProviders,
   listAllModels,
   whenUserProvidersLoaded,
+  callProvider,
   runAutonomousTask,
   ensureSolixDirs,
   // Chat sessions
@@ -168,6 +170,33 @@ function registerIpc(): void {
     startedAt: number;
   }>();
 
+  // Direct single-turn chat (bypasses the full ReAct pipeline).
+  // Used by the built-in HelperChat assistant so it doesn't get confused
+  // by the ReAct system-prompt wrapping.
+  ipcMain.handle("chat:complete", async (_e, opts: {
+    systemPrompt: string;
+    messages: Array<{ role: "user" | "assistant"; content: string }>;
+    provider?: string;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+  }) => {
+    const config = await readGlobalConfig();
+    const providerId = opts.provider ?? (config.defaultProvider as string | undefined) ?? "openai";
+    const model      = opts.model      ?? (config.defaultModel      as string | undefined) ?? "gpt-4o";
+    const allMsgs: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: opts.systemPrompt },
+      ...opts.messages,
+    ];
+    const result = await callProvider(providerId, {
+      model,
+      messages: allMsgs,
+      temperature: opts.temperature ?? 0.7,
+      maxTokens:   opts.maxTokens   ?? 2048,
+    });
+    return { output: result.output };
+  });
+
   // Run
   ipcMain.handle("run:autonomous", async (_e, name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) => {
     console.log(`[IPC] run:autonomous — agent="${name}" task="${task.slice(0, 80)}" opts=${JSON.stringify({ ...opts, chatHistory: opts?.chatHistory ? `[${opts.chatHistory.length} msgs]` : undefined })}`);
@@ -304,7 +333,7 @@ function registerIpc(): void {
       throw err;
     }
   });
-  ipcMain.handle("marketplace:install", async (_e, item: { category: string; contributor: string; name: string; localPath: string }) => {
+  ipcMain.handle("marketplace:install", async (_e, item: { category: string; contributor: string; name: string; remotePath?: string; localPath?: string; source?: string }) => {
     console.log("[IPC] marketplace:install —", item);
     try {
       const res = await installMarketplaceItem(item);
@@ -412,6 +441,13 @@ function registerIpc(): void {
     enabled: boolean;
     taskTemplate: string;
     schedule?: string;
+    runAt?: number;
+    monthlyType?: "day" | "ordinal";
+    monthlyDay?: number;
+    monthlyOrdinal?: "first" | "second" | "third" | "fourth" | "last";
+    monthlyWeekday?: number;
+    monthlyHour?: number;
+    monthlyMinute?: number;
     webhookPath?: string;
     webhookSecret?: string;
     provider?: string;
@@ -667,6 +703,38 @@ function registerIpc(): void {
   ) => {
     console.log(`[IPC] skillToolConfig:write — ${kind} "${qualifiedName}" agent=${agentName ?? "global"}`);
     await writeSkillToolConfig(kind, qualifiedName, values, agentName);
+  });
+
+  // ── Tool config actions (run in a forked child process so the main thread is never blocked) ──
+  ipcMain.handle("tool:configAction", (_e, qualifiedName: string, key: string) => {
+    console.log(`[IPC] tool:configAction — tool="${qualifiedName}" key="${key}" (forking child)`);
+    return new Promise<unknown>((resolve, reject) => {
+      const runnerPath = join(__dirname, "toolActionRunner.js");
+      const child = fork(runnerPath, [], {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+
+      // pipe child stdout / stderr to main console so tool authors can log freely
+      child.stdout?.on("data", (b: Buffer) => process.stdout.write(b));
+      child.stderr?.on("data", (b: Buffer) => process.stderr.write(b));
+
+      child.on("message", (msg: { ok: boolean; result?: unknown; error?: string }) => {
+        if (msg.ok) resolve(msg.result);
+        else reject(new Error(msg.error ?? "configAction failed"));
+      });
+
+      child.on("error", (err) => reject(err));
+
+      child.on("exit", (code, signal) => {
+        // if the child exited without ever sending a message, surface that
+        if (code !== 0 && code !== null) {
+          reject(new Error(`toolAction child exited with code ${code} (${signal ?? "no signal"})`));
+        }
+      });
+
+      // kick off the action
+      child.send({ qualifiedName, key });
+    });
   });
 }
 

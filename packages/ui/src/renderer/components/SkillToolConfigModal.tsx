@@ -55,6 +55,11 @@ export function SkillToolConfigModal({
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // ── Action state ──────────────────────────────────────────────────────
+  const [pendingAction, setPendingAction] = useState<ConfigFieldDefinitionInfo | null>(null);
+  const [actionStates, setActionStates] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
+  const [actionResults, setActionResults] = useState<Record<string, string>>({});
+
   // ── Load values when scope changes ──────────────────────────────────
   useEffect(() => {
     if (!window.solixApi) return;
@@ -105,6 +110,21 @@ export function SkillToolConfigModal({
       console.error("Failed to save config:", err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── Run a confirmed action ─────────────────────────────────────────
+  const runAction = async (field: ConfigFieldDefinitionInfo) => {
+    setPendingAction(null);
+    setActionStates((prev) => ({ ...prev, [field.key]: "running" }));
+    try {
+      const result = await window.solixApi!.toolRunConfigAction(qualifiedName, field.key);
+      const msg = typeof result === "string" ? result : (result as any)?.message ?? "Done";
+      setActionResults((prev) => ({ ...prev, [field.key]: msg }));
+      setActionStates((prev) => ({ ...prev, [field.key]: "done" }));
+    } catch (err) {
+      setActionResults((prev) => ({ ...prev, [field.key]: (err as Error).message }));
+      setActionStates((prev) => ({ ...prev, [field.key]: "error" }));
     }
   };
 
@@ -324,12 +344,52 @@ export function SkillToolConfigModal({
             onChange={(e) => setValue(field.key, e.target.value)}
           />
         );
+
+      // ── Action button ────────────────────────────────────────────────────────
+      case "action": {
+        const st = actionStates[field.key] ?? "idle";
+        const canRun = kind === "tool" && st !== "running";
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button
+              type="button"
+              disabled={!canRun}
+              onClick={() => setPendingAction(field)}
+              style={{
+                padding: "9px 18px", borderRadius: 8,
+                border: `1.5px solid ${canRun ? C.blue : C.surface1}`,
+                background: canRun ? "rgba(137,180,250,0.08)" : C.surface0,
+                color: canRun ? C.blue : C.overlay0,
+                fontWeight: 700, fontSize: 13,
+                cursor: canRun ? "pointer" : "not-allowed",
+                alignSelf: "flex-start",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => { if (canRun) (e.currentTarget as HTMLElement).style.background = "rgba(137,180,250,0.18)"; }}
+              onMouseLeave={(e) => { if (canRun) (e.currentTarget as HTMLElement).style.background = "rgba(137,180,250,0.08)"; }}
+            >
+              {st === "running" ? "\u23F3 Running\u2026" : (field.actionLabel ?? field.label)}
+            </button>
+            {st === "done" && actionResults[field.key] && (
+              <div style={{ fontSize: 12, color: C.green }}>\u2713 {actionResults[field.key]}</div>
+            )}
+            {st === "error" && actionResults[field.key] && (
+              <div style={{ fontSize: 12, color: C.red }}>\u2717 {actionResults[field.key]}</div>
+            )}
+            {kind !== "tool" && (
+              <div style={{ fontSize: 11, color: C.overlay0, fontStyle: "italic" }}>
+                Action buttons are only available for tools, not skills.
+              </div>
+            )}
+          </div>
+        );
+      }
     }
   };
 
   // ── Count required fields that are empty ──────────────────────────
   const missingRequired = fields.filter(
-    (f) => f.required && !getVal(f.key, f.default),
+    (f) => f.required && f.type !== "action" && !getVal(f.key, f.default),
   ).length;
 
   return (
@@ -358,6 +418,7 @@ export function SkillToolConfigModal({
           borderLeft: `1px solid ${C.surface0}`,
           fontFamily: "system-ui, -apple-system, sans-serif",
           boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
+          position: "relative",
         }}
       >
         {/* Header */}
@@ -661,7 +722,90 @@ export function SkillToolConfigModal({
             {saving ? "Saving…" : "Save"}
           </button>
         </div>
-      </div>
+        {/* ── Action confirmation dialog (“offscreen” overlay on the panel) ── */}
+        {pendingAction && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 20,
+            background: "rgba(17,17,27,0.78)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 28,
+          }}>
+            <div style={{
+              background: C.base, borderRadius: 14,
+              padding: "24px 28px", maxWidth: 460, width: "100%",
+              border: `1px solid ${C.surface1}`,
+              boxShadow: "0 8px 40px rgba(0,0,0,0.45)",
+              display: "flex", flexDirection: "column", gap: 16,
+            }}>
+              {/* Title */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 20 }}>\u26A0\uFE0F</span>
+                <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>
+                  Confirm Action
+                </div>
+              </div>
+
+              {/* Message */}
+              <p style={{ margin: 0, fontSize: 13, color: C.subtext0, lineHeight: 1.6 }}>
+                {pendingAction.actionConfirmText
+                  ?? `Run "${pendingAction.actionLabel ?? pendingAction.label}"?`}
+              </p>
+
+              {/* Code review */}
+              {pendingAction.actionCode && (
+                <details
+                  style={{ background: C.mantle, borderRadius: 10, padding: "10px 14px" }}
+                >
+                  <summary style={{
+                    fontSize: 12, color: C.blue, cursor: "pointer",
+                    userSelect: "none", fontWeight: 600,
+                  }}>
+                    \uD83D\uDD0D Review code before running
+                  </summary>
+                  <pre style={{
+                    marginTop: 10, background: C.surface0, borderRadius: 8,
+                    padding: "10px 12px", fontSize: 11, color: C.subtext1,
+                    whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    maxHeight: 240, overflow: "auto",
+                    border: `1px solid ${C.surface1}`,
+                    fontFamily: "'Cascadia Code', 'Fira Code', monospace",
+                    lineHeight: 1.5,
+                  }}>
+                    {pendingAction.actionCode}
+                  </pre>
+                  <p style={{ margin: "8px 0 0", fontSize: 11, color: C.overlay0, lineHeight: 1.4 }}>
+                    This code runs in the main process (Node.js). This snippet is provided
+                    by the tool author for transparency only.
+                  </p>
+                </details>
+              )}
+
+              {/* Buttons */}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  onClick={() => setPendingAction(null)}
+                  style={{
+                    padding: "8px 18px", borderRadius: 8,
+                    border: `1px solid ${C.surface1}`, background: "transparent",
+                    color: C.subtext0, cursor: "pointer", fontSize: 13,
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => runAction(pendingAction)}
+                  style={{
+                    padding: "8px 24px", borderRadius: 8, border: "none",
+                    background: C.blue, color: C.base,
+                    fontWeight: 700, cursor: "pointer", fontSize: 13,
+                  }}
+                >
+                  Confirm &amp; Run
+                </button>
+              </div>
+            </div>
+          </div>
+        )}      </div>
     </div>
   );
 }

@@ -1,33 +1,27 @@
 /**
- * Marketplace sync engine.
+ * Marketplace refresh engine.
  *
- * Clones or pulls marketplace git repos into ~/.solix/marketplace/<slug>/
- * so the browser module can read their contents.
+ * Previously this module cloned/pulled entire git repos.  It now operates
+ * against the GitHub API only, invalidating the in-memory tree cache and
+ * re-fetching the lightweight path index for each enabled source.
+ *
+ * Nothing is cloned or stored locally.  Individual items are only downloaded
+ * when a user explicitly installs them via installMarketplaceItem().
  */
 
-import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
-import { promisify } from "node:util";
-import { pathExists } from "../../utils/index.js";
-import {
-  readMarketplaceConfig,
-  sourceCacheDir,
-  marketplaceCacheDir,
-} from "./marketplaceConfig.js";
+import { readMarketplaceConfig } from "./marketplaceConfig.js";
+import { parseGithubUrl, invalidateTreeCache, fetchRepoTree } from "./marketplaceRemote.js";
 import type { MarketplaceSyncResult } from "./types.js";
 
-const exec = promisify(execFile);
-
 /**
- * Sync all enabled marketplace sources.
- * Clones repos that don't exist locally; pulls repos that do.
+ * Refresh all enabled marketplace sources.
+ *
+ * Invalidates the in-memory GitHub API tree cache for each source then issues
+ * a fresh fetch so that subsequent browse/install calls see up-to-date data.
  */
 export async function syncAllMarketplaces(): Promise<MarketplaceSyncResult[]> {
   const cfg = await readMarketplaceConfig();
-  const cacheDir = marketplaceCacheDir();
-  console.log(`[Marketplace:sync] cache dir: ${cacheDir}`);
-  console.log(`[Marketplace:sync] sources (${cfg.sources.length}):`, cfg.sources.map(s => `${s.name} enabled=${s.enabled} url=${s.url}`));
-  await mkdir(cacheDir, { recursive: true });
+  console.log(`[Marketplace:sync] refreshing ${cfg.sources.length} source(s)`);
 
   const results: MarketplaceSyncResult[] = [];
 
@@ -38,36 +32,25 @@ export async function syncAllMarketplaces(): Promise<MarketplaceSyncResult[]> {
       continue;
     }
 
-    const dir = sourceCacheDir(source.name);
-    const branch = source.branch ?? "main";
-    console.log(`[Marketplace:sync] processing source "${source.name}" dir=${dir} branch=${branch}`);
+    const coords = parseGithubUrl(source.url);
+    if (!coords) {
+      const msg = `URL "${source.url}" is not a GitHub URL — only GitHub sources are supported`;
+      console.warn(`[Marketplace:sync] ${source.name}: ${msg}`);
+      results.push({ source: source.name, status: "error", message: msg });
+      continue;
+    }
 
+    const branch = source.branch ?? "main";
     try {
-      if (await pathExists(dir)) {
-        console.log(`[Marketplace:sync] dir exists — pulling`);
-        const fetchOut = await exec("git", ["-C", dir, "fetch", "origin", branch], { timeout: 60_000 });
-        console.log(`[Marketplace:sync] fetch stdout: ${fetchOut.stdout.trim()} stderr: ${fetchOut.stderr.trim()}`);
-        const resetOut = await exec("git", ["-C", dir, "reset", "--hard", `origin/${branch}`], { timeout: 30_000 });
-        console.log(`[Marketplace:sync] reset stdout: ${resetOut.stdout.trim()}`);
-        results.push({
-          source: source.name,
-          status: "updated",
-          message: `Pulled latest from ${source.url} (${branch})`,
-        });
-      } else {
-        console.log(`[Marketplace:sync] dir missing — cloning ${source.url}`);
-        const cloneOut = await exec(
-          "git",
-          ["clone", "--depth", "1", "--branch", branch, source.url, dir],
-          { timeout: 120_000 },
-        );
-        console.log(`[Marketplace:sync] clone stdout: ${cloneOut.stdout.trim()} stderr: ${cloneOut.stderr.trim()}`);
-        results.push({
-          source: source.name,
-          status: "cloned",
-          message: `Cloned ${source.url} (${branch})`,
-        });
-      }
+      // Invalidate cache so the next fetch is a real network round-trip
+      invalidateTreeCache(coords.owner, coords.repo, branch);
+      const entries = await fetchRepoTree(coords.owner, coords.repo, branch);
+      console.log(`[Marketplace:sync] "${source.name}" — refreshed (${entries.length} entries)`);
+      results.push({
+        source: source.name,
+        status: "updated",
+        message: `Refreshed index from ${source.url} (${branch}) — ${entries.length} entries`,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[Marketplace:sync] ERROR for source "${source.name}":`, err);
@@ -76,24 +59,11 @@ export async function syncAllMarketplaces(): Promise<MarketplaceSyncResult[]> {
   }
 
   console.log("[Marketplace:sync] final results:", results);
-
-  // If any installed items are flagged for auto‑update (global or per-item),
-  // attempt to refresh them now that the cache has been brought up to date.
-  try {
-    const { autoUpdateInstalledItems } = await import("./installed.js");
-    const upd = await autoUpdateInstalledItems();
-    if (upd.length) {
-      console.log("[Marketplace:sync] auto-update results:", upd);
-    }
-  } catch (err) {
-    console.warn("[Marketplace:sync] failed to auto-update items:", err);
-  }
-
   return results;
 }
 
 /**
- * Sync a single marketplace source by name.
+ * Refresh a single marketplace source by name.
  */
 export async function syncMarketplaceSource(name: string): Promise<MarketplaceSyncResult> {
   const cfg = await readMarketplaceConfig();
@@ -101,10 +71,23 @@ export async function syncMarketplaceSource(name: string): Promise<MarketplaceSy
   if (!source) {
     return { source: name, status: "error", message: `Source "${name}" not found in config` };
   }
-  const results = await syncAllMarketplaces();
-  return results.find((r) => r.source === name) ?? {
-    source: name,
-    status: "error",
-    message: "Unexpected: sync did not produce a result for this source",
-  };
+
+  const coords = parseGithubUrl(source.url);
+  if (!coords) {
+    return { source: name, status: "error", message: `URL "${source.url}" is not a GitHub URL` };
+  }
+
+  const branch = source.branch ?? "main";
+  try {
+    invalidateTreeCache(coords.owner, coords.repo, branch);
+    const entries = await fetchRepoTree(coords.owner, coords.repo, branch);
+    return {
+      source: name,
+      status: "updated",
+      message: `Refreshed index from ${source.url} (${branch}) — ${entries.length} entries`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { source: name, status: "error", message: msg };
+  }
 }

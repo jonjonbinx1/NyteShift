@@ -33,7 +33,7 @@ export type {
 export { loadSkills as listSkills } from "./runtime/skills/skillLoader.js";
 
 // ── Tools ──────────────────────────────────────────────────────────────
-export { loadTools as listTools } from "./runtime/tools/toolLoader.js";
+export { loadTools as listTools, getTool } from "./runtime/tools/toolLoader.js";
 
 // ── Providers ──────────────────────────────────────────────────────────
 export {

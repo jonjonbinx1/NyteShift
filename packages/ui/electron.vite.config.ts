@@ -7,7 +7,13 @@ export default defineConfig({
     build: {
       outDir: "dist/main",
       rollupOptions: {
-        input: "src/main/main.ts",
+        input: {
+          main: "src/main/main.ts",
+          toolActionRunner: "src/main/toolActionRunner.ts",
+        },
+        output: {
+          entryFileNames: "[name].js",
+        },
       },
     },
   },
