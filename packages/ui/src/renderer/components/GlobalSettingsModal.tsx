@@ -182,8 +182,9 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       const base = (await window.solixApi.readConfig()) || {};
       const next = { ...base } as Record<string, any>;
 
-      next.defaultProvider = defaultProvider;
-      next.defaultModel = defaultModel;
+      // Only update if values are set (prevent empty string from clearing)
+      if (defaultProvider) next.defaultProvider = defaultProvider;
+      if (defaultModel) next.defaultModel = defaultModel;
       const parsedTemp = parseFloat(temperature);
       const parsedMax = parseInt(maxTokens, 10);
       if (!isNaN(parsedTemp)) next.temperature = parsedTemp;
@@ -438,7 +439,12 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                   <label style={labelStyle}>Default Provider</label>
                   <select
                     value={defaultProvider}
-                    onChange={(e) => { setDefaultProvider(e.target.value); /* defaultModel will auto-reset via effect */ }}
+                    onChange={async (e) => {
+                      const newProvider = e.target.value;
+                      setDefaultProvider(newProvider);
+                      await window.solixApi.writeConfig({ ...config, defaultProvider: newProvider });
+                      /* defaultModel will auto-reset via effect */
+                    }}
                     style={selectStyle}
                   >
                     <option value="">— select —</option>

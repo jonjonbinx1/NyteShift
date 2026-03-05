@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import type { ToolContract } from "../../types/index.js";
 import { toolsDir, pathExists } from "../../utils/index.js";
 import { getInstalledItem } from "../marketplace/installed.js";
+import { ensureToolDeps } from "./toolDeps.js";
 
 /**
  * Scans ~/.solix/tools for tool.js modules.
@@ -32,6 +33,12 @@ export async function loadTools(): Promise<ToolContract[]> {
       if (!(await pathExists(toolPath))) continue;
 
       try {
+        // Ensure any dependencies declared in the tool's package.json are
+        // installed into the tool's own node_modules before we import it.
+        // This call is a no-op when deps are already present (cached after
+        // the first check per process), so repeated loadTools() calls are cheap.
+        await ensureToolDeps(join(contributorDir, toolDir));
+
         const mod = await import(pathToFileURL(toolPath).href);
         const contract: ToolContract = mod.default ?? mod;
 

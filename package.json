@@ -17,5 +17,8 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "imapflow": "^1.2.11"
   }
 }

@@ -191,16 +191,17 @@ export function HelperChat(): React.JSX.Element {
       const cfg: any = await window.solixApi!.readConfig().catch(() => ({}));
       console.log("[HelperChat] readConfig ->", cfg);
 
-      // Use a direct single-turn call — avoids the ReAct pipeline system-prompt
-      // which conflicts with the helper soul's own instructions.
-      const res = await window.solixApi!.chat({
+      // Only pass provider/model if explicitly set (avoid overriding defaults in handler)
+      const chatOpts: any = {
         systemPrompt: HELPER_SOUL,
         messages: [...priorHistory, { role: "user", content: text }],
-        provider:    cfg?.defaultProvider  || undefined,
-        model:       cfg?.defaultModel     || undefined,
         temperature: 0.7,
         maxTokens:   2048,
-      });
+      };
+      if (cfg?.defaultProvider) chatOpts.provider = cfg.defaultProvider;
+      if (cfg?.defaultModel) chatOpts.model = cfg.defaultModel;
+
+      const res = await window.solixApi!.chat(chatOpts);
 
       const raw = res.output || "(no output)";
       const actions = parseActions(raw);
