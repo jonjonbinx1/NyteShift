@@ -40,7 +40,11 @@ process.on("message", async (msg: { qualifiedName: string; key: string }) => {
 
     const result = await (tool as any).configAction(key);
     process.send!({ ok: true, result });
-    process.exit(0);
+    // Allow detached child processes (e.g. OAuth helpers) to fully separate
+    // before this process shuts down.  A small delay prevents the OS from
+    // tearing down piped stdio before the child installs its own error
+    // handlers, and avoids EPIPE crashes in grandchild processes.
+    setTimeout(() => process.exit(0), 500);
   } catch (err: any) {
     process.send!({ ok: false, error: err?.message ?? String(err) });
     process.exit(1);
