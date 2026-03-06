@@ -12,6 +12,7 @@ import { callProvider } from "../providers/providerRouter.js";
 import { loadSkills } from "../skills/skillLoader.js";
 import { loadTools } from "../tools/toolLoader.js";
 import { createMemoryTools } from "../memory/memoryTools.js";
+import { createPlanTools } from "../memory/planTools.js";
 import { createSubAgentTools } from "../subagent/subagentTools.js";
 
 // ── Structured logging ─────────────────────────────────────────────────────
@@ -242,6 +243,42 @@ function buildSystemPrompt(
     "",
   );
 
+  // ── 7. Long-running task management ─────────────────────────────────
+  sections.push(
+    "# Long-Running Task Management",
+    "",
+    "For tasks that require many steps, use the **plan tools** to track progress on",
+    "disk. This is critical for good performance: storing state externally keeps the",
+    "context window lean and ensures you stay oriented across many steps.",
+    "",
+    "## When to create a plan",
+    "Create a plan (via `plan_start`) whenever the task:",
+    "• requires **4 or more** distinct actions or tool calls,",
+    "• involves gathering, transforming, or producing data in multiple stages,",
+    "• might require sub-agent delegation, or",
+    "• would benefit from being resumable if interrupted.",
+    "",
+    "## Workflow",
+    "1. **Start** — call `plan_start` with the task and an initial outline of steps.",
+    "2. **Checkpoint** — after each significant action call `plan_checkpoint` with a",
+    "   short description of what was done and the result.  Store useful intermediate",
+    "   outputs (search results, drafts, IDs) as artifacts using the artifact fields.",
+    "3. **Summarize** — every ~5 checkpoints call `plan_summarize`, writing a concise",
+    "   narrative of progress so far.  This compresses the step log and frees context.",
+    "4. **Re-orient** — if you lose track of where you are, call `plan_read` to",
+    "   rehydrate the summary and recent steps rather than relying on scrollback.",
+    "5. **Finish** — call `plan_finish` (completed / failed / aborted) when done.",
+    "",
+    "## Context management rules",
+    "• Do **not** repeat lengthy tool results verbatim in your reasoning — summarise",
+    "  the key findings and store details as plan artifacts.",
+    "• Prefer `plan_read` over re-running expensive tool calls to recall earlier results.",
+    "• Keep checkpoint `action` and `result` fields concise (1–3 sentences each).",
+    "• Keep `plan_summarize` compressions focused: what was done, what was found,",
+    "  what decisions were made, and what remains to be done.",
+    "",
+  );
+
   return sections.join("\n");
 }
 
@@ -293,8 +330,11 @@ export async function runAutonomousTask(
   const maxDepthLimit = options.maxDepth ?? 3;
   const runId = `${agentName}:${Date.now()}`;
 
-  const [skills, marketplaceTools] = await Promise.all([loadSkills(), loadTools()]);
+  // Load all skills & marketplace tools, then apply any agent-level
+  // whitelists so the agent only sees permitted capabilities.
+  const [allSkills, allMarketplaceTools] = await Promise.all([loadSkills(), loadTools()]);
   const memoryTools = createMemoryTools(agentName);
+  const planTools = createPlanTools(agentName);
   const subAgentTools = createSubAgentTools({
     parentAgentName: agentName,
     currentDepth,
@@ -308,10 +348,57 @@ export async function runAutonomousTask(
       log(`  [sub-agent:${childAgent}] step ${step.index}: ${step.action}`);
     },
   });
-  const tools = [...memoryTools, ...subAgentTools, ...marketplaceTools];
-  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s) (${memoryTools.length} memory + ${subAgentTools.length} sub-agent${(agentCfg.allowAsyncSubAgents as boolean | undefined) ? " [async]" : ""} + ${marketplaceTools.length} marketplace)`);
+
+  // Agent-level whitelists (support short name or contributor/name)
+  const allowedSkillNames = (agentCfg.skills as string[] | undefined) ?? [];
+  const allowedToolNames = (agentCfg.tools as string[] | undefined) ?? [];
+  const normalize = (s: string) => s.trim().toLowerCase();
+
+  // Filter skills (if the agent provided a whitelist)
+  let skills = allSkills;
+  if (allowedSkillNames.length) {
+    const allowed = new Set(allowedSkillNames.map(normalize));
+    skills = allSkills.filter((s) => {
+      const qualified = normalize(`${s.frontmatter.contributor}/${s.frontmatter.name}`);
+      const name = normalize(s.frontmatter.name);
+      return allowed.has(qualified) || allowed.has(name);
+    });
+  }
+
+  // Filter marketplace tools (memory & sub-agent tools remain always available)
+  let marketplaceTools = allMarketplaceTools;
+  if (allowedToolNames.length) {
+    const allowed = new Set(allowedToolNames.map(normalize));
+    marketplaceTools = allMarketplaceTools.filter((t) => {
+      const qualified = normalize(`${t.contributor}/${t.name}`);
+      const name = normalize(t.name);
+      return allowed.has(qualified) || allowed.has(name);
+    });
+  }
+
+  const tools = [...memoryTools, ...planTools, ...subAgentTools, ...marketplaceTools];
+
+  log(`  loaded ${skills.length} skill(s), ${tools.length} tool(s) (${memoryTools.length} memory + ${planTools.length} plan + ${subAgentTools.length} sub-agent${(agentCfg.allowAsyncSubAgents as boolean | undefined) ? " [async]" : ""} + ${marketplaceTools.length} marketplace)`);
   if (currentDepth > 0) {
     log(`  ↳ sub-agent run — depth=${currentDepth}/${maxDepthLimit} parent="${options.parentAgent ?? "unknown"}"`);
+  }
+
+  // Emit warnings when an agent requested specific skills/tools that couldn't
+  // be resolved — helps diagnosability when a config typo occurs.
+  if (allowedSkillNames.length) {
+    const requested = allowedSkillNames.map(normalize);
+    const resolvedQualified = new Set(skills.map((s) => normalize(`${s.frontmatter.contributor}/${s.frontmatter.name}`)));
+    const resolvedNames = new Set(skills.map((s) => normalize(s.frontmatter.name)));
+    const missing = requested.filter((r) => !resolvedQualified.has(r) && !resolvedNames.has(r));
+    if (missing.length) logW(`  Agent "${agentName}" requested unknown skills: ${missing.join(", ")}`);
+  }
+
+  if (allowedToolNames.length) {
+    const requested = allowedToolNames.map(normalize);
+    const resolvedQualified = new Set(marketplaceTools.map((t) => normalize(`${t.contributor}/${t.name}`)));
+    const resolvedNames = new Set(marketplaceTools.map((t) => normalize(t.name)));
+    const missing = requested.filter((r) => !resolvedQualified.has(r) && !resolvedNames.has(r));
+    if (missing.length) logW(`  Agent "${agentName}" requested unknown tools: ${missing.join(", ")}`);
   }
 
   const skillList = skills
