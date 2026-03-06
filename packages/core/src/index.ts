@@ -74,6 +74,24 @@ export {
   searchMemories,
 } from "./runtime/memory/memoryManager.js";
 export type { MemoryEntry } from "./runtime/memory/memoryManager.js";
+
+// ── Plans (long-running task checkpointing) ─────────────
+export {
+  createPlan,
+  readPlan,
+  checkpointPlan,
+  summarizePlan,
+  writePlanArtifact,
+  finishPlan,
+  listPlans,
+  deletePlan,
+} from "./runtime/memory/planManager.js";
+export type {
+  PlanEntry,
+  PlanStep,
+  PlanArtifact,
+  PlanStatus,
+} from "./runtime/memory/planManager.js";
 // ── Triggers ───────────────────────────────────────────────────────────
 export { listTriggers, fireTrigger } from "./runtime/triggers/triggerRunner.js";export {
   listAllTriggers,
