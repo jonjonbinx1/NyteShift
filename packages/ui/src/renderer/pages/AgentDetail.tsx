@@ -1001,7 +1001,9 @@ export function AgentDetail(): React.JSX.Element {
             ))}
 
             {/* Live execution bar */}
-            {running && <LiveExecutionBar />}
+            {running && name && sessionId && (
+              <LiveExecutionBar agentName={name} sessionId={sessionId} />
+            )}
             <div ref={chatEndRef} />
           </div>
 
@@ -1146,10 +1148,12 @@ export function AgentDetail(): React.JSX.Element {
 }
 
 // ── Live Execution Bar (shown while agent is running) ─────────────────────────
-function LiveExecutionBar() {
+function LiveExecutionBar({ agentName, sessionId }: { agentName: string; sessionId: string }) {
   const { palette: C } = useTheme();
+  const chatStore = useChatStore();
   const [phase, setPhase] = useState(0);
   const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const phases = [
     "Analyzing request…",
     "Planning steps…",
@@ -1191,19 +1195,46 @@ function LiveExecutionBar() {
             {phases[phase]}
           </span>
           {/* Reasoning toggle (Copilot-style) */}
-          <button
-            onClick={() => setThinkingOpen((x) => !x)}
-            style={{
-              background: thinkingOpen ? "rgba(203,166,247,0.12)" : "none",
-              border: `1px solid ${thinkingOpen ? "rgba(203,166,247,0.3)" : C.surface1}`,
-              cursor: "pointer", color: C.mauve, fontSize: 11, padding: "3px 10px",
-              borderRadius: 20, display: "flex", alignItems: "center", gap: 5,
-              transition: "background 0.15s, border-color 0.15s",
-            }}
-          >
-            <span style={{ fontSize: 10 }}>{thinkingOpen ? "▼" : "▶"}</span>
-            <span>Reasoning</span>
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setThinkingOpen((x) => !x)}
+              style={{
+                background: thinkingOpen ? "rgba(203,166,247,0.12)" : "none",
+                border: `1px solid ${thinkingOpen ? "rgba(203,166,247,0.3)" : C.surface1}`,
+                cursor: "pointer", color: C.mauve, fontSize: 11, padding: "3px 10px",
+                borderRadius: 20, display: "flex", alignItems: "center", gap: 5,
+                transition: "background 0.15s, border-color 0.15s",
+              }}
+            >
+              <span style={{ fontSize: 10 }}>{thinkingOpen ? "▼" : "▶"}</span>
+              <span>Reasoning</span>
+            </button>
+            <button
+              onClick={async () => {
+                if (!window.solixApi) return;
+                setCancelling(true);
+                try {
+                  await window.solixApi.cancelRun(agentName, sessionId);
+                } catch (err) {
+                  console.error("Cancel request failed:", err);
+                } finally {
+                  // Let run:completed event clear running state; clear local pending flag
+                  setCancelling(false);
+                }
+              }}
+              disabled={cancelling}
+              title="Cancel the running agent"
+              style={{
+                background: "transparent",
+                border: `1px solid ${C.surface1}`,
+                cursor: cancelling ? "not-allowed" : "pointer",
+                color: C.red, fontSize: 11, padding: "3px 10px",
+                borderRadius: 20, display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              {cancelling ? "Cancelling…" : "Cancel"}
+            </button>
+          </div>
         </div>
         {/* Inline reasoning */}
         {thinkingOpen && (

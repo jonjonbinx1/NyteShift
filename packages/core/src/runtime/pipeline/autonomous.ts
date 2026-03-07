@@ -188,7 +188,7 @@ function buildSystemPrompt(
     "Do NOT mix them or add text outside the tags.",
     "",
     "## Format A — Execute a tool",
-    "Think step-by-step about which tool to use and why, then emit:",
+    "When you need to call a tool, respond with ONLY this block and nothing else:",
     "",
     "<tool_call>",
     '{"name": "tool_name", "input": {"param": "value"}}',
@@ -198,11 +198,34 @@ function buildSystemPrompt(
     "You may then make additional tool calls or deliver your final answer.",
     "",
     "## Format B — Deliver your final answer",
-    "When you have enough information, deliver your complete answer:",
+    "When you have enough information, respond with ONLY this block and nothing else:",
     "",
     "<final_answer>",
     "Your complete, well-formatted answer to the user.",
     "</final_answer>",
+      "",
+      "## Examples",
+      "",
+      "Example — create a plan using the built-in plan tool:",
+      "",
+      "<tool_call>",
+      '{"name": "plan_start", "input": {"task": "Sort emails based on mailbox rules", "outline": "1. Loop through emails\\n2. Categorize by subject\\n3. Group by category"}}',
+      "</tool_call>",
+      "",
+      "Example — deliver a final answer once work is complete:",
+      "",
+      "<final_answer>",
+      "Plan created: use plan_checkpoint to log progress; then process emails in batches.",
+      "</final_answer>",
+      "",
+      "IMPORTANT: Do NOT use XML-style tool tags such as <plan_start> inside a <tool_call> block.",
+      "Always emit a JSON object with 'name' and 'input' inside <tool_call>.",
+    "",
+    "## CRITICAL RULES",
+    "1. Every response MUST be exactly ONE of Format A or Format B — no exceptions.",
+    "2. Do NOT write prose like 'I will use the X tool' or 'Let me call Y'. ACT immediately with <tool_call>.",
+    "3. Do NOT add any text, explanation or reasoning outside the tags.",
+    "4. Internal reasoning happens in your thinking space — your response is only the tag block.",
     "",
   );
 
@@ -566,7 +589,8 @@ export async function runAutonomousTask(
     // 2) Check for <tool_call>
     const toolCall = extractToolCall(rawOutput);
     if (toolCall) {
-      log(`  <tool_call> name="${toolCall.name}" input=${JSON.stringify(toolCall.input).slice(0, 200)}`);
+      const _toolInputPreview = JSON.stringify(toolCall.input ?? {});
+      log(`  <tool_call> name="${toolCall.name}" input=${(_toolInputPreview ?? "").slice(0, 200)}`);
       step.action = `tool-call:${toolCall.name}`;
 
       const toolDef = tools.find(
@@ -692,9 +716,60 @@ export async function runAutonomousTask(
       continue;
     }
 
-    // 3) Fallback: treat full response as final answer (model didn't
-    //    use structured tags — common for conversational queries or
-    //    local models that don't follow the protocol strictly).
+    // 3) No structured tags found.
+    //
+    // Per Anthropic agentic best-practices, an assistant turn that contains
+    // only prose intent ("I will use the gmail tool...") is a protocol
+    // violation — the model should have emitted a <tool_call>.  Rather than
+    // silently promoting planning text to a final answer (which surfaces as
+    // a confusing non-answer to the user), we inject a one-shot corrective
+    // re-prompt asking the model to reply with the required structured block.
+    //
+    // If the response genuinely looks like a user-facing answer (no tool
+    // names, no planning verbs, not coming off a re-prompt) we treat it as
+    // a final answer as before.
+    //
+    // Re-prompts are limited to 1 per step (tracked via step metadata) to
+    // prevent infinite loops.
+    const hasToolIntent = tools.length > 0 && (
+      // Mentions a tool by name
+      tools.some((t) =>
+        rawOutput.toLowerCase().includes(t.name.toLowerCase()) ||
+        rawOutput.toLowerCase().includes(`${t.contributor}/${t.name}`.toLowerCase()),
+      ) ||
+      // Common planning-prose patterns
+      /\b(i('ll| will| need to| should| am going to)|let me|next[,]? (i|let'?s)|first[,]? (i|let'?s)|i'll|going to use|use the .+ tool|call the .+ tool)/i.test(rawOutput)
+    );
+    const alreadyReprompted = (step as any)._reprompted === true;
+
+    if (hasToolIntent && !alreadyReprompted) {
+      logW(`  no structured tags found but response contains tool intent — issuing one-shot re-prompt`);
+      step.action = "reprompt:format-correction";
+      (step as any)._reprompted = true;
+
+      const correctionMsg = [
+        "Your last response did not follow the required format.",
+        "You wrote reasoning/planning prose instead of a structured tag block.",
+        "",
+        "You MUST respond with ONLY one of:",
+        "  <tool_call>{\"name\": \"tool_name\", \"input\": {...}}</tool_call>",
+        "  OR",
+        "  <final_answer>your answer here</final_answer>",
+        "",
+        "Example (create a plan to sort emails):",
+        "  <tool_call>{\"name\": \"plan_start\", \"input\": {\"task\": \"Sort emails based on mailbox rules\", \"outline\": \"1. Loop through emails\\n2. Categorize by subject\\n3. Group by category\"}}</tool_call>",
+        "",
+        "Do NOT include any text outside those tags. Respond now with the correct format.",
+      ].join("\n");
+
+      messages.push({ role: "user", content: correctionMsg });
+      log(`  re-prompt injected — continuing to step ${i + 2}`);
+      continue;
+    }
+
+    // Genuine final answer — model produced a user-facing response with no
+    // tool intent and no structured tags (e.g. a conversational reply, or a
+    // direct knowledge answer where no tools were needed).
     log(`  no structured tags found — treating full response as final answer`);
     finalOutput = rawOutput;
     break;

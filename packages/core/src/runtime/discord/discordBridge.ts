@@ -41,9 +41,11 @@ import { runAutonomousTask } from "../pipeline/autonomous.js";
 import {
   loadChatSession,
   saveChatSession,
+  archiveChatSession,
   type ChatMessage,
   type ChatSession,
 } from "../agents/chatManager.js";
+import { AgentController } from "../control/controller.js";
 import {
   agentsDir,
   toKebab,
@@ -131,6 +133,12 @@ export class DiscordBridge extends EventEmitter {
   private client: any = null; // discord.js Client (lazy-loaded)
   private running = false;
   private botUserId = "";
+  /**
+   * Active run controllers keyed by sessionId.
+   * Populated at the start of each bridge-mode run and removed in a
+   * finally block so /cancel can abort an in-progress pipeline step.
+   */
+  private readonly activeControllers = new Map<string, AgentController>();
 
   readonly agentName: string;
   private readonly botToken: string;
@@ -270,11 +278,85 @@ export class DiscordBridge extends EventEmitter {
       content,
     });
 
+    // ── Discord control commands (bridge mode only) ──────────────────
     if (this.mode === "bridge") {
+      const cmd = content.toLowerCase();
+      if (cmd === "/newchat") {
+        await this.handleNewChatCommand(message);
+        return;
+      }
+      if (cmd === "/cancel") {
+        await this.handleCancelCommand(message);
+        return;
+      }
       await this.handleBridgeMessage(message, content);
     } else {
       await this.handleTriggerMessage(message, content);
     }
+  }
+
+  // ── /newchat command ───────────────────────────────────────────────
+
+  /**
+   * Archive the current channel session so the next message starts a
+   * completely blank context window.  The archived file is preserved
+   * under chats/archived/ for audit / recovery (soft-delete).
+   *
+   * Follows Anthropic's guideline of preferring reversible, safe operations
+   * in agentic systems.
+   */
+  private async handleNewChatCommand(message: any): Promise<void> {
+    const channelId = message.channel.id;
+    const sessionId = discordSessionId(channelId);
+    const separator = "─".repeat(40);
+    try {
+      await archiveChatSession(this.agentName, sessionId);
+      await message.channel.send(
+        `${separator}\nNew chat started by **${message.author.username}**\n${separator}`,
+      );
+      log(`[/newchat] session "${sessionId}" archived for agent "${this.agentName}"`);
+      this.emit("session:reset", {
+        channelId,
+        sessionId,
+        agentName: this.agentName,
+        requestedBy: message.author.id,
+      });
+    } catch (err) {
+      logE("/newchat failed:", (err as Error).message);
+      try { await message.channel.send("Failed to reset chat — please try again."); } catch {}
+    }
+  }
+
+  // ── /cancel command ────────────────────────────────────────────────
+
+  /**
+   * Abort the currently running autonomous pipeline for this channel.
+   *
+   * The AbortSignal is checked between every ReAct step so cancellation
+   * takes effect at the next step boundary.  The pipeline returns
+   * `aborted: true` and any partial session state is preserved.
+   */
+  private async handleCancelCommand(message: any): Promise<void> {
+    const channelId = message.channel.id;
+    const sessionId = discordSessionId(channelId);
+    const controller = this.activeControllers.get(sessionId);
+    if (!controller) {
+      try { await message.channel.send("No active task to cancel."); } catch {}
+      return;
+    }
+    controller.cancel();
+    log(`[/cancel] requested by ${message.author.username} for session "${sessionId}"`);
+    try {
+      await message.channel.send(
+        `**${message.author.username}** cancelled the current task.`,
+      );
+    } catch {}
+    this.emit("run:cancelled", {
+      channelId,
+      sessionId,
+      agentName: this.agentName,
+      requestedBy: message.author.id,
+    });
   }
 
   // ── Trigger mode ──────────────────────────────────────────────────
@@ -362,19 +444,31 @@ export class DiscordBridge extends EventEmitter {
         content: m.content,
       }));
 
+    // Register a controller so /cancel can abort between steps.
+    const controller = new AgentController();
+    this.activeControllers.set(sessionId, controller);
+
     try {
       await message.channel.sendTyping?.();
 
-      const result = await runAutonomousTask(
-        this.agentName,
-        content,
-        {
-          provider: this.provider,
-          model: this.model,
-          maxSteps: this.maxSteps,
-          chatHistory: chatHistory.slice(0, -1), // Exclude the message we just added (it's the task).
-        },
-      );
+      let result;
+      try {
+        result = await runAutonomousTask(
+          this.agentName,
+          content,
+          {
+            provider: this.provider,
+            model: this.model,
+            maxSteps: this.maxSteps,
+            chatHistory: chatHistory.slice(0, -1), // Exclude the message we just added (it's the task).
+            signal: controller.signal,
+          },
+        );
+      } finally {
+        // Always release the controller slot, whether the run succeeded,
+        // failed, or was cancelled — prevents stale entries in the Map.
+        this.activeControllers.delete(sessionId);
+      }
 
       // Append assistant response.
       const assistantMsg: ChatMessage = {
@@ -396,9 +490,13 @@ export class DiscordBridge extends EventEmitter {
         mode: "bridge",
         channelId,
         sessionId,
+        aborted: result.aborted,
         result,
       });
     } catch (err) {
+      // Ensure controller is removed even if the outer try throws before
+      // the inner finally had a chance to run.
+      this.activeControllers.delete(sessionId);
       logE("bridge run failed:", (err as Error).message);
 
       // Record the error in session history.
@@ -565,6 +663,11 @@ export class GlobalDiscordBridge extends EventEmitter {
   private client: any = null;
   private running = false;
   private botUserId = "";
+  /**
+   * Active run controllers keyed by sessionId.
+   * Used by /cancel to abort in-progress pipeline runs between steps.
+   */
+  private readonly activeControllers = new Map<string, AgentController>();
 
   private readonly botToken: string;
   private readonly guildId?: string;
@@ -672,6 +775,19 @@ export class GlobalDiscordBridge extends EventEmitter {
     const raw = message.content.trim();
     if (!raw) return;
 
+    // ── Discord control commands (bridge mode only) ────────────────────
+    if (this.mode === "bridge") {
+      const rawLower = raw.toLowerCase();
+      if (rawLower === "/newchat" || rawLower.startsWith("/newchat ")) {
+        await this.handleControlCommand(message, raw, mappedAgent ?? null);
+        return;
+      }
+      if (rawLower === "/cancel") {
+        await this.handleControlCommand(message, raw, mappedAgent ?? null);
+        return;
+      }
+    }
+
     // If this channel has a direct agent mapping, route straight to that agent
     // with no name prefix required.
     if (mappedAgent) {
@@ -763,12 +879,22 @@ export class GlobalDiscordBridge extends EventEmitter {
       .slice(-50)
       .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
+    // Register a controller so /cancel can abort between steps.
+    const controller = new AgentController();
+    this.activeControllers.set(sessionId, controller);
+
     try {
       await message.channel.sendTyping?.();
 
-      const result = await runAutonomousTask(agentName, task, {
-        chatHistory: chatHistory.slice(0, -1),
-      });
+      let result;
+      try {
+        result = await runAutonomousTask(agentName, task, {
+          chatHistory: chatHistory.slice(0, -1),
+          signal: controller.signal,
+        });
+      } finally {
+        this.activeControllers.delete(sessionId);
+      }
 
       const assistantMsg: ChatMessage = {
         id: randomUUID(),
@@ -782,13 +908,109 @@ export class GlobalDiscordBridge extends EventEmitter {
 
       await this.sendReply(message.channel, result.finalOutput, message.id);
 
-      this.emit("run:completed", { mode: "bridge", agentName, channelId, sessionId, result });
+      this.emit("run:completed", {
+        mode: "bridge",
+        agentName,
+        channelId,
+        sessionId,
+        aborted: result.aborted,
+        result,
+      });
     } catch (err) {
+      this.activeControllers.delete(sessionId);
       logE(`[global] bridge run failed for "${agentName}":`, (err as Error).message);
       session.messages.push({ id: randomUUID(), role: "error" as any, content: `Error: ${(err as Error).message}`, ts: Date.now() });
       await saveChatSession(session);
       try { await message.channel.send(`[${agentName}] Sorry, I encountered an error: ${(err as Error).message}`); } catch {}
       this.emit("run:failed", { mode: "bridge", agentName, error: (err as Error).message });
+    }
+  }
+
+  // ── Control commands (/newchat, /cancel) ──────────────────────────────
+
+  /**
+   * Handle /newchat and /cancel for the global bridge.
+   *
+   * /newchat [agentName]
+   *   Archives the session for the target agent (channel-mapped or explicit).
+   *   Soft-deletes so history is preserved for audit/recovery.
+   *
+   * /cancel
+   *   Aborts ALL active pipeline runs for this channel (any agent).
+   *   Cancellation is cooperative — takes effect at the next ReAct step boundary.
+   */
+  private async handleControlCommand(
+    message: any,
+    raw: string,
+    mappedAgent: string | null,
+  ): Promise<void> {
+    const channelId = message.channel.id;
+    const rawLower = raw.toLowerCase();
+    const separator = "─".repeat(40);
+
+    // ── /newchat ──────────────────────────────────────────────────────
+    if (rawLower === "/newchat" || rawLower.startsWith("/newchat ")) {
+      // Explicit agent name takes priority over channel mapping.
+      const argAgent = rawLower.startsWith("/newchat ") ? raw.slice(9).trim() : null;
+      const targetAgent = argAgent || mappedAgent;
+
+      if (!targetAgent) {
+        try {
+          await message.channel.send(
+            "Please specify an agent: `/newchat <agentName>`",
+          );
+        } catch {}
+        return;
+      }
+
+      const sessionId = `discord-global-${channelId}-${toKebab(targetAgent)}`;
+      try {
+        await archiveChatSession(targetAgent, sessionId);
+        await message.channel.send(
+          `${separator}\nNew chat started by **${message.author.username}** (agent: **${targetAgent}**)\n${separator}`,
+        );
+        log(`[global /newchat] session "${sessionId}" archived by ${message.author.username}`);
+        this.emit("session:reset", {
+          channelId,
+          sessionId,
+          agentName: targetAgent,
+          requestedBy: message.author.id,
+        });
+      } catch (err) {
+        logE("[global] /newchat failed:", (err as Error).message);
+        try { await message.channel.send("Failed to reset chat — please try again."); } catch {}
+      }
+      return;
+    }
+
+    // ── /cancel ───────────────────────────────────────────────────────
+    if (rawLower === "/cancel") {
+      // Cancel every active run for this channel regardless of agent.
+      const prefix = `discord-global-${channelId}-`;
+      let cancelled = 0;
+      for (const [sid, ctrl] of this.activeControllers.entries()) {
+        if (sid.startsWith(prefix)) {
+          ctrl.cancel();
+          this.activeControllers.delete(sid);
+          cancelled++;
+        }
+      }
+
+      if (cancelled === 0) {
+        try { await message.channel.send("No active tasks to cancel."); } catch {}
+      } else {
+        try {
+          await message.channel.send(
+            `**${message.author.username}** cancelled ${cancelled} active task(s).`,
+          );
+        } catch {}
+      }
+      log(`[global /cancel] ${cancelled} run(s) cancelled in channel ${channelId} by ${message.author.username}`);
+      this.emit("run:cancelled", {
+        channelId,
+        cancelled,
+        requestedBy: message.author.id,
+      });
     }
   }
 

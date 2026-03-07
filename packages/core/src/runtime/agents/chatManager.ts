@@ -7,7 +7,7 @@
  * Each session contains the full message history, metadata, and run state.
  */
 
-import { readdir, mkdir, rm } from "node:fs/promises";
+import { readdir, mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   agentsDir,
@@ -149,6 +149,33 @@ export async function deleteChatSession(
   if (await pathExists(p)) {
     await rm(p, { force: true });
   }
+}
+
+/**
+ * Soft-delete a chat session by archiving it rather than destroying it.
+ *
+ * The active session file is moved to:
+ *   ~/.solix/agents/<agentName>/chats/archived/<sessionId>-<iso-timestamp>.json
+ *
+ * This preserves history for audit / recovery while giving the channel a
+ * completely blank context window on the next message — following the
+ * principle of safe, reversible operations recommended by Anthropic for
+ * agentic systems.
+ */
+export async function archiveChatSession(
+  agentName: string,
+  sessionId: string,
+): Promise<void> {
+  const src = sessionPath(agentName, sessionId);
+  if (!(await pathExists(src))) return;
+
+  const archiveDir = join(chatsDir(agentName), "archived");
+  await mkdir(archiveDir, { recursive: true });
+
+  // ISO timestamp with colons replaced so the filename is valid on Windows.
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const dest = join(archiveDir, `${sessionId}-${ts}.json`);
+  await rename(src, dest);
 }
 
 /** Delete all chat sessions for an agent. */

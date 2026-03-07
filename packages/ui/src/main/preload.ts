@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld("solixApi", {
   // Run
   runAutonomous: (name: string, task: string, opts?: { provider?: string; model?: string; temperature?: number; maxTokens?: number; maxSteps?: number; sessionId?: string; chatHistory?: Array<{ role: "user" | "assistant"; content: string }> }) =>
     ipcRenderer.invoke("run:autonomous", name, task, opts),
+  // Control
+  cancelRun: (agentName: string, sessionId: string) => ipcRenderer.invoke("run:cancel", agentName, sessionId),
   getRunStatus: (agentName: string) => ipcRenderer.invoke("run:status", agentName),
   clearRun: (runId: string) => ipcRenderer.invoke("run:clear", runId),
   onRunCompleted: (cb: (data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => void) => {
