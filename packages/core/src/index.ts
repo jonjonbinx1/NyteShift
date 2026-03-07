@@ -22,6 +22,7 @@ export {
   saveChatSession,
   deleteChatSession,
   deleteAllChatSessions,
+  archiveChatSession,
 } from "./runtime/agents/chatManager.js";
 export type {
   ChatMessage,

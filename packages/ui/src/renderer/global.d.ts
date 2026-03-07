@@ -200,6 +200,8 @@ export interface SolixApi {
     depth?: number;
     parentAgent?: string;
   }>;
+  /** Request cancellation of a running agent for the given agent/session. */
+  cancelRun(agentName: string, sessionId: string): Promise<{ cancelled: number }>;
   getRunStatus(agentName: string): Promise<Array<{ runId: string; agentName: string; sessionId: string; status: string; result?: any; error?: string }>>;
   clearRun(runId: string): Promise<void>;
   onRunCompleted(cb: (data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => void): void; // result is the PipelineResult when available

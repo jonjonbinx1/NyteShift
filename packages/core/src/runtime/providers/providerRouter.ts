@@ -177,6 +177,21 @@ export async function callProvider(
   log(`routing call → provider="${providerId}" model="${params.model}"`);
   const raw: any = await provider.call(params);
 
+  // Optional verbose debug: print the raw provider response when enabled.
+  // Set SOLIX_DEBUG_PROVIDER_RAW=1 or SOLIX_DEBUG=1 to enable.
+  if (process.env.SOLIX_DEBUG_PROVIDER_RAW === "1" || process.env.SOLIX_DEBUG === "1") {
+    try {
+      const util = await import("node:util");
+      log(`[providerRouter] raw response from provider="${providerId}" model="${params.model}": ${util.inspect(raw, { depth: 4 })}`);
+    } catch (err) {
+      try {
+        log(`[providerRouter] raw response (json): ${JSON.stringify(raw)}`);
+      } catch {
+        log(`[providerRouter] raw response (object):`, raw);
+      }
+    }
+  }
+
   // Normalise: user providers may return `content` instead of `output`, or
   // omit `usage`.  Map everything to the canonical ProviderCallResult shape.
   const result: ProviderCallResult = {
@@ -196,6 +211,21 @@ export async function callProvider(
         }
       : undefined,
   };
+
+  // Per Anthropic/OpenAI agentic best-practices, `thinking` is chain-of-thought
+  // and must NOT be used as authoritative output.  The pipeline relies on
+  // `output` for control flow (tool-call / final-answer tags).
+  //
+  // Narrow exception: if `output` is empty AND `thinking` already contains a
+  // structured tag (<tool_call> or <final_answer>), the provider incorrectly
+  // placed machine-readable content in `thinking` — promote it so the pipeline
+  // can parse it.  Prose reasoning is intentionally left out of `output`; the
+  // pipeline's re-prompt fallback will handle that case.
+  const STRUCTURED_TAG_RE = /<tool_call>|<\/tool_call>|<final_answer>|<\/final_answer>/i;
+  if (!result.output && result.thinking && STRUCTURED_TAG_RE.test(result.thinking)) {
+    logW(`provider "${providerId}" returned no 'output' but 'thinking' has structured tags — promoting to output`);
+    result.output = result.thinking;
+  }
 
   if (!result.output) {
     logW(`provider "${providerId}" returned empty output — raw keys: ${Object.keys(raw).join(", ")}`);

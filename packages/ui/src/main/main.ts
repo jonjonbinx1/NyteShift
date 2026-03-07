@@ -169,6 +169,8 @@ function registerIpc(): void {
     error?: string;
     startedAt: number;
   }>();
+  // Controllers for active runs so the UI can request cancellation.
+  const runControllers = new Map<string, AbortController>();
 
   // Direct single-turn chat (bypasses the full ReAct pipeline).
   // Used by the built-in HelperChat assistant so it doesn't get confused
@@ -210,8 +212,13 @@ function registerIpc(): void {
       startedAt: Date.now(),
     });
 
+    // Create an AbortController so the renderer can request cancellation.
+    const controller = new AbortController();
+    runControllers.set(runId, controller);
+
     try {
-      const result = await runAutonomousTask(name, task, opts || {});
+      const runOptions = { ...(opts || {}), signal: controller.signal } as any;
+      const result = await runAutonomousTask(name, task, runOptions);
       activeRuns.set(runId, {
         agentName: name,
         sessionId,
@@ -235,6 +242,8 @@ function registerIpc(): void {
       });
       try { mainWindow?.webContents.send("run:completed", { runId, agentName: name, sessionId, error: msg }); } catch {}
       throw err;
+    } finally {
+      runControllers.delete(runId);
     }
   });
 
@@ -252,6 +261,18 @@ function registerIpc(): void {
   // Clear completed runs from tracker
   ipcMain.handle("run:clear", (_e, runId: string) => {
     activeRuns.delete(runId);
+  });
+
+  // Cancel active runs for an agent/session. Returns number of runs cancelled.
+  ipcMain.handle("run:cancel", (_e, agentName: string, sessionId: string) => {
+    let cancelled = 0;
+    for (const [runId, controller] of runControllers) {
+      if (runId.startsWith(`${agentName}:${sessionId}`)) {
+        try { controller.abort(); } catch {}
+        cancelled++;
+      }
+    }
+    return { cancelled };
   });
 
   // ── Chat Sessions ─────────────────────────────────────────────────────
