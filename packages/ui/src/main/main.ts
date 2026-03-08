@@ -55,6 +55,13 @@ import {
   deleteMemory,
   clearAllMemories,
   searchMemories,
+  // Agent Graph
+  listGraphs,
+  loadGraph,
+  saveGraph,
+  deleteGraph,
+  validateGraph,
+  runGraph,
 } from "@solix/core";
 import type { ChatSession, TriggerType } from "@solix/core";
 
@@ -143,6 +150,7 @@ function registerIpc(): void {
       contributor: t.contributor,
       description: t.description,
       config: t.config ?? undefined,
+      spec: (t as any).spec ?? undefined,
       autoUpdate: (t as any).autoUpdate,
     }));
   });
@@ -703,6 +711,202 @@ function registerIpc(): void {
     }
   });
 
+  // Forwarded send/fetch/resolve helpers so out-of-process tools can
+  // route messages through the running bridges.
+  ipcMain.handle("discord:bridge:send", async (_e, agentName: string, opts: { channelId?: string; channelName?: string; content?: string; replyToId?: string; guildId?: string }) => {
+    console.log("[IPC] discord:bridge:send —", agentName, opts.channelId ?? opts.channelName ?? "(no channel)");
+    try {
+      const core = await import("@solix/core");
+      const { getActiveBridges, isBridgeRunning, startBridge } = core as any;
+
+      let bridge: any = null;
+      for (const b of getActiveBridges().values()) {
+        if (b.agentName === agentName) { bridge = b; break; }
+      }
+      if (!bridge) {
+        if (isBridgeRunning(agentName)) {
+          // try to find again
+          for (const b of getActiveBridges().values()) {
+            if (b.agentName === agentName) { bridge = b; break; }
+          }
+        }
+      }
+      if (!bridge) {
+        // attempt to start the bridge if it isn't running (best-effort)
+        bridge = await startBridge(agentName);
+      }
+
+      const client = bridge?.client;
+      if (!client) throw new Error("Discord client not available on bridge");
+
+      let channel: any = null;
+      if (opts.channelId) {
+        channel = await client.channels.fetch(opts.channelId).catch(() => null);
+      }
+      if (!channel && opts.channelName) {
+        // prefer bridge-level resolver if present
+        if (typeof bridge.resolveChannelByName === "function") {
+          try {
+            const id = await bridge.resolveChannelByName(opts.channelName);
+            if (id) channel = await client.channels.fetch(id).catch(() => null);
+          } catch {}
+        }
+        // fallback: search guild channels
+        if (!channel) {
+          const guild = opts.guildId ? client.guilds.cache.get(opts.guildId) : client.guilds.cache.values().next().value;
+          if (guild) {
+            try {
+              const chans = await guild.channels.fetch();
+              channel = chans.find((c: any) => c.name === opts.channelName) as any;
+            } catch {}
+          }
+        }
+      }
+
+      if (!channel) throw new Error("Discord channel not found");
+
+      const sendOpts: any = {};
+      if (opts.replyToId) sendOpts.reply = { messageReference: opts.replyToId };
+      const res = await channel.send({ content: opts.content ?? "", ...sendOpts });
+      return { ok: true, id: res.id };
+    } catch (err) {
+      console.error("[IPC] discord:bridge:send — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:bridge:fetch", async (_e, agentName: string, opts: { channelId?: string; limit?: number }) => {
+    console.log("[IPC] discord:bridge:fetch —", agentName, opts.channelId);
+    try {
+      const core = await import("@solix/core");
+      const { getActiveBridges } = core as any;
+      let bridge: any = null;
+      for (const b of getActiveBridges().values()) {
+        if (b.agentName === agentName) { bridge = b; break; }
+      }
+      if (!bridge) throw new Error("Bridge not running for agent");
+      const client = bridge?.client;
+      if (!client) throw new Error("Discord client not available on bridge");
+      if (!opts.channelId) throw new Error("channelId required");
+      const channel = await client.channels.fetch(opts.channelId);
+      const messages = await channel.messages.fetch({ limit: opts.limit ?? 50 });
+      const out = Array.from(messages.values()).map((m: any) => ({ id: m.id, author: m.author?.username, content: m.content, createdAt: m.createdAt }));
+      return out;
+    } catch (err) {
+      console.error("[IPC] discord:bridge:fetch — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:bridge:resolveChannel", async (_e, agentName: string, name: string) => {
+    console.log("[IPC] discord:bridge:resolveChannel —", agentName, name);
+    try {
+      const core = await import("@solix/core");
+      const { getActiveBridges } = core as any;
+      let bridge: any = null;
+      for (const b of getActiveBridges().values()) {
+        if (b.agentName === agentName) { bridge = b; break; }
+      }
+      if (!bridge) throw new Error("Bridge not running for agent");
+      if (typeof bridge.resolveChannelByName === "function") return await bridge.resolveChannelByName(name);
+      // fallback to client search
+      const client = bridge.client;
+      if (!client) throw new Error("Discord client not available on bridge");
+      for (const g of client.guilds.cache.values()) {
+        try {
+          const chans = await g.channels.fetch();
+          const found = chans.find((c: any) => c.name === name);
+          if (found) return found.id;
+        } catch {}
+      }
+      return null;
+    } catch (err) {
+      console.error("[IPC] discord:bridge:resolveChannel — ERROR:", err);
+      throw err;
+    }
+  });
+
+  // Global bridge variants
+  ipcMain.handle("discord:global:send", async (_e, opts: { channelId?: string; channelName?: string; content?: string; replyToId?: string; guildId?: string }) => {
+    console.log("[IPC] discord:global:send —", opts.channelId ?? opts.channelName ?? "(no channel)");
+    try {
+      const core = await import("@solix/core");
+      const { getGlobalBridge, startGlobalBridge } = core as any;
+      let bridge = getGlobalBridge();
+      if (!bridge) bridge = await startGlobalBridge();
+      const client = bridge.client;
+      if (!client) throw new Error("Discord client not available on global bridge");
+      let channel: any = null;
+      if (opts.channelId) channel = await client.channels.fetch(opts.channelId).catch(() => null);
+      if (!channel && opts.channelName) {
+        if (typeof bridge.resolveChannelByName === "function") {
+          const id = await bridge.resolveChannelByName(opts.channelName);
+          if (id) channel = await client.channels.fetch(id).catch(() => null);
+        }
+        if (!channel) {
+          const guild = opts.guildId ? client.guilds.cache.get(opts.guildId) : client.guilds.cache.values().next().value;
+          if (guild) {
+            try {
+              const chans = await guild.channels.fetch();
+              channel = chans.find((c: any) => c.name === opts.channelName) as any;
+            } catch {}
+          }
+        }
+      }
+      if (!channel) throw new Error("Discord channel not found");
+      const sendOpts: any = {};
+      if (opts.replyToId) sendOpts.reply = { messageReference: opts.replyToId };
+      const res = await channel.send({ content: opts.content ?? "", ...sendOpts });
+      return { ok: true, id: res.id };
+    } catch (err) {
+      console.error("[IPC] discord:global:send — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:global:fetch", async (_e, opts: { channelId: string; limit?: number }) => {
+    console.log("[IPC] discord:global:fetch —", opts.channelId);
+    try {
+      const core = await import("@solix/core");
+      const { getGlobalBridge } = core as any;
+      const bridge = getGlobalBridge();
+      if (!bridge) throw new Error("Global bridge not running");
+      const client = bridge.client;
+      if (!client) throw new Error("Discord client not available on global bridge");
+      const channel = await client.channels.fetch(opts.channelId);
+      const messages = await channel.messages.fetch({ limit: opts.limit ?? 50 });
+      const out = Array.from(messages.values()).map((m: any) => ({ id: m.id, author: m.author?.username, content: m.content, createdAt: m.createdAt }));
+      return out;
+    } catch (err) {
+      console.error("[IPC] discord:global:fetch — ERROR:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle("discord:global:resolveChannel", async (_e, name: string) => {
+    console.log("[IPC] discord:global:resolveChannel —", name);
+    try {
+      const core = await import("@solix/core");
+      const { getGlobalBridge } = core as any;
+      const bridge = getGlobalBridge();
+      if (!bridge) throw new Error("Global bridge not running");
+      if (typeof bridge.resolveChannelByName === "function") return await bridge.resolveChannelByName(name);
+      const client = bridge.client;
+      if (!client) throw new Error("Discord client not available on global bridge");
+      for (const g of client.guilds.cache.values()) {
+        try {
+          const chans = await g.channels.fetch();
+          const found = chans.find((c: any) => c.name === name);
+          if (found) return found.id;
+        } catch {}
+      }
+      return null;
+    } catch (err) {
+      console.error("[IPC] discord:global:resolveChannel — ERROR:", err);
+      throw err;
+    }
+  });
+
   // ── Skill / Tool Config ─────────────────────────────────────────────
 
   ipcMain.handle("skillToolConfig:read", async (
@@ -756,6 +960,127 @@ function registerIpc(): void {
       // kick off the action
       child.send({ qualifiedName, key });
     });
+  });
+
+  // ── Agent Graph IPC ────────────────────────────────────────────────────
+
+  // Track running graph executions so we can push per-node events to renderer.
+  const activeGraphRuns = new Map<string, {
+    status: "running" | "done" | "error";
+    result?: unknown;
+    error?: string;
+    nodeProgress: unknown[];
+    /** Optional graph id associated with this run (if known) */
+    graphId?: string;
+    /** Timestamp (ms) when run was started */
+    startedAt?: number;
+  }>();
+  const graphRunControllers = new Map<string, AbortController>();
+
+  ipcMain.handle("graph:list", () => listGraphs());
+  ipcMain.handle("graph:load", (_e, id: string) => loadGraph(id));
+  ipcMain.handle("graph:save", (_e, graph: unknown) => saveGraph(graph as any));
+  ipcMain.handle("graph:delete", (_e, id: string) => deleteGraph(id));
+  ipcMain.handle("graph:validate", (_e, graph: unknown) => {
+    const errors = validateGraph(graph as any);
+    return { valid: errors.length === 0, errors };
+  });
+
+  ipcMain.handle("graph:run", async (_e, graphOrId: unknown, opts?: unknown) => {
+    const runId = `graph:${Date.now()}`;
+    const controller = new AbortController();
+    graphRunControllers.set(runId, controller);
+    const startedAt = Date.now();
+    const graphId = typeof graphOrId === "string" ? (graphOrId as string) : (graphOrId && (graphOrId as any).id ? (graphOrId as any).id : undefined);
+    activeGraphRuns.set(runId, { status: "running", nodeProgress: [], startedAt, graphId });
+
+    // Fire-and-forget — resolver returns the runId immediately.
+    runGraph(graphOrId as any, {
+      ...((opts as Record<string, unknown>) ?? {}),
+      signal: controller.signal,
+      onNodeStart: (nodeId: string, nodeName: string) => {
+        try { mainWindow?.webContents.send("graph:nodeStart", { runId, nodeId, nodeName }); } catch {}
+        // Record a lightweight "running" placeholder so renderer pages that query
+        // `graphRuns()` or `graphRunStatus()` can see the currently executing node
+        // even if they weren't listening when the start event was emitted.
+        try {
+          const entry = activeGraphRuns.get(runId);
+          if (entry) {
+            entry.nodeProgress.push({
+              nodeId,
+              nodeName,
+              output: null,
+              metadata: { elapsedMs: 0 },
+              status: "running",
+              timestamp: Date.now(),
+            });
+          }
+        } catch {}
+      },
+      onNodeComplete: (output: unknown) => {
+        const entry = activeGraphRuns.get(runId);
+        if (entry) {
+          try {
+            // Replace the last running placeholder for this node if present,
+            // otherwise just append the completed output.
+            const outAny = output as any;
+            const idx = entry.nodeProgress.map((p: any) => p).reverse().findIndex((p: any) => p && p.nodeId === outAny.nodeId && p.status === "running");
+            if (idx >= 0) {
+              // reverse index -> actual index
+              const realIdx = entry.nodeProgress.length - 1 - idx;
+              entry.nodeProgress[realIdx] = output;
+            } else {
+              entry.nodeProgress.push(output);
+            }
+          } catch (err) {
+            try { entry.nodeProgress.push(output); } catch {}
+          }
+        }
+        try { mainWindow?.webContents.send("graph:nodeComplete", { runId, nodeOutput: output }); } catch {}
+      },
+    }).then((result: unknown) => {
+      const prev = activeGraphRuns.get(runId) ?? { nodeProgress: [] } as any;
+      activeGraphRuns.set(runId, {
+        status: "done",
+        result,
+        nodeProgress: prev.nodeProgress ?? [],
+        startedAt: prev.startedAt ?? startedAt,
+        graphId: prev.graphId,
+      });
+      try { mainWindow?.webContents.send("graph:runComplete", { runId, result }); } catch {}
+      graphRunControllers.delete(runId);
+    }).catch((err: Error) => {
+      const error = err.message ?? String(err);
+      const prev = activeGraphRuns.get(runId) ?? { nodeProgress: [] } as any;
+      activeGraphRuns.set(runId, {
+        status: "error",
+        error,
+        nodeProgress: prev.nodeProgress ?? [],
+        startedAt: prev.startedAt ?? startedAt,
+        graphId: prev.graphId,
+      });
+      try { mainWindow?.webContents.send("graph:runComplete", { runId, error }); } catch {}
+      graphRunControllers.delete(runId);
+    });
+
+    return { runId };
+  });
+
+  // List active and recent graph runs so renderer can navigate to them even
+  // after leaving the graph builder page.
+  ipcMain.handle("graph:runs", () => {
+    const runs: any[] = [];
+    for (const [runId, info] of activeGraphRuns) {
+      runs.push({ runId, ...info });
+    }
+    return runs;
+  });
+
+  ipcMain.handle("graph:run:status", (_e, runId: string) => activeGraphRuns.get(runId) ?? null);
+
+  ipcMain.handle("graph:run:cancel", (_e, runId: string) => {
+    try { graphRunControllers.get(runId)?.abort(); } catch {}
+    graphRunControllers.delete(runId);
   });
 }
 

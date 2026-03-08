@@ -562,6 +562,46 @@ export class DiscordBridge extends EventEmitter {
       return typeof value === "string" ? value : JSON.stringify(value);
     });
   }
+
+  /**
+   * Resolve a human-friendly channel name (e.g. "emaily" or "#emaily")
+   * to a Discord channel snowflake ID. Returns `null` if not found.
+   */
+  public async resolveChannelByName(name: string): Promise<string | null> {
+    if (!this.client || !name) return null;
+    const normalize = (s: string) => s.toLowerCase().replace(/^#/, "").replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
+    const want = normalize(name);
+
+    try {
+      // Prefer configured guild when available to reduce search scope.
+      const guildIds = this.guildId ? [this.guildId] : Array.from(this.client.guilds.cache.keys());
+      for (const gid of guildIds) {
+        let guild: any;
+        try {
+          guild = await this.client.guilds.fetch(gid);
+        } catch {
+          guild = this.client.guilds.cache.get(gid);
+        }
+        if (!guild) continue;
+
+        let chans: any;
+        try {
+          chans = await guild.channels.fetch();
+        } catch {
+          chans = guild.channels?.cache ?? null;
+        }
+        if (!chans) continue;
+
+        for (const ch of chans.values()) {
+          const chName = (ch.name || "").toLowerCase().replace(/^#/, "").replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
+          if (chName === want) return ch.id;
+        }
+      }
+    } catch {
+      // best-effort: swallow errors and return null
+    }
+    return null;
+  }
 }
 
 // ── Active bridges registry ────────────────────────────────────────────
@@ -1062,8 +1102,63 @@ export class GlobalDiscordBridge extends EventEmitter {
       await channel.send({ content: chunks[i], ...opts });
     }
   }
-}
 
+  /**
+   * Resolve a human-friendly channel name (e.g. "emaily" or "#emaily")
+   * to a Discord channel snowflake ID. Returns `null` if not found.
+   */
+  public async resolveChannelByName(name: string): Promise<string | null> {
+    if (!this.client || !name) return null;
+    const normalize = (s: string) => s.toLowerCase().replace(/^#/, "").replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
+    const want = normalize(name);
+
+    // If the channelAgentMap contains a matching key that is already a snowflake, return it.
+    for (const key of this.channelAgentMap.keys()) {
+      const keyNorm = String(key).toLowerCase().replace(/^#/, "").replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
+      if (keyNorm === want && /^\d+$/.test(String(key))) {
+        return String(key);
+      }
+    }
+
+    try {
+      // Search through guilds and their channels.
+      for (const g of this.client.guilds.cache.values()) {
+        try {
+          const chans = await g.channels.fetch();
+          for (const ch of chans.values()) {
+            const chName = (ch.name || "").toLowerCase().replace(/^#/, "").replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
+            if (chName === want) return ch.id;
+          }
+        } catch {}
+      }
+    } catch {}
+
+    return null;
+  }
+
+  public async sendMessage(channelOrName: string, content: string, opts?: { replyToId?: string }): Promise<void> {
+    if (!this.client) throw new Error("Global Discord bridge is not running");
+    let channelId = String(channelOrName ?? "").trim();
+    if (!/^\d+$/.test(channelId)) {
+      const resolved = await this.resolveChannelByName(channelId);
+      if (!resolved) throw new Error(`Channel "${channelOrName}" could not be resolved to a Discord channel ID`);
+      channelId = resolved;
+    }
+    let ch: any;
+    try {
+      ch = await this.client.channels.fetch(channelId);
+    } catch {
+      ch = this.client.channels.cache.get(channelId);
+    }
+    if (!ch || typeof ch.send !== "function") {
+      throw new Error(`Channel "${channelOrName}" (${channelId}) is not a text channel or is not accessible`);
+    }
+    const sendOpts: any = { content };
+    if (opts?.replyToId) sendOpts.reply = { messageReference: opts.replyToId };
+    await ch.send(sendOpts);
+  }
+
+}
 // ── Agent name parsing ─────────────────────────────────────────────────
 
 /**

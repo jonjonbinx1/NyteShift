@@ -41,7 +41,7 @@ export function ToolList(): React.JSX.Element {
 
   const reload = () => {
     if (!window.solixApi) return;
-    window.solixApi.listTools().then(setTools).catch(console.error);
+    window.solixApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
   };
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export function ToolList(): React.JSX.Element {
       const res = await a.marketplaceUpdate({ category: "tools", contributor: t.contributor, name: t.name });
       flash(res?.message ?? (res?.updated ? "Updated" : "Already up to date"));
       await loadInstalledIndex();
-      window.solixApi!.listTools().then(setTools).catch(console.error);
+        window.solixApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -97,7 +97,7 @@ export function ToolList(): React.JSX.Element {
       const res = await a.marketplaceUninstall({ category: "tools", contributor: t.contributor, name: t.name });
       flash(res?.message ?? "Uninstalled");
       await loadInstalledIndex();
-      window.solixApi!.listTools().then(setTools).catch(console.error);
+        window.solixApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -169,7 +169,7 @@ export function ToolList(): React.JSX.Element {
       }
       flash(updated > 0 ? `Updated ${updated} tool${updated !== 1 ? "s" : ""}` : "All tools up to date");
       await loadInstalledIndex();
-      window.solixApi!.listTools().then(setTools).catch(console.error);
+      window.solixApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {

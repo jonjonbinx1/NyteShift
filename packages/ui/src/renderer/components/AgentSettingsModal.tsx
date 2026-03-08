@@ -237,7 +237,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
     }).catch(console.error);
 
     window.solixApi.listSkills().then(setSkills).catch(console.error);
-    window.solixApi.listTools().then(setTools).catch(console.error);
+    window.solixApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
 
     // Load Discord bridge config
     window.solixApi.discordBridgeConfigRead?.(agentName).then((cfg) => {

@@ -134,6 +134,28 @@ export { AgentController } from "./runtime/control/controller.js";
 // ── Utils (selective) ──────────────────────────────────────────────────
 export { toKebab, solixHome } from "./utils/index.js";
 
+// ── Agent Graph ────────────────────────────────────────────────────────
+export type {
+  ConditionPredicate,
+  ErrorPolicy,
+  GraphNode,
+  GraphEdge,
+  GraphDefinition,
+  NodeOutput,
+  GraphExecutionContext,
+  GraphRunOptions,
+  GraphExecutionResult,
+  GraphValidationError,
+} from "./runtime/graph/index.js";
+export {
+  runGraph,
+  validateGraph,
+  listGraphs,
+  loadGraph,
+  saveGraph,
+  deleteGraph,
+} from "./runtime/graph/index.js";
+
 // ── Sub-Agent Delegation ───────────────────────────────────────────────
 export { createSubAgentTools } from "./runtime/subagent/subagentTools.js";
 export type { SubAgentToolsOptions } from "./runtime/subagent/subagentTools.js";

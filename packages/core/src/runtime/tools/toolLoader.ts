@@ -92,5 +92,8 @@ export async function loadTools(): Promise<ToolContract[]> {
 /** Look up a single tool by `<contributor>/<tool-name>`. */
 export async function getTool(qualifiedName: string): Promise<ToolContract | undefined> {
   const tools = await loadTools();
+  if (!qualifiedName) return undefined;
+
+  // Only accept the fully-qualified name: "contributor/name".
   return tools.find((t) => `${t.contributor}/${t.name}` === qualifiedName);
 }
