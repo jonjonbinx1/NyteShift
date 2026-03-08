@@ -1,0 +1,184 @@
+import React, { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { useTheme } from "../theme/ThemeContext.js";
+import type { NodeRunEvent, NodeRunState, GraphExecutionResultInfo } from "../global.js";
+import { NODE_TYPE_STYLES } from "../components/GraphCanvas.js";
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+}
+
+export function GraphRunPage(): React.JSX.Element {
+  const { runId } = useParams<{ runId: string }>();
+  const { palette: C } = useTheme();
+  const navigate = useNavigate();
+
+  const [runLog, setRunLog] = useState<NodeRunEvent[]>([]);
+  const [runNodeStates, setRunNodeStates] = useState<Record<string, NodeRunState>>({});
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<GraphExecutionResultInfo | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const runIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!runId) return;
+    runIdRef.current = runId;
+
+    (async () => {
+      try {
+        const status = await window.solixApi?.graphRunStatus(runId);
+        if (status) {
+          setRunning(status.status === "running");
+          if (status.result) setRunResult(status.result as GraphExecutionResultInfo);
+          if (status.error) setRunError(status.error as string);
+          if ((status as any).startedAt) setRunStartedAt((status as any).startedAt as number);
+          // seed log from nodeProgress
+          if (Array.isArray((status as any).nodeProgress)) {
+            const seeded = (status as any).nodeProgress.map((n: any) => ({
+              nodeId: n.nodeId,
+              nodeName: n.nodeName,
+              nodeType: (n as any).nodeType ?? "llm",
+              startedAt: n.timestamp ?? Date.now(),
+              endedAt: n.timestamp ?? undefined,
+              elapsedMs: n.metadata?.elapsedMs ?? undefined,
+              status: n.status,
+              output: n.output,
+              error: n.error,
+            } as NodeRunEvent));
+            setRunLog(seeded);
+          }
+        }
+      } catch (err) {
+        console.error("graphRunStatus error:", err);
+      }
+    })();
+
+    window.solixApi?.onGraphNodeStart?.((data: any) => {
+      if (data.runId !== runIdRef.current) return;
+      const nodeId: string = data.nodeId;
+      const nodeName: string = data.nodeName;
+      const startedAt = Date.now();
+      setRunNodeStates(prev => ({ ...prev, [nodeId]: { status: "running", startedAt } }));
+      setRunLog(prev => [...prev, { nodeId, nodeName, nodeType: "llm", startedAt, status: "running" } as NodeRunEvent]);
+    });
+
+    window.solixApi?.onGraphNodeComplete?.((data: any) => {
+      if (data.runId !== runIdRef.current) return;
+      const no = data.nodeOutput;
+      const nodeId: string = no.nodeId;
+      const elapsedMs: number | undefined = no.metadata?.elapsedMs;
+      const iteration: number | undefined = no.metadata?.iteration;
+      const now = Date.now();
+      setRunNodeStates(prev => ({
+        ...prev,
+        [nodeId]: {
+          ...(prev[nodeId] ?? { startedAt: now }),
+          status: no.status as NodeRunState["status"],
+          elapsedMs,
+          iteration,
+          output: no.output,
+          error: no.error,
+        },
+      }));
+      setRunLog(prev => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]!.nodeId === nodeId && prev[i]!.status === "running") {
+            const updated = [...prev];
+            updated[i] = {
+              ...updated[i]!,
+              status: no.status as NodeRunEvent["status"],
+              endedAt: now,
+              elapsedMs: elapsedMs ?? (now - updated[i]!.startedAt),
+              iteration,
+              output: no.output,
+              error: no.error,
+            };
+            return updated;
+          }
+        }
+
+        // No running entry found (start event missed) — append a completed entry
+        const startedAtApprox = (no.timestamp as number | undefined) ?? (now - (elapsedMs ?? 0));
+        const nodeName = (no.nodeName as string | undefined) ?? nodeId;
+        const newEntry: NodeRunEvent = {
+          nodeId,
+          nodeName,
+          nodeType: (no as any).nodeType ?? "llm",
+          startedAt: startedAtApprox,
+          endedAt: now,
+          elapsedMs: elapsedMs ?? Math.max(0, now - startedAtApprox),
+          status: no.status as NodeRunEvent["status"],
+          output: no.output,
+          error: no.error,
+          iteration,
+        } as NodeRunEvent;
+        return [...prev, newEntry];
+      });
+    });
+
+    window.solixApi?.onGraphRunComplete?.((data: any) => {
+      if (data.runId !== runIdRef.current) return;
+      setRunning(false);
+      if (data.result) setRunResult(data.result);
+      if (data.error) setRunError(data.error);
+    });
+
+    // no explicit cleanup because preload listeners are global (matches existing patterns)
+  }, [runId]);
+
+  const handleCancel = async () => {
+    if (!runId) return;
+    try { await window.solixApi?.graphRunCancel(runId); } catch (err) { console.error(err); }
+    setRunning(false);
+  };
+
+  const elapsed = runStartedAt && running ? Date.now() - runStartedAt : runResult?.elapsedMs ?? 0;
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ height: 52, display: "flex", alignItems: "center", gap: 10, padding: "0 14px", borderBottom: `1px solid ${C.surface1}`, background: C.surface0 }}>
+        <button onClick={() => navigate(-1)} style={{ background: "none", border: "none", cursor: "pointer", color: C.subtext0 }}>← Back</button>
+        <div style={{ fontWeight: 700 }}>{runId}</div>
+        <div style={{ flex: 1 }} />
+        {running ? <button onClick={handleCancel} style={{ padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.red}`, background: `${C.red}22`, color: C.red }}>Stop</button>
+          : <div style={{ color: runResult ? C.green : runError ? C.red : C.overlay0 }}>{runResult ? "Completed" : runError ? `Error: ${runError}` : "Idle"}</div>}
+      </div>
+
+      <div style={{ padding: 12, overflow: "auto", flex: 1 }}>
+        {runLog.length === 0 && !runResult && !runError && (
+          <div style={{ color: C.overlay0 }}>No events yet.</div>
+        )}
+
+        {runLog.map(ev => {
+          const key = `${ev.nodeId}-${ev.startedAt}`;
+          const nodeTypeCfg = NODE_TYPE_STYLES[ev.nodeType as keyof typeof NODE_TYPE_STYLES];
+          const isActive = ev.status === "running";
+          const statusColor = isActive ? C.yellow : ev.status === "success" ? C.green : ev.status === "error" ? C.red : C.overlay0;
+          const statusIcon = isActive ? "⏳" : ev.status === "success" ? "✓" : ev.status === "error" ? "✗" : "—";
+          return (
+            <div key={key} style={{ padding: 8, borderRadius: 6, border: `1px solid ${C.surface1}`, marginBottom: 8, display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <div style={{ width: 18, textAlign: "center", color: statusColor }}>{statusIcon}</div>
+              <div style={{ width: 22, height: 22, borderRadius: 4, background: nodeTypeCfg?.color ?? C.surface2, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>{nodeTypeCfg?.icon ?? "?"}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: isActive ? 700 : 600 }}>{ev.nodeName}</div>
+                {ev.output !== undefined && <pre style={{ marginTop: 6, padding: 8, background: C.mantle, borderRadius: 6, fontSize: "0.85rem", overflow: "auto" }}>{typeof ev.output === "string" ? ev.output : JSON.stringify(ev.output, null, 2)}</pre>}
+                {ev.error && <div style={{ color: C.red, marginTop: 6 }}>{ev.error}</div>}
+              </div>
+              <div style={{ textAlign: "right", minWidth: 64 }}>{ev.elapsedMs !== undefined ? formatMs(ev.elapsedMs) : isActive ? "…" : ""}</div>
+            </div>
+          );
+        })}
+
+        {runResult && !runError && (
+          <div style={{ marginTop: 12, padding: 10, borderRadius: 6, border: `1px solid ${C.green}44`, background: C.mantle }}>
+            <div style={{ fontWeight: 700, color: C.green, marginBottom: 6 }}>Final Output</div>
+            <pre style={{ margin: 0, overflow: "auto" }}>{typeof runResult.finalOutput === "string" ? runResult.finalOutput : JSON.stringify(runResult.finalOutput, null, 2)}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

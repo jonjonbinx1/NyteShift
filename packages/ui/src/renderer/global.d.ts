@@ -33,9 +33,23 @@ export interface ModelInfo {
   id: string;
   contextWindow: number;
   maxOutputTokens: number;
-  description?: string;
+  description: string;
   /** The provider this model belongs to (populated by providers:listModels). */
   provider?: string;
+}
+
+export interface ToolInfo {
+  name: string;
+  contributor: string;
+  description?: string;
+  /** Optional declarative config fields (legacy) */
+  config?: ConfigFieldDefinitionInfo[];
+  /** Optional formal spec describing input/output JSON schemas */
+  spec?: {
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+    [k: string]: unknown;
+  };
 }
 
 // ── Sub-Agent Delegation ──────────────────────────────────────────
@@ -182,7 +196,7 @@ export interface SolixApi {
   readSoul(name: string): Promise<string>;
   writeSoul(name: string, content: string): Promise<void>;
   listSkills(): Promise<Array<{ frontmatter: { name: string; contributor: string; description: string; config?: ConfigFieldDefinitionInfo[] } }>>;
-  listTools(): Promise<Array<{ name: string; contributor: string; description: string; config?: ConfigFieldDefinitionInfo[] }>>;
+  listTools(): Promise<ToolInfo[]>;
   // Providers
   listProviders(): Promise<Array<{ id: string }>>;
   /** Fetch models from a specific provider (or all if omitted). */
@@ -348,7 +362,176 @@ export interface SolixApi {
   /** Delete ALL memories for an agent (agent reset). */
   memoryClear(agentName: string): Promise<void>;
   /** Keyword search across all memory fields. */
-  memorySearch(agentName: string, query: string): Promise<MemoryEntryInfo[]>;}
+  memorySearch(agentName: string, query: string): Promise<MemoryEntryInfo[]>;
+
+  // ── Agent Graph ────────────────────────────────────────────────────
+  graphList(): Promise<GraphDefinitionInfo[]>;
+  graphLoad(id: string): Promise<GraphDefinitionInfo | null>;
+  graphSave(graph: GraphDefinitionInfo): Promise<void>;
+  graphDelete(id: string): Promise<void>;
+  graphValidate(graph: GraphDefinitionInfo): Promise<{ valid: boolean; errors: GraphValidationErrorInfo[] }>;
+  /** Start a graph run — returns immediately with a runId. The run progresses asynchronously. */
+  graphRun(graphOrId: string | GraphDefinitionInfo, opts?: { input?: Record<string, unknown>; provider?: string; model?: string }): Promise<{ runId: string }>;
+  graphRunStatus(runId: string): Promise<GraphRunStatusInfo | null>;
+  graphRuns(): Promise<Array<{ runId: string; status: "running" | "done" | "error"; result?: GraphExecutionResultInfo; error?: string; nodeProgress: NodeOutputInfo[]; graphId?: string; startedAt?: number }>>;
+  graphRunCancel(runId: string): Promise<void>;
+  onGraphNodeStart(cb: (data: { runId: string; nodeId: string; nodeName: string }) => void): void;
+  onGraphNodeComplete(cb: (data: { runId: string; nodeOutput: NodeOutputInfo }) => void): void;
+  onGraphRunComplete(cb: (data: { runId: string; result?: GraphExecutionResultInfo; error?: string }) => void): void;
+}
+
+// ── Agent Graph Types ──────────────────────────────────────────────────
+
+export interface ConditionPredicateInfo {
+  ref: string;
+  operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "starts_with" | "ends_with" | "exists" | "not_exists" | "matches";
+  value?: unknown;
+  /** How the comparison value should be interpreted in the UI/runtime */
+  valueType?: "auto" | "string" | "number" | "boolean" | "json";
+}
+
+export interface ErrorPolicyInfo {
+  type: "halt" | "retry" | "skip" | "fallback";
+  maxRetries?: number;
+  retryDelayMs?: number;
+  retryBackoffMultiplier?: number;
+  fallbackValue?: unknown;
+}
+
+export interface OperationActionInfo {
+  op: "set" | "inc" | "dec" | "copy" | "toggle" | "append";
+  varName: string;
+  value?: unknown;
+  fromRef?: string;
+  amount?: number;
+}
+
+export interface GraphNodeInfo {
+  id: string;
+  name: string;
+  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation";
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+  promptTemplate?: string;
+  agentName?: string;
+  maxSteps?: number;
+  skills?: string[];
+  tools?: string[];
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  branches?: Array<{ label: string; condition: ConditionPredicateInfo; target: string }>;
+  defaultTarget?: string;
+  operationAction?: OperationActionInfo;
+  outputKey?: string;
+  errorPolicy?: ErrorPolicyInfo;
+  position?: { x: number; y: number };
+}
+
+export interface GraphEdgeInfo {
+  id: string;
+  source: string;
+  target: string;
+  condition?: ConditionPredicateInfo;
+  label?: string;
+}
+
+export interface GraphDefinitionInfo {
+  id: string;
+  name: string;
+  description?: string;
+  version: string;
+  nodes: GraphNodeInfo[];
+  edges: GraphEdgeInfo[];
+  defaultProvider?: string;
+  defaultModel?: string;
+  errorPolicy?: ErrorPolicyInfo;
+  initVars?: Record<string, unknown>;
+  maxIterations?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NodeOutputInfo {
+  nodeId: string;
+  nodeName: string;
+  output: unknown;
+  rawOutput?: string;
+  metadata: {
+    provider?: string;
+    model?: string;
+    tokens?: { prompt: number; completion: number };
+    elapsedMs: number;
+    toolCalls?: Array<{ name: string; input: unknown; output: unknown }>;
+    agentSteps?: number;
+    iteration?: number;
+  };
+  status: "success" | "error" | "skipped";
+  error?: string;
+  timestamp: number;
+}
+
+export interface GraphExecutionResultInfo {
+  graphId: string;
+  graphName: string;
+  traceId: string;
+  nodeResults: NodeOutputInfo[];
+  finalOutput: unknown;
+  status: "completed" | "failed" | "aborted";
+  error?: string;
+  elapsedMs: number;
+  startedAt: number;
+  completedAt: number;
+}
+
+export interface GraphValidationErrorInfo {
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+  field?: string;
+}
+
+export interface GraphRunStatusInfo {
+  status: "running" | "done" | "error";
+  result?: GraphExecutionResultInfo;
+  error?: string;
+  nodeProgress: NodeOutputInfo[];
+}
+
+/** Live state of a single node during or after a graph run. */
+export interface NodeRunState {
+  status: "running" | "success" | "error" | "skipped";
+  /** Loop iteration index (0-based), set for nodes inside SCC loops. */
+  iteration?: number;
+  /** Execution elapsed time in ms (available after completion). */
+  elapsedMs?: number;
+  /** Client-side timestamp (ms) when this node began executing. */
+  startedAt: number;
+  /** The node's output value (available after completion). */
+  output?: unknown;
+  /** Error message if status is "error". */
+  error?: string;
+}
+
+/** A single entry in the run execution log timeline. */
+export interface NodeRunEvent {
+  nodeId: string;
+  nodeName: string;
+  nodeType: string;
+  /** Loop iteration index (0-based). */
+  iteration?: number;
+  /** Client-side timestamp when execution started. */
+  startedAt: number;
+  /** Client-side timestamp when execution finished. */
+  endedAt?: number;
+  /** Milliseconds taken (available after completion). */
+  elapsedMs?: number;
+  status: "running" | "success" | "error" | "skipped";
+  output?: unknown;
+  error?: string;
+}
 
 declare global {
   interface Window {

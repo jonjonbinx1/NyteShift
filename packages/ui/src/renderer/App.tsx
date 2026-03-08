@@ -10,6 +10,10 @@ import { ProviderConfig } from "./pages/ProviderConfig.js";
 import { MarketplaceView } from "./pages/MarketplaceView.js";
 import { LogsView } from "./pages/LogsView.js";
 import { TriggersView } from "./pages/TriggersView.js";
+import { GraphsView } from "./pages/GraphsView.js";
+import { GraphBuilderPage } from "./pages/GraphBuilderPage.js";
+import { GraphRunsView } from "./pages/GraphRunsView.js";
+import { GraphRunPage } from "./pages/GraphRunPage.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { ChatStoreProvider } from "./stores/ChatStore.js";
 import { ThemeProvider, useTheme } from "./theme/ThemeContext.js";
@@ -20,13 +24,15 @@ function MainArea(): React.JSX.Element {
   const location = useLocation();
   // Agent detail needs full height with no padding so the 3-panel chat fills the window.
   const isAgentDetail = /^\/agents\/[^/]+/.test(location.pathname);
+  const isGraphBuilder = /^\/graphs\//.test(location.pathname);
+  const isFullHeight = isAgentDetail || isGraphBuilder;
 
   return (
     <main
       style={{
         flex: 1,
-        overflow: isAgentDetail ? "hidden" : "auto",
-        padding: isAgentDetail ? 0 : "1.5rem",
+        overflow: isFullHeight ? "hidden" : "auto",
+        padding: isFullHeight ? 0 : "1.5rem",
         display: "flex",
         flexDirection: "column",
       }}
@@ -41,6 +47,10 @@ function MainArea(): React.JSX.Element {
           <Route path="/providers" element={<ProviderConfig />} />
           <Route path="/marketplace" element={<MarketplaceView />} />
           <Route path="/triggers" element={<TriggersView />} />
+          <Route path="/graphs" element={<GraphsView />} />
+          <Route path="/graphs/:id" element={<GraphBuilderPage />} />
+          <Route path="/graph-runs" element={<GraphRunsView />} />
+          <Route path="/graph-run/:runId" element={<GraphRunPage />} />
           <Route path="/logs" element={<LogsView />} />
         </Routes>
       </ErrorBoundary>

@@ -193,4 +193,25 @@ contextBridge.exposeInMainWorld("solixApi", {
   memoryClear: (agentName: string) =>
     ipcRenderer.invoke("memory:clear", agentName),
   memorySearch: (agentName: string, query: string) =>
-    ipcRenderer.invoke("memory:search", agentName, query),});
+    ipcRenderer.invoke("memory:search", agentName, query),
+
+  // ── Agent Graph ────────────────────────────────────────────────────
+  graphList: () => ipcRenderer.invoke("graph:list"),
+  graphLoad: (id: string) => ipcRenderer.invoke("graph:load", id),
+  graphSave: (graph: unknown) => ipcRenderer.invoke("graph:save", graph),
+  graphDelete: (id: string) => ipcRenderer.invoke("graph:delete", id),
+  graphValidate: (graph: unknown) => ipcRenderer.invoke("graph:validate", graph),
+  graphRun: (graphOrId: unknown, opts?: unknown) => ipcRenderer.invoke("graph:run", graphOrId, opts),
+  graphRunStatus: (runId: string) => ipcRenderer.invoke("graph:run:status", runId),
+  graphRuns: () => ipcRenderer.invoke("graph:runs"),
+  graphRunCancel: (runId: string) => ipcRenderer.invoke("graph:run:cancel", runId),
+  onGraphNodeStart: (cb: (data: unknown) => void) => {
+    ipcRenderer.on("graph:nodeStart", (_e, data) => cb(data));
+  },
+  onGraphNodeComplete: (cb: (data: unknown) => void) => {
+    ipcRenderer.on("graph:nodeComplete", (_e, data) => cb(data));
+  },
+  onGraphRunComplete: (cb: (data: unknown) => void) => {
+    ipcRenderer.on("graph:runComplete", (_e, data) => cb(data));
+  },
+});

@@ -180,7 +180,7 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
     if (!window.solixApi) return;
     window.solixApi.listProviders().then((ps) => setProviders(ps.map((p) => p.id))).catch(console.error);
     window.solixApi.listSkills().then(setSkills).catch(console.error);
-    window.solixApi.listTools().then(setTools).catch(console.error);
+    window.solixApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
   }, []);
 
   // Fetch models whenever the selected provider changes

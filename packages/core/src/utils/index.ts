@@ -28,6 +28,11 @@ export function triggersDir(): string {
   return join(solixHome(), "triggers");
 }
 
+/** ~/.solix/graphs */
+export function graphsDir(): string {
+  return join(solixHome(), "graphs");
+}
+
 /** ~/.solix/config.json — global user config */
 export function globalConfigPath(): string {
   return join(solixHome(), "config.json");
