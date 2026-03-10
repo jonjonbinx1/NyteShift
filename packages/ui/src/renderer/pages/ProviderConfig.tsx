@@ -25,15 +25,15 @@ export function ProviderConfig(): React.JSX.Element {
       .catch(console.error);
     window.solixApi.readConfig().then((cfg) => {
       setConfig(cfg || {});
-      if (cfg?.defaultProvider) setSelectedProvider(cfg.defaultProvider);
-      if (cfg?.defaultModel) setSelectedModel(cfg.defaultModel);
+      if (cfg?.defaultProvider) setSelectedProvider(cfg.defaultProvider as string);
+      if (cfg?.defaultModel) setSelectedModel(cfg.defaultModel as string);
       if (typeof cfg?.temperature !== "undefined") setTemperature(String(cfg.temperature));
       if (typeof cfg?.maxTokens !== "undefined") setMaxTokens(String(cfg.maxTokens));
     }).catch(console.error);
     // subscribe to provider changes (e.g. side-loaded user providers)
     try {
       window.solixApi.onProvidersChanged(() => {
-        window.solixApi.listProviders().then((ps) => {
+        window.solixApi!.listProviders().then((ps) => {
           setProviders(ps);
           if (ps.length && !selectedProvider) setSelectedProvider(ps[0].id);
         }).catch(console.error);
@@ -75,7 +75,7 @@ export function ProviderConfig(): React.JSX.Element {
     if (typeof parsedTemp !== "undefined" && !Number.isNaN(parsedTemp)) next.temperature = parsedTemp;
     if (typeof parsedMax !== "undefined" && !Number.isNaN(parsedMax)) next.maxTokens = parsedMax;
     setConfig(next);
-    await window.solixApi.writeConfig(next);
+    await window.solixApi!.writeConfig(next);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -90,7 +90,7 @@ export function ProviderConfig(): React.JSX.Element {
     if (typeof parsedTemp !== "undefined" && !Number.isNaN(parsedTemp)) next.temperature = parsedTemp;
     if (typeof parsedMax !== "undefined" && !Number.isNaN(parsedMax)) next.maxTokens = parsedMax;
     setConfig(next);
-    await window.solixApi.writeConfig(next);
+    await window.solixApi!.writeConfig(next);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -163,7 +163,7 @@ export function ProviderConfig(): React.JSX.Element {
           </label>
 
           <button onClick={() => {
-            if (selectedProvider) window.solixApi.listProviderModels(selectedProvider).then((m:any) => setModels(m)).catch(console.error);
+            if (selectedProvider) window.solixApi!.listProviderModels(selectedProvider).then((m:any) => setModels(m)).catch(console.error);
           }} style={{ padding: "6px 12px" }}>Refresh Models</button>
 
           <button onClick={handleSetDefaultModel} style={{ padding: "6px 12px" }}>Set Default</button>

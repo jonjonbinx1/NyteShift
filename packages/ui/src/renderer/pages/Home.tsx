@@ -164,8 +164,8 @@ export function Home(): React.JSX.Element {
               gap: 10,
               transition: "background 0.15s",
             }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.surface1)}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = C.surface0)}
+            onMouseEnter={(e: React.MouseEvent) => ((e.currentTarget as HTMLElement).style.background = C.surface1)}
+            onMouseLeave={(e: React.MouseEvent) => ((e.currentTarget as HTMLElement).style.background = C.surface0)}
           >
             <span style={{ fontSize: "1.4rem", flexShrink: 0, marginTop: 2 }}>{l.icon}</span>
             <div>

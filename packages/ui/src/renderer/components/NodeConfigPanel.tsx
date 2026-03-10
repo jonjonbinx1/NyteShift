@@ -9,8 +9,8 @@ const OPERATORS = [
   { value: "neq", label: "not equals" },
   { value: "gt", label: "greater than" },
   { value: "lt", label: "less than" },
-  { value: "gte", label: "≥" },
-  { value: "lte", label: "≤" },
+  { value: "gte", label: "â‰¥" },
+  { value: "lte", label: "â‰¤" },
   { value: "contains", label: "contains" },
   { value: "not_contains", label: "does not contain" },
   { value: "starts_with", label: "starts with" },
@@ -23,15 +23,30 @@ const OPERATORS = [
 const NO_VALUE_OPS = ["exists", "not_exists"];
 
 const ERROR_POLICY_TYPES = [
-  { value: "halt", label: "Halt — stop the graph on error" },
-  { value: "retry", label: "Retry — retry the node N times" },
-  { value: "skip", label: "Skip — skip this node and continue" },
-  { value: "fallback", label: "Fallback — use a fallback value" },
+  { value: "halt", label: "Halt â€” stop the graph on error" },
+  { value: "retry", label: "Retry â€” retry the node N times" },
+  { value: "skip", label: "Skip â€” skip this node and continue" },
+  { value: "fallback", label: "Fallback â€” use a fallback value" },
 ];
+
+// Helper: extract pick and suffix from a template string like {{fetch.output.messages.0.uid}}
+const extractTemplateParts = (val?: unknown) => {
+  if (typeof val !== "string") return { pick: "", suffix: "" };
+  const m = val.match(/^\s*\{\{\s*([^}\s]+)\s*\}\}\s*$/);
+  if (!m) return { pick: "", suffix: "" };
+  const inner = m[1];
+  const mv = inner.match(/^vars\.([^.]+)(?:\.(.*))?$/);
+  if (mv) return { pick: `vars:${mv[1]}`, suffix: mv[2] ?? "" };
+  const mn = inner.match(/^([^.]*)\.output(?:\.(.*))?$/);
+  if (mn) return { pick: `node:${mn[1]}`, suffix: mn[2] ?? "" };
+  return { pick: "", suffix: inner };
+};
+
+const dotToBracket = (s: string) => s.replace(/\.(\d+)(?=\.|$)/g, '[$1]');
 
 interface Props {
   node: GraphNodeInfo;
-  allNodes: GraphNodeInfo[];
+  allNodes?: GraphNodeInfo[];
   agents: string[];
   tools: ToolInfo[];
   providers: string[];
@@ -44,6 +59,70 @@ interface Props {
 
 export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars, onChange, onDelete, onDuplicate, onOpenVars }: Props): React.JSX.Element {
   const { palette: C } = useTheme();
+
+  // Resizable panel state
+  const MIN_WIDTH = 220;
+  const MAX_WIDTH = 900;
+  const [panelWidth, setPanelWidth] = useState<number>(290);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onMouseMove = useCallback((ev: MouseEvent) => {
+    if (!dragRef.current) return;
+    const dx = dragRef.current.startX - ev.clientX;
+    const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(dragRef.current.startWidth + dx)));
+    setPanelWidth(next);
+  }, []);
+
+  const onMouseUp = useCallback(() => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }, [onMouseMove]);
+
+  const onMouseDownResizer = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: panelWidth };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [panelWidth, onMouseMove, onMouseUp]);
+
+  const onTouchMove = useCallback((ev: TouchEvent) => {
+    if (!dragRef.current) return;
+    const t = ev.touches[0];
+    const dx = dragRef.current.startX - t.clientX;
+    const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(dragRef.current.startWidth + dx)));
+    setPanelWidth(next);
+  }, []);
+
+  const onTouchEnd = useCallback(() => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    document.removeEventListener("touchmove", onTouchMove as any);
+    document.removeEventListener("touchend", onTouchEnd as any);
+    document.body.style.userSelect = "";
+  }, [onTouchMove]);
+
+  const onTouchStartResizer = useCallback((e: React.TouchEvent) => {
+    const t = e.touches[0];
+    dragRef.current = { startX: t.clientX, startWidth: panelWidth };
+    document.addEventListener("touchmove", onTouchMove as any, { passive: false } as any);
+    document.addEventListener("touchend", onTouchEnd as any);
+    document.body.style.userSelect = "none";
+  }, [panelWidth, onTouchMove, onTouchEnd]);
+
+  useEffect(() => {
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("touchmove", onTouchMove as any);
+      document.removeEventListener("touchend", onTouchEnd as any);
+    };
+  }, [onMouseMove, onMouseUp, onTouchMove, onTouchEnd]);
 
   const set = useCallback(<K extends keyof GraphNodeInfo>(key: K, value: GraphNodeInfo[K]) => {
     onChange({ ...node, [key]: value });
@@ -64,7 +143,8 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   const textareaStyle: React.CSSProperties = { ...inputStyle, resize: "vertical", minHeight: 70, fontFamily: "monospace", fontSize: "0.75rem" };
   const selectStyle: React.CSSProperties = { ...inputStyle };
 
-  const otherNodes = allNodes.filter(n => n.id !== node.id);
+  const otherNodes = (allNodes ?? []).filter((n: GraphNodeInfo) => n.id !== node.id);
+  
   const [models, setModels] = useState<ModelInfo[]>([]);
   const qualifiedNodeToolName = node.toolName ?? "";
   const selectedTool = tools.find(t => `${t.contributor}/${t.name}` === qualifiedNodeToolName || t.name === qualifiedNodeToolName);
@@ -90,34 +170,45 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
 
   // Tool input builder state
   const [toolInputMode, setToolInputMode] = useState<"fields" | "json">(() => (typeof node.toolInput === "string" ? "json" : "fields"));
-  const [toolFields, setToolFields] = useState<Array<{ key: string; value: string }>>(() => {
+  const [toolFields, setToolFields] = useState<Array<{ key: string; value: string; isTemplate?: boolean }>>(() => {
     try {
       const inp = node.toolInput ?? {};
       const obj = typeof inp === "string" ? JSON.parse(inp) : inp;
-      if (obj && typeof obj === "object") return Object.entries(obj).map(([k, v]) => ({ key: k, value: typeof v === "string" ? v : JSON.stringify(v) }));
+      if (obj && typeof obj === "object") return Object.entries(obj).map(([k, v]) => {
+        const str = typeof v === "string" ? v : JSON.stringify(v);
+        const parts = extractTemplateParts(str);
+        return { key: k, value: str, isTemplate: !!parts.pick };
+      });
     } catch {}
     return [];
   });
   const [rawToolJson, setRawToolJson] = useState<string>(() => typeof node.toolInput === "string" ? node.toolInput : JSON.stringify(node.toolInput ?? {}, null, 2));
   const rawJsonRef = useRef<HTMLTextAreaElement | null>(null);
+  const isJsonFocused = useRef(false);
   const [varPickerIndex, setVarPickerIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    // sync when node.toolInput externally changes
+    // sync when node.toolInput externally changes â€” skip while user is actively editing
+    if (isJsonFocused.current) return;
     try {
       const inp = node.toolInput ?? {};
       if (typeof inp === "string") setRawToolJson(inp);
       else setRawToolJson(JSON.stringify(inp, null, 2));
       if (typeof inp === "object" && inp !== null) {
-        setToolFields(Object.entries(inp).map(([k, v]) => ({ key: k, value: typeof v === "string" ? v : JSON.stringify(v) })));
+        setToolFields(Object.entries(inp).map(([k, v]) => {
+          const str = typeof v === "string" ? v : JSON.stringify(v);
+          const parts = extractTemplateParts(str);
+          return { key: k, value: str, isTemplate: !!parts.pick };
+        }));
       }
     } catch {}
   }, [node.toolInput]);
 
-  const commitFields = (fields: Array<{ key: string; value: string }>) => {
+  const commitFields = (fields: Array<{ key: string; value: string; isTemplate?: boolean }>) => {
     const obj: Record<string, unknown> = {};
     for (const f of fields) {
       if (!f.key) continue;
+      if (f.isTemplate) { obj[f.key] = f.value; continue; }
       try { obj[f.key] = JSON.parse(f.value); } catch { obj[f.key] = f.value; }
     }
     set("toolInput", obj as any);
@@ -129,20 +220,24 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
     try { setRawToolJson(JSON.stringify(v ?? {}, null, 2)); } catch { setRawToolJson(String(v)); }
   };
 
-  const updateField = (i: number, patch: Partial<{ key: string; value: string }>) => {
+  const updateField = (i: number, patch: Partial<{ key: string; value: string; isTemplate?: boolean }>) => {
     const next = toolFields.map((f, idx) => idx === i ? { ...f, ...patch } : f);
     setToolFields(next);
     commitFields(next);
   };
 
-  const addField = () => { const next = [...toolFields, { key: "", value: "" }]; setToolFields(next); };
+  const addField = () => { const next = [...toolFields, { key: "", value: "", isTemplate: false }]; setToolFields(next); };
   const removeField = (i: number) => { const next = toolFields.filter((_, idx) => idx !== i); setToolFields(next); commitFields(next); };
 
   const importJsonToFields = () => {
     try {
       const parsed = JSON.parse(rawToolJson);
       if (parsed && typeof parsed === "object") {
-        const next = Object.entries(parsed).map(([k, v]) => ({ key: k, value: typeof v === "string" ? v : JSON.stringify(v) }));
+        const next = Object.entries(parsed).map(([k, v]) => {
+          const str = typeof v === "string" ? v : JSON.stringify(v);
+          const parts = extractTemplateParts(str);
+          return { key: k, value: str, isTemplate: !!parts.pick };
+        });
         setToolFields(next);
         setToolInputMode("fields");
         commitFields(next);
@@ -150,40 +245,59 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
     } catch {}
   };
 
-  const insertVarIntoRawJson = (varName: string) => {
-    const tpl = `{{vars.${varName}}}`;
+  const insertRefIntoRawJson = (refKey: string) => {
+    if (!refKey) return;
+    let tpl: string;
+    if (refKey.startsWith("{{")) tpl = refKey;
+    else if (refKey.startsWith("vars:")) tpl = `{{vars.${refKey.slice(5)}}}`;
+    else if (refKey.startsWith("node:")) tpl = `{{${refKey.slice(5)}.output}}`;
+    else tpl = `{{${refKey}}}`;
     if (rawJsonRef.current) {
       const el = rawJsonRef.current;
       const start = el.selectionStart ?? rawToolJson.length;
       const end = el.selectionEnd ?? start;
       const next = rawToolJson.slice(0, start) + tpl + rawToolJson.slice(end);
       setRawToolJson(next);
-      try { const parsed = JSON.parse(next); set("toolInput", parsed as any); } catch { set("toolInput", next as any); }
-      // restore focus
+      // restore cursor â€” commit happens on blur
       setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = start + tpl.length; }, 0);
       return;
     }
-    const appended = rawToolJson + tpl;
-    setRawToolJson(appended);
-    try { const parsed = JSON.parse(appended); set("toolInput", parsed as any); } catch { set("toolInput", appended as any); }
+    setRawToolJson(rawToolJson + tpl);
   };
 
   const onRawJsonChange = (s: string) => {
+    // Only update local display state â€” commit to node on blur to avoid
+    // the useEffect reformatting the textarea and jumping the cursor.
     setRawToolJson(s);
-    try { const parsed = JSON.parse(s); set("toolInput", parsed as any); } catch { set("toolInput", s as any); }
   };
 
   const tryParseRawJson = () => {
-    try { const parsed = JSON.parse(rawToolJson); set("toolInput", parsed as any); setToolFields(Object.entries(parsed).map(([k, v]) => ({ key: k, value: typeof v === "string" ? v : JSON.stringify(v) }))); } catch {}
+    try {
+      const parsed = JSON.parse(rawToolJson);
+      set("toolInput", parsed as any);
+      setToolFields(Object.entries(parsed).map(([k, v]) => {
+        const str = typeof v === "string" ? v : JSON.stringify(v);
+        const parts = extractTemplateParts(str);
+        return { key: k, value: str, isTemplate: !!parts.pick };
+      }));
+    } catch {}
   };
 
   return (
     <div style={{
-      width: 290, background: C.surface0,
+      width: panelWidth, minWidth: 220, background: C.surface0, position: "relative",
       borderLeft: `1px solid ${C.surface1}`,
       display: "flex", flexDirection: "column",
       overflowY: "auto", flexShrink: 0,
     }}>
+      {/* Resizer (drag this) */}
+      <div
+        onMouseDown={onMouseDownResizer}
+        onTouchStart={onTouchStartResizer}
+        role="separator"
+        aria-orientation="vertical"
+        style={{ position: "absolute", left: -8, top: 0, bottom: 0, width: 16, cursor: "col-resize", zIndex: 40 }}
+      />
       {/* Header */}
       <div style={{
         padding: "12px 14px 10px",
@@ -192,14 +306,14 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
       }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: "0.85rem" }}>Node Config</div>
-          <div style={{ fontSize: "0.7rem", color: C.subtext0, marginTop: 2 }}>{node.type} · {node.id}</div>
+          <div style={{ fontSize: "0.7rem", color: C.subtext0, marginTop: 2 }}>{node.type} Â· {node.id}</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {onDuplicate && (
-            <button onClick={onDuplicate} style={{ ...btnSm(C), color: C.blue }} title="Duplicate">⧉</button>
+            <button onClick={onDuplicate} style={{ ...btnSm(C), color: C.blue }} title="Duplicate">â§‰</button>
           )}
           {onDelete && node.type !== "input" && node.type !== "output" && (
-            <button onClick={onDelete} style={{ ...btnSm(C), color: C.red }} title="Delete">✕</button>
+            <button onClick={onDelete} style={{ ...btnSm(C), color: C.red }} title="Delete">âœ•</button>
           )}
         </div>
       </div>
@@ -231,7 +345,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </div>
         )}
 
-        {/* ── LLM fields ────────────────────────────────────────── */}
+        {/* â”€â”€ LLM fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type === "llm" && (
           <>
             <div style={sectionStyle}>
@@ -275,7 +389,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
             </div>
             <div style={sectionStyle}>
               <label style={labelStyle}>System Prompt</label>
-              <textarea style={textareaStyle} value={node.systemPrompt ?? ""} placeholder="You are…"
+              <textarea style={textareaStyle} value={node.systemPrompt ?? ""} placeholder="You areâ€¦"
                 onChange={e => set("systemPrompt", e.target.value || undefined)} />
             </div>
             <div style={sectionStyle}>
@@ -290,13 +404,13 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </>
         )}
 
-        {/* ── Agent fields ───────────────────────────────────────── */}
+        {/* â”€â”€ Agent fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type === "agent" && (
           <>
             <div style={sectionStyle}>
               <label style={labelStyle}>Agent</label>
               <select style={selectStyle} value={node.agentName ?? ""} onChange={e => set("agentName", e.target.value || undefined)}>
-                <option value="">— select agent —</option>
+                <option value="">â€” select agent â€”</option>
                 {agents.map(a => <option key={a} value={a}>{a}</option>)}
               </select>
             </div>
@@ -342,7 +456,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </>
         )}
 
-        {/* ── Tool fields ────────────────────────────────────────── */}
+        {/* â”€â”€ Tool fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type === "tool" && (
           <>
             <div style={sectionStyle}>
@@ -350,7 +464,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
               {tools.length > 0
                 ? (
                   <select style={selectStyle} value={node.toolName ?? ""} onChange={e => set("toolName", e.target.value || undefined)}>
-                    <option value="">— select tool —</option>
+                    <option value="">â€” select tool â€”</option>
                     {tools.map(t => {
                       const qualified = `${t.contributor}/${t.name}`;
                       return <option key={qualified} value={qualified}>{qualified}</option>;
@@ -385,6 +499,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                       value={typeof node.toolInput === "string" ? (() => { try { return JSON.parse(node.toolInput as string); } catch { return {}; } })() : (node.toolInput ?? {})}
                       onChange={(v: unknown) => commitSchemaValue(v)}
                       vars={vars}
+                      nodes={otherNodes}
                     />
                     <div style={{ marginTop: 8 }}>
                       <TemplateTip C={C} nodes={otherNodes} />
@@ -398,14 +513,46 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                       value={rawToolJson}
                       placeholder={'{\n  "query": "{{input.query}}"\n}'}
                       onChange={e => onRawJsonChange(e.target.value)}
+                      onFocus={() => { isJsonFocused.current = true; }}
+                      onBlur={() => { isJsonFocused.current = false; tryParseRawJson(); }}
                     />
                     <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
                       <button onClick={() => tryParseRawJson()} style={{ ...btnSm(C) }}>Parse</button>
                       <button onClick={() => { setRawToolJson(JSON.stringify(node.toolInput ?? {}, null, 2)); }} style={{ ...btnSm(C) }}>Reset</button>
-                      <select style={{ ...btnSm(C) }} onChange={(e) => { if (e.target.value) { insertVarIntoRawJson(e.target.value); e.target.value = ""; } }}>
-                        <option value="">Insert var…</option>
-                        {Object.keys(vars ?? {}).map(k => <option key={k} value={k}>{k}</option>)}
-                      </select>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <select style={{ ...btnSm(C) }} onChange={(e) => {
+                          const sel = e.target as HTMLSelectElement;
+                          const v = sel.value; if (!v) return;
+                          const container = sel.parentElement as HTMLElement | null;
+                          let suffixInput: HTMLInputElement | null = null;
+                          if (container) {
+                            const inputs = container.querySelectorAll('input');
+                            if (inputs && inputs.length > 0) suffixInput = inputs[inputs.length - 1] as HTMLInputElement;
+                          }
+                          let suffix = suffixInput?.value?.trim() ?? '';
+                          suffix = suffix.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+                          let tpl = '';
+                          if (v.startsWith('vars:')) tpl = `{{vars.${v.slice(5)}${suffix ? '.' + suffix : ''}}}`;
+                          else if (v.startsWith('node:')) tpl = `{{${v.slice(5)}.output${suffix ? '.' + suffix : ''}}}`;
+                          else tpl = `{{${v}${suffix ? '.' + suffix : ''}}}`;
+                          insertRefIntoRawJson(tpl);
+                          sel.value = '';
+                          if (suffixInput) suffixInput.value = '';
+                        }}>
+                          <option value="">Insert refâ€¦</option>
+                          {Object.keys(vars ?? {}).length > 0 && (
+                            <optgroup label="Vars">
+                              {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
+                            </optgroup>
+                          )}
+                          {otherNodes.length > 0 && (
+                            <optgroup label="Node outputs">
+                              {otherNodes.map(n => <option key={`node:${n.outputKey ?? n.id}`} value={`node:${n.outputKey ?? n.id}`}>{n.name ?? n.id}</option>)}
+                            </optgroup>
+                          )}
+                        </select>
+                        <input placeholder="append .path or [0].key" style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text, width: 160 }} />
+                      </div>
                     </div>
                     <div style={{ marginTop: 8 }}>
                       <TemplateTip C={C} nodes={otherNodes} />
@@ -416,39 +563,80 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                 toolInputMode === "fields" ? (
                   <div>
                     {(toolFields.length === 0) && (
-                      <div style={{ color: C.overlay0, fontSize: "0.82rem", marginBottom: 8 }}>No fields yet — add keys to build the JSON tool input.</div>
+                      <div style={{ color: C.overlay0, fontSize: "0.82rem", marginBottom: 8 }}>No fields yet â€” add keys to build the JSON tool input.</div>
                     )}
-                    {toolFields.map((f, i) => (
-                      <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                        <input
-                          placeholder="key"
-                          value={f.key}
-                          onChange={e => updateField(i, { key: e.target.value })}
-                          style={{ ...inputStyle, flex: 0.4 }}
-                        />
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1 }}>
+                    {toolFields.map((f, i) => {
+                      const parts = extractTemplateParts(f.value);
+                      const initialSuffix = dotToBracket(parts.suffix ?? "");
+                      return (
+                        <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
                           <input
-                            placeholder="value (string or JSON)"
-                            value={f.value}
-                            onChange={e => updateField(i, { value: e.target.value })}
-                            style={{ ...inputStyle, flex: 1 }}
+                            placeholder="key"
+                            value={f.key}
+                            onChange={e => updateField(i, { key: e.target.value })}
+                            style={{ ...inputStyle, flex: 0.4 }}
                           />
-                          <select
-                            style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }}
-                            onChange={e => {
-                              const v = e.target.value;
-                              if (!v) return;
-                              updateField(i, { value: `{{vars.${v}}}` });
-                              e.target.selectedIndex = 0;
-                            }}
-                          >
-                            <option value="">Use var…</option>
-                            {Object.keys(vars ?? {}).map(k => <option key={k} value={k}>{k}</option>)}
-                          </select>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1 }}>
+                            <input
+                              placeholder={f.isTemplate ? "template {{...}}" : "value (string or JSON)"}
+                              value={f.value}
+                              onChange={e => updateField(i, { value: e.target.value })}
+                              style={{ ...inputStyle, flex: 1 }}
+                            />
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <button
+                                onClick={() => updateField(i, { isTemplate: !f.isTemplate })}
+                                title="Toggle template mode"
+                                style={{ ...btnSm(C), background: f.isTemplate ? C.surface1 : "transparent", border: `1px solid ${f.isTemplate ? C.surface2 : "transparent"}`, padding: "6px 8px" }}
+                              >
+                                T
+                              </button>
+                              <select
+                                style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }}
+                                onChange={e => {
+                                  const sel = e.target as HTMLSelectElement;
+                                  const v = sel.value; if (!v) return;
+                                  const container = sel.parentElement as HTMLElement | null;
+                                  let suffixInput: HTMLInputElement | null = null;
+                                  if (container) {
+                                    const inputs = container.querySelectorAll('input');
+                                    if (inputs && inputs.length > 0) suffixInput = inputs[inputs.length - 1] as HTMLInputElement;
+                                  }
+                                  let suffix = suffixInput?.value?.trim() ?? '';
+                                  suffix = suffix.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+                                  if (v.startsWith("vars:")) updateField(i, { value: `{{vars.${v.slice(5)}${suffix ? '.' + suffix : ''}}}`, isTemplate: true });
+                                  else if (v.startsWith("node:")) updateField(i, { value: `{{${v.slice(5)}.output${suffix ? '.' + suffix : ''}}}`, isTemplate: true });
+                                  sel.selectedIndex = 0;
+                                  if (suffixInput) suffixInput.value = '';
+                                }}
+                              >
+                                <option value="">Use refâ€¦</option>
+                                {Object.keys(vars ?? {}).length > 0 && (
+                                  <optgroup label="Vars">
+                                    {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
+                                  </optgroup>
+                                )}
+                                {otherNodes.length > 0 && (
+                                  <optgroup label="Node outputs">
+                                    {otherNodes.map(n => <option key={`node:${n.outputKey ?? n.id}`} value={`node:${n.outputKey ?? n.id}`}>{n.name ?? n.id}</option>)}
+                                  </optgroup>
+                                )}
+                              </select>
+                              <input defaultValue={initialSuffix} placeholder="append .path or [0].key" style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text, width: 120 }} onBlur={(e) => {
+                                const raw = (e.target as HTMLInputElement).value || '';
+                                const suffix = raw.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '').trim();
+                                const parts = extractTemplateParts(f.value);
+                                if (!parts.pick) return;
+                                if (parts.pick.startsWith('vars:')) updateField(i, { value: `{{vars.${parts.pick.slice(5)}${suffix ? '.' + suffix : ''}}}`, isTemplate: true });
+                                else if (parts.pick.startsWith('node:')) updateField(i, { value: `{{${parts.pick.slice(5)}.output${suffix ? '.' + suffix : ''}}}`, isTemplate: true });
+                                else updateField(i, { value: `{{${parts.pick}${suffix ? '.' + suffix : ''}}}`, isTemplate: true });
+                              }} />
+                            </div>
+                          </div>
+                          <button onClick={() => removeField(i)} style={{ ...btnSm(C), color: C.red }}>âœ•</button>
                         </div>
-                        <button onClick={() => removeField(i)} style={{ ...btnSm(C), color: C.red }}>✕</button>
-                      </div>
-                    ))}
+                      );
+                    })}
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={addField} style={{ padding: "6px 10px", borderRadius: 6, background: "transparent", border: `1px dashed ${C.surface2}` }}>+ Add Field</button>
                       <button onClick={() => { setToolFields([]); set("toolInput", {}); }} style={{ ...btnSm(C) }}>Clear</button>
@@ -465,14 +653,46 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                       value={rawToolJson}
                       placeholder={'{\n  "query": "{{input.query}}"\n}'}
                       onChange={e => onRawJsonChange(e.target.value)}
+                      onFocus={() => { isJsonFocused.current = true; }}
+                      onBlur={() => { isJsonFocused.current = false; tryParseRawJson(); }}
                     />
                     <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
                       <button onClick={() => tryParseRawJson()} style={{ ...btnSm(C) }}>Parse</button>
                       <button onClick={() => { setRawToolJson(JSON.stringify(node.toolInput ?? {}, null, 2)); }} style={{ ...btnSm(C) }}>Reset</button>
-                      <select style={{ ...btnSm(C) }} onChange={(e) => { if (e.target.value) { insertVarIntoRawJson(e.target.value); e.target.value = ""; } }}>
-                        <option value="">Insert var…</option>
-                        {Object.keys(vars ?? {}).map(k => <option key={k} value={k}>{k}</option>)}
-                      </select>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <select style={{ ...btnSm(C) }} onChange={(e) => {
+                          const sel = e.target as HTMLSelectElement;
+                          const v = sel.value; if (!v) return;
+                          const container = sel.parentElement as HTMLElement | null;
+                          let suffixInput: HTMLInputElement | null = null;
+                          if (container) {
+                            const inputs = container.querySelectorAll('input');
+                            if (inputs && inputs.length > 0) suffixInput = inputs[inputs.length - 1] as HTMLInputElement;
+                          }
+                          let suffix = suffixInput?.value?.trim() ?? '';
+                          suffix = suffix.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+                          let tpl = '';
+                          if (v.startsWith('vars:')) tpl = `{{vars.${v.slice(5)}${suffix ? '.' + suffix : ''}}}`;
+                          else if (v.startsWith('node:')) tpl = `{{${v.slice(5)}.output${suffix ? '.' + suffix : ''}}}`;
+                          else tpl = `{{${v}${suffix ? '.' + suffix : ''}}}`;
+                          insertRefIntoRawJson(tpl);
+                          sel.value = '';
+                          if (suffixInput) suffixInput.value = '';
+                        }}>
+                          <option value="">Insert refâ€¦</option>
+                          {Object.keys(vars ?? {}).length > 0 && (
+                            <optgroup label="Vars">
+                              {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
+                            </optgroup>
+                          )}
+                          {otherNodes.length > 0 && (
+                            <optgroup label="Node outputs">
+                              {otherNodes.map(n => <option key={`node:${n.outputKey ?? n.id}`} value={`node:${n.outputKey ?? n.id}`}>{n.name ?? n.id}</option>)}
+                            </optgroup>
+                          )}
+                        </select>
+                        <input placeholder="append .path or [0].key" style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text, width: 160 }} />
+                      </div>
                     </div>
                     <div style={{ marginTop: 8 }}>
                       <TemplateTip C={C} nodes={otherNodes} />
@@ -484,12 +704,12 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </>
         )}
 
-        {/* ── Condition fields ───────────────────────────────────── */}
+        {/* â”€â”€ Condition fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type === "condition" && (
           <ConditionEditor node={node} otherNodes={otherNodes} onChange={onChange} C={C} inputStyle={inputStyle} selectStyle={selectStyle} labelStyle={labelStyle} vars={vars} />
         )}
 
-        {/* ── Operation fields ───────────────────────────────────── */}
+        {/* â”€â”€ Operation fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type === "operation" && (
           <div style={sectionStyle}>
             <label style={labelStyle}>Operation</label>
@@ -499,12 +719,12 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                 const prev: OperationActionInfo = node.operationAction ?? { op: "inc", varName: "" };
                 set("operationAction", { ...prev, op: e.target.value as OperationActionInfo["op"] });
               }}>
-              <option value="inc">inc — increment a number</option>
-              <option value="dec">dec — decrement a number</option>
-              <option value="set">set — assign a value</option>
-              <option value="copy">copy — copy from a node ref</option>
-              <option value="toggle">toggle — flip a boolean</option>
-              <option value="append">append — push to an array</option>
+              <option value="inc">inc â€” increment a number</option>
+              <option value="dec">dec â€” decrement a number</option>
+              <option value="set">set â€” assign a value</option>
+              <option value="copy">copy â€” copy from a node ref</option>
+              <option value="toggle">toggle â€” flip a boolean</option>
+              <option value="append">append â€” push to an array</option>
             </select>
             <label style={{ ...labelStyle, marginTop: 8 }}>Variable Name</label>
             <input style={inputStyle}
@@ -574,7 +794,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </div>
         )}
 
-        {/* ── Input/Output fields ────────────────────────────────── */}
+        {/* â”€â”€ Input/Output fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type === "input" && (
           <div style={sectionStyle}>
             <div style={{ fontSize: "0.75rem", color: C.subtext0, lineHeight: 1.5 }}>
@@ -592,12 +812,12 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
               onChange={e => set("promptTemplate", e.target.value || undefined)}
             />
             <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
-              Optional — if blank, the last node's output is collected automatically.
+              Optional â€” if blank, the last node's output is collected automatically.
             </div>
           </div>
         )}
 
-        {/* ── Error Policy ───────────────────────────────────────── */}
+        {/* â”€â”€ Error Policy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {node.type !== "input" && node.type !== "output" && (
           <div style={{ borderTop: `1px solid ${C.surface1}`, paddingTop: 12, marginTop: 4 }}>
             <div style={{ ...labelStyle, marginBottom: 6, fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Error Policy</div>
@@ -643,7 +863,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   );
 }
 
-// ── Condition branch editor ───────────────────────────────────────────────────
+// â”€â”€ Condition branch editor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyle, labelStyle, vars }: {
   node: GraphNodeInfo;
@@ -698,8 +918,8 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
             <button
               onClick={(e) => { e.stopPropagation(); removeBranch(i); }}
               style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: "0.8rem" }}
-            >✕</button>
-            <span style={{ color: C.overlay0, fontSize: "0.75rem" }}>{open === i ? "▲" : "▼"}</span>
+            >âœ•</button>
+            <span style={{ color: C.overlay0, fontSize: "0.75rem" }}>{open === i ? "â–²" : "â–¼"}</span>
           </div>
 
           {open === i && (
@@ -814,17 +1034,57 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
                       <option value="json">JSON</option>
                     </select>
 
-                    <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) { updateCond(i, { value: `{{vars.${e.target.value}}}`, valueType: 'auto' }); e.target.value = ""; } }}>
-                      <option value="">Use var…</option>
-                      {Object.keys(vars ?? {}).map(k => <option key={k} value={k}>{k}</option>)}
-                    </select>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => {
+                        const sel = e.target as HTMLSelectElement;
+                        const v = sel.value; if (!v) return;
+                        const container = sel.parentElement as HTMLElement | null;
+                        let suffixInput: HTMLInputElement | null = null;
+                        if (container) {
+                          const inputs = container.querySelectorAll('input');
+                          if (inputs && inputs.length > 0) suffixInput = inputs[inputs.length - 1] as HTMLInputElement;
+                        }
+                        let suffix = suffixInput?.value?.trim() ?? '';
+                        suffix = suffix.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+                        let tpl = '';
+                        if (v.startsWith('vars:')) tpl = `{{vars.${v.slice(5)}${suffix ? '.' + suffix : ''}}}`;
+                        else if (v.startsWith('node:')) tpl = `{{${v.slice(5)}.output${suffix ? '.' + suffix : ''}}}`;
+                        else tpl = `{{${v}${suffix ? '.' + suffix : ''}}}`;
+                        updateCond(i, { value: tpl, valueType: 'auto' });
+                        sel.value = '';
+                        if (suffixInput) suffixInput.value = '';
+                      }}>
+                        <option value="">Use refâ€¦</option>
+                        {Object.keys(vars ?? {}).length > 0 && (
+                          <optgroup label="Vars">
+                            {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
+                          </optgroup>
+                        )}
+                        {otherNodes.length > 0 && (
+                          <optgroup label="Node outputs">
+                            {otherNodes.map(n => <option key={`node:${n.outputKey ?? n.id}`} value={`node:${n.outputKey ?? n.id}`}>{n.name ?? n.id}</option>)}
+                          </optgroup>
+                        )}
+                      </select>
+                      <input defaultValue={dotToBracket(extractTemplateParts(b.condition?.value).suffix ?? "")} placeholder="append .path or [0].key" style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text, width: 140 }} onBlur={(e) => {
+                        const raw = (e.target as HTMLInputElement).value || '';
+                        const suffix = raw.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '').trim();
+                        const parts = extractTemplateParts(b.condition?.value);
+                        if (!parts.pick) return;
+                        let tpl = '';
+                        if (parts.pick.startsWith('vars:')) tpl = `{{vars.${parts.pick.slice(5)}${suffix ? '.' + suffix : ''}}}`;
+                        else if (parts.pick.startsWith('node:')) tpl = `{{${parts.pick.slice(5)}.output${suffix ? '.' + suffix : ''}}}`;
+                        else tpl = `{{${parts.pick}${suffix ? '.' + suffix : ''}}}`;
+                        updateCond(i, { value: tpl, valueType: 'auto' });
+                      }} />
+                    </div>
                   </div>
                 </div>
               )}
               <div>
                 <label style={labelStyle}>Target Node</label>
                 <select style={selectStyle} value={b.target ?? ""} onChange={e => update(i, { target: e.target.value })}>
-                  <option value="">— connect on canvas —</option>
+                  <option value="">â€” connect on canvas â€”</option>
                   {otherNodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
                 </select>
               </div>
@@ -853,7 +1113,7 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
   );
 }
 
-// ── Template hint ──────────────────────────────────────────────────────────────
+// â”€â”€ Template hint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function TemplateTip({ C, nodes }: { C: ThemePalette; nodes: GraphNodeInfo[] }) {
   return (
@@ -865,7 +1125,7 @@ function TemplateTip({ C, nodes }: { C: ThemePalette; nodes: GraphNodeInfo[] }) 
   );
 }
 
-// ── Tiny button style helper ───────────────────────────────────────────────────
+// â”€â”€ Tiny button style helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function btnSm(C: ThemePalette): React.CSSProperties {
   return {

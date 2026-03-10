@@ -304,7 +304,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       if (trimmedToken) {
         cfg.botToken = trimmedToken;
       }
-      await window.solixApi.discordBridgeConfigWrite?.(agentName, cfg);
+      await window.solixApi.discordBridgeConfigWrite?.(agentName, cfg as any);
 
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);

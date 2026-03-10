@@ -442,7 +442,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                     onChange={async (e) => {
                       const newProvider = e.target.value;
                       setDefaultProvider(newProvider);
-                      await window.solixApi.writeConfig({ ...config, defaultProvider: newProvider });
+                      await window.solixApi!.writeConfig({ ...config, defaultProvider: newProvider });
                       /* defaultModel will auto-reset via effect */
                     }}
                     style={selectStyle}

@@ -172,7 +172,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         st.activeSessionIds.delete(agentName);
       }
       await window.solixApi?.deleteChatSession(agentName, sessionId);
-      await api.current.refreshSessionList(agentName);
+      await api.refreshSessionList(agentName);
       bump();
     },
 
@@ -270,15 +270,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             window.solixApi.loadChatSession(data.agentName, data.sessionId).then((sess: any) => {
               if (sess) {
                 stateRef.current.sessions.set(key, sess);
-                api.current.addMessage(data.agentName, data.sessionId, msg);
-                api.current.refreshSessionList(data.agentName);
+                api.addMessage(data.agentName, data.sessionId, msg);
+                api.refreshSessionList(data.agentName);
                 bump();
               }
             }).catch(console.error);
           }
         } else {
-          api.current.addMessage(data.agentName, data.sessionId, msg);
-          api.current.refreshSessionList(data.agentName);
+          api.addMessage(data.agentName, data.sessionId, msg);
+          api.refreshSessionList(data.agentName);
         }
       }
 
