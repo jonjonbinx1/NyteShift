@@ -31,6 +31,15 @@ import { pathExists, readJsonFile } from "../../utils/index.js";
 // In-process cache: toolDir → deps hash that was last verified this session.
 const verified = new Map<string, string>();
 
+/**
+ * Remove the cached verification entry for a tool directory, forcing the next
+ * `ensureToolDeps` call to re-check and potentially re-install dependencies.
+ * Called by the tool loader whenever it detects a tool file has changed.
+ */
+export function clearVerified(toolDir: string): void {
+  verified.delete(toolDir);
+}
+
 /** Hash a plain object's keys+values deterministically. */
 function hashDeps(deps: Record<string, string>): string {
   const stable = Object.keys(deps)

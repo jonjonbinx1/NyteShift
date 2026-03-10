@@ -11,6 +11,8 @@ function typeIcon(type: TriggerType): string {
     case "webhook": return "🔗";
     case "discord": return "💬";
     case "manual": return "▶";
+    case "oneoff": return "⏱";
+    case "monthly": return "🗓";
   }
 }
 
@@ -20,6 +22,8 @@ function typeLabel(type: TriggerType): string {
     case "webhook": return "Webhook";
     case "discord": return "Discord";
     case "manual": return "Manual";
+    case "oneoff": return "One-off";
+    case "monthly": return "Monthly";
   }
 }
 

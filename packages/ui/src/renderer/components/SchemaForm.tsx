@@ -1,14 +1,15 @@
-import React from "react";
+﻿import React from "react";
 import { useTheme } from "../theme/ThemeContext.js";
-import type { ThemePalette } from "../theme/themes.js";
+import type { GraphNodeInfo } from "../global.js";
 
-export function SchemaForm({ schema, value, onChange, vars }: { schema: any; value?: any; onChange(v: any): void; vars?: Record<string, unknown> }) {
+export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: any; value?: any; onChange(v: any): void; vars?: Record<string, unknown>; nodes?: GraphNodeInfo[] }) {
   const { palette: C } = useTheme();
 
   const containerStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 8 };
-  const labelStyle: React.CSSProperties = { fontSize: "0.72rem", fontWeight: 700, color: C.subtext0 };
+  const labelStyle: React.CSSProperties = { fontSize: "0.85rem", fontWeight: 600, color: C.subtext0 };
   const inputStyle: React.CSSProperties = { width: "100%", padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text };
   const textareaStyle: React.CSSProperties = { ...inputStyle, minHeight: 80, fontFamily: "monospace", resize: "vertical" };
+  const btnStyle: React.CSSProperties = { padding: "6px 8px", borderRadius: 6 };
 
   const root = (value && typeof value === "object") ? value : {};
 
@@ -20,201 +21,224 @@ export function SchemaForm({ schema, value, onChange, vars }: { schema: any; val
   };
 
   const varOptions = Object.keys(vars ?? {});
+  const isTemplateString = (v: any) => (typeof v === 'string') && v.trim().startsWith('{{') && v.trim().endsWith('}}');
+
+  function ArrayEditor({ value: arrVal, itemsSchema, onChange: onArrChange }: { value: any; itemsSchema: any; onChange(v: any): void }) {
+    const arr = Array.isArray(arrVal) ? arrVal : (itemsSchema?.default ?? []);
+    const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
+    const [editingAll, setEditingAll] = React.useState(false);
+    const [rawAll, setRawAll] = React.useState<string>(() => JSON.stringify(arr, null, 2));
+    const [editingRaw, setEditingRaw] = React.useState<string>('');
+
+    React.useEffect(() => { setRawAll(JSON.stringify(arr, null, 2)); setEditingIndex(null); setEditingRaw(''); }, [arrVal]);
+
+    const startEditItem = (i: number) => {
+      try { setEditingRaw(JSON.stringify(arr[i], null, 2)); } catch { setEditingRaw(String(arr[i] ?? '')); }
+      setEditingIndex(i);
+    };
+
+    const saveItem = (i: number) => {
+      const t = editingRaw ?? '';
+      try { const p = JSON.parse(t); const next = [...arr]; next[i] = p; onArrChange(next); } catch { const next = [...arr]; next[i] = t; onArrChange(next); }
+      setEditingIndex(null); setEditingRaw('');
+    };
+
+    const saveAll = () => { try { const p = JSON.parse(rawAll); if (Array.isArray(p)) { onArrChange(p); setEditingAll(false); } } catch { } };
+
+    const defaultForType = () => {
+      const t = itemsSchema?.type;
+      if (t === 'number' || t === 'integer') return 0;
+      if (t === 'boolean') return false;
+      if (t === 'object') return {};
+      if (t === 'array') return [];
+      if (t === 'string') return '';
+      return itemsSchema?.default ?? null;
+    };
+
+    const addItem = () => onArrChange([...(arr ?? []), defaultForType()]);
+    const removeItem = (i:number) => { const next = [...arr]; next.splice(i,1); onArrChange(next); };
+
+    if (editingAll) return (
+      <div>
+        <textarea style={textareaStyle} value={rawAll} onChange={e => setRawAll(e.target.value)} />
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button onClick={saveAll} style={btnStyle}>Save</button>
+          <button onClick={() => { setEditingAll(false); setRawAll(JSON.stringify(arr, null, 2)); }} style={btnStyle}>Cancel</button>
+        </div>
+      </div>
+    );
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {(arr as any[]).map((it: any, idx: number) => (
+          <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {editingIndex === idx ? (
+              <div style={{ flex: 1 }}>
+                <textarea style={textareaStyle} value={editingRaw} onChange={e => setEditingRaw(e.target.value)} />
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  <button onClick={() => saveItem(idx)} style={btnStyle}>Save</button>
+                  <button onClick={() => { setEditingIndex(null); setEditingRaw(''); }} style={btnStyle}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {itemsSchema?.type === 'object' || itemsSchema?.type === 'array' ? (
+                  <input style={inputStyle} value={JSON.stringify(it)} onChange={e => {
+                    try { const p = JSON.parse(e.target.value); const n = [...arr]; n[idx] = p; onArrChange(n); } catch { const n = [...arr]; n[idx] = e.target.value; onArrChange(n); }
+                  }} />
+                ) : itemsSchema?.type === 'number' || itemsSchema?.type === 'integer' ? (
+                  <input style={inputStyle} type='number' value={it ?? ''} onChange={e => { const n = [...arr]; n[idx] = e.target.value === '' ? undefined : (itemsSchema?.type === 'integer' ? parseInt(e.target.value, 10) : parseFloat(e.target.value)); onArrChange(n); }} />
+                ) : itemsSchema?.type === 'boolean' ? (
+                  <>
+                    <input type='checkbox' checked={Boolean(it)} onChange={e => { const n = [...arr]; n[idx] = e.target.checked; onArrChange(n); }} />
+                    <div style={{ width: 8 }} />
+                  </>
+                ) : (
+                  <input style={inputStyle} value={String(it)} onChange={e => { const n = [...arr]; n[idx] = e.target.value; onArrChange(n); }} />
+                )}
+                <button onClick={() => startEditItem(idx)} style={btnStyle}>JSON</button>
+                <button onClick={() => removeItem(idx)} style={{ ...btnStyle, color: C.red }}>✕</button>
+              </>
+            )}
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={addItem} style={btnStyle}>+ Add</button>
+          <button onClick={() => { setEditingAll(true); setRawAll(JSON.stringify(arr, null, 2)); }} style={btnStyle}>Edit as JSON</button>
+        </div>
+      </div>
+    );
+  }
 
   const renderField = (key: string, propSchema: any) => {
     const cur = root?.[key];
     const required = Array.isArray(schema?.required) && schema.required.includes(key);
-
-    const varRefMatch = (typeof cur === "string") ? cur.match(/^\s*\{\{\s*vars\.([^}\s]+)\s*\}\}\s*$/) : null;
-    const isVarRef = Boolean(varRefMatch);
-
-    const description = propSchema?.description;
+    const isVarRef = (typeof cur === 'string') && /^\s*\{\{\s*vars\.[^\}\s]+\s*\}\}\s*$/.test(cur);
+    const isTpl = isTemplateString(cur);
+    const desc = propSchema?.description;
 
     if (propSchema?.enum) {
       return (
         <div key={key} style={containerStyle}>
-          <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <select style={inputStyle} value={isVarRef ? "" : (cur ?? "")} onChange={e => setProp(key, e.target.value)}>
-              <option value="">(none)</option>
-              {propSchema.enum.map((opt: any) => <option key={String(opt)} value={opt}>{String(opt)}</option>)}
+          <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select style={inputStyle} value={isVarRef ? '' : (cur ?? '')} onChange={e => setProp(key, e.target.value)}>
+              <option value=''> (none) </option>
+              {propSchema.enum.map((o:any) => <option key={String(o)} value={o}>{String(o)}</option>)}
             </select>
-            <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-              <option value="">Use var…</option>
+            <select style={btnStyle as any} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ''; }}>
+              <option value=''>Use varâ€¦</option>
               {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
-          {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
+          {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
         </div>
       );
     }
 
     switch (propSchema?.type) {
-      case "string":
-        if (propSchema?.format === "textarea") {
-          return (
-            <div key={key} style={containerStyle}>
-              <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-              <textarea style={textareaStyle} value={cur ?? (propSchema?.default ?? "")} onChange={e => setProp(key, e.target.value)} />
-              {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
-            </div>
-          );
-        }
+      case 'string':
         return (
           <div key={key} style={containerStyle}>
-            <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-            {isVarRef ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <div style={{ padding: "6px 10px", borderRadius: 6, background: C.surface1 }}>{varRefMatch?.[1]}</div>
-                <button onClick={() => setProp(key, undefined)} style={{ padding: "6px 8px", borderRadius: 6 }}>Clear</button>
-                <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                  <option value="">Change var…</option>
+            <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+            {isTpl ? (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
+                <select onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ''; }} style={btnStyle as any}>
+                  <option value=''>Use varâ€¦</option>
                   {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
                 </select>
               </div>
             ) : (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input style={inputStyle} value={cur ?? (propSchema?.default ?? "")} onChange={e => setProp(key, e.target.value)} />
-                <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                  <option value="">Use var…</option>
-                  {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input style={inputStyle} value={cur ?? (propSchema?.default ?? '')} onChange={e => setProp(key, e.target.value)} />
+                <button onClick={() => setProp(key, '{{}}')} style={btnStyle}>Use template</button>
               </div>
             )}
-            {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
+            {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
           </div>
         );
 
-      case "number":
-      case "integer":
+      case 'number':
+      case 'integer':
         return (
           <div key={key} style={containerStyle}>
-            <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-            {isVarRef ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <div style={{ padding: "6px 10px", borderRadius: 6, background: C.surface1 }}>{varRefMatch?.[1]}</div>
-                <button onClick={() => setProp(key, undefined)} style={{ padding: "6px 8px", borderRadius: 6 }}>Clear</button>
-                <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                  <option value="">Change var…</option>
-                  {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-              </div>
+            <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+            {isTpl ? (
+              <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
             ) : (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input style={inputStyle} type="number" value={cur ?? (propSchema?.default ?? "")} onChange={e => setProp(key, e.target.value === "" ? undefined : (propSchema?.type === "integer" ? parseInt(e.target.value, 10) : parseFloat(e.target.value)))} />
-                <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                  <option value="">Use var…</option>
-                  {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input style={inputStyle} type='number' value={cur ?? (propSchema?.default ?? '')} onChange={e => setProp(key, e.target.value === '' ? undefined : (propSchema?.type === 'integer' ? parseInt(e.target.value, 10) : parseFloat(e.target.value)))} />
+                <button onClick={() => setProp(key, '{{}}')} style={btnStyle}>Use template</button>
               </div>
             )}
-            {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
+            {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
           </div>
         );
 
-      case "boolean":
+      case 'boolean':
         return (
           <div key={key} style={containerStyle}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {!isVarRef && <input type="checkbox" checked={Boolean(cur ?? propSchema?.default ?? false)} onChange={e => setProp(key, e.target.checked)} style={{ accentColor: C.mauve }} />}
-              <span style={labelStyle}>{key}{required ? " *" : ""}</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {!isTpl && <input type='checkbox' checked={Boolean(cur ?? propSchema?.default ?? false)} onChange={e => setProp(key, e.target.checked)} />}
+              <span style={labelStyle}>{key}{required ? ' *' : ''}</span>
             </label>
-            {isVarRef ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                <div style={{ padding: "6px 10px", borderRadius: 6, background: C.surface1 }}>{varRefMatch?.[1]}</div>
-                <button onClick={() => setProp(key, undefined)} style={{ padding: "6px 8px", borderRadius: 6 }}>Clear</button>
-                <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                  <option value="">Change var…</option>
-                  {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-              </div>
+            {isTpl && <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />}
+            <div style={{ marginTop: 6 }}>
+              <button onClick={() => setProp(key, '{{}}')} style={btnStyle}>Use template</button>
+            </div>
+            {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
+          </div>
+        );
+
+      case 'array':
+        return (
+          <div key={key} style={containerStyle}>
+            <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+            {isTpl ? (
+              <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
             ) : (
-              <div style={{ marginTop: 6 }}>
-                <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                  <option value="">Use var…</option>
-                  {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+              <ArrayEditor value={cur ?? propSchema?.default ?? []} itemsSchema={propSchema?.items ?? {}} onChange={(v:any) => setProp(key, v)} />
+            )}
+            {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
+          </div>
+        );
+
+      case 'object':
+        return (
+          <div key={key} style={containerStyle}>
+            <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+            {isTpl ? (
+              <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
+            ) : (
+              <div style={{ paddingLeft: 8, borderLeft: `2px solid ${C.surface1}`, marginTop: 6 }}>
+                <SchemaForm schema={propSchema} value={cur ?? {}} onChange={(v) => setProp(key, v)} vars={vars} nodes={nodes} />
               </div>
             )}
-            {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
-          </div>
-        );
-
-      case "array": {
-        const items = propSchema?.items ?? {};
-        if (items.type === "string" || items.type === "number") {
-          const arr: any[] = Array.isArray(cur) ? cur : (propSchema?.default ?? []);
-          return (
-            <div key={key} style={containerStyle}>
-              <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {arr.map((it, idx) => (
-                  <div key={idx} style={{ display: "flex", gap: 8 }}>
-                    <input style={inputStyle} value={String(it)} onChange={e => { const next = [...arr]; next[idx] = items.type === "number" ? parseFloat(e.target.value) : e.target.value; setProp(key, next); }} />
-                    <button onClick={() => { const next = [...arr]; next.splice(idx, 1); setProp(key, next); }} style={{ cursor: "pointer" }}>✕</button>
-                  </div>
-                ))}
-                <button onClick={() => { const next = [...arr, items.type === "number" ? 0 : ""]; setProp(key, next); }} style={{ cursor: "pointer" }}>+ Add</button>
-                <div style={{ marginTop: 6 }}>
-                  <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                    <option value="">Use var for entire array…</option>
-                    {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </div>
-              </div>
-              {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
-            </div>
-          );
-        }
-        // Fallback: show JSON editor for complex arrays
-        return (
-          <div key={key} style={containerStyle}>
-            <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-            <textarea style={textareaStyle} value={JSON.stringify(cur ?? propSchema?.default ?? [], null, 2)} onChange={e => { try { setProp(key, JSON.parse(e.target.value)); } catch { /* ignore */ } }} />
-            {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
-          </div>
-        );
-      }
-
-      case "object":
-        return (
-          <div key={key} style={containerStyle}>
-            <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-            <div style={{ paddingLeft: 8, borderLeft: `2px solid ${C.surface1}`, marginTop: 6 }}>
-              <SchemaForm schema={propSchema} value={cur ?? {}} onChange={(v) => setProp(key, v)} vars={vars} />
-            </div>
             <div style={{ marginTop: 6 }}>
-              <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                <option value="">Use var for entire object…</option>
-                {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
+              <button onClick={() => setProp(key, '{{}}')} style={btnStyle}>Use template</button>
             </div>
-            {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
+            {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
           </div>
         );
 
       default:
         return (
           <div key={key} style={containerStyle}>
-            <label style={labelStyle}>{key}{required ? " *" : ""}</label>
-            <textarea style={textareaStyle} value={JSON.stringify(cur ?? propSchema?.default ?? null, null, 2)} onChange={e => { try { setProp(key, JSON.parse(e.target.value)); } catch { /* ignore */ } }} />
+            <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+            <textarea style={textareaStyle} value={JSON.stringify(cur ?? propSchema?.default ?? null, null, 2)} onChange={e => { try { setProp(key, JSON.parse(e.target.value)); } catch { } }} />
             <div style={{ marginTop: 6 }}>
-              <select style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text }} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ""; }}>
-                <option value="">Use var…</option>
-                {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
+              <button onClick={() => setProp(key, '{{}}')} style={btnStyle}>Use template</button>
             </div>
-            {description && <div style={{ fontSize: "0.7rem", color: C.overlay0 }}>{description}</div>}
           </div>
         );
     }
   };
 
-  if (!schema || schema.type !== "object" || !schema.properties) {
-    // simple fallback: raw JSON editor
+  if (!schema || schema.type !== 'object' || !schema.properties) {
     return (
       <div>
-        <textarea style={textareaStyle} value={JSON.stringify(value ?? {}, null, 2)} onChange={e => { try { onChange(JSON.parse(e.target.value)); } catch { /* ignore */ } }} />
+        <textarea style={textareaStyle} value={JSON.stringify(value ?? {}, null, 2)} onChange={e => { try { onChange(JSON.parse(e.target.value)); } catch { } }} />
       </div>
     );
   }

@@ -580,7 +580,7 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
       runAt:    scheduleOutput.subType === "oneoff" ? scheduleOutput.runAt : undefined,
       monthlyType:    scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyType    : undefined,
       monthlyDay:     scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyDay     : undefined,
-      monthlyOrdinal: scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyOrdinal : undefined,
+      monthlyOrdinal: scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyOrdinal as "first" | "second" | "third" | "fourth" | "last" | undefined : undefined,
       monthlyWeekday: scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyWeekday : undefined,
       monthlyHour:    scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyHour    : undefined,
       monthlyMinute:  scheduleOutput.subType === "monthly" ? scheduleOutput.monthlyMinute  : undefined,

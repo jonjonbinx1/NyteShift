@@ -115,7 +115,7 @@ const actionLabel: Record<string, string> = {
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export function HelperChat(): React.JSX.Element {
+export function HelperChat(): React.JSX.Element | null {
   const { palette: C } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();

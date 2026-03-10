@@ -52,7 +52,7 @@ export function Sidebar(): React.JSX.Element {
           <NavLink
             key={l.to}
             to={l.to}
-            style={({ isActive }) => (isActive ? activeLinkStyle : linkStyle)}
+            style={({ isActive }: { isActive: boolean }) => (isActive ? activeLinkStyle : linkStyle)}
           >
             {l.label}
           </NavLink>

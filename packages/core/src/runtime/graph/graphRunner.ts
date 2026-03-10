@@ -186,7 +186,7 @@ export async function runGraph(
 
       const loopResult = await runLoopSCC(group, graph, context, nodeMap, outgoing, globalConfig, options);
       nodeResults.push(...loopResult.results);
-      loopResult.results.forEach(r => options.onNodeComplete?.(r));
+      // onNodeComplete is already called inside runLoopSCC — do not duplicate.
 
       if (loopResult.error) {
         graphError = loopResult.error;
@@ -573,6 +573,26 @@ async function executeToolNode(
   }
 
   log(`    tool call — "${node.toolName}"`);
+
+  // DEBUG: capture tool shape and the final input value (type + preview)
+  // This helps diagnose regressions where graph-run inputs appear unparsed
+  // or tools behave differently when reloaded via cache-busting imports.
+  try {
+    const inputType = input === null ? "null" : Array.isArray(input) ? "array" : typeof input;
+    let inputPreview: string;
+    try {
+      inputPreview = JSON.stringify(input);
+    } catch {
+      inputPreview = String(input);
+    }
+    const maxLen = 2000;
+    if (inputPreview && inputPreview.length > maxLen) inputPreview = inputPreview.slice(0, maxLen) + "...";
+    const toolKeys = Array.isArray(Object.keys(tool)) ? Object.keys(tool).slice(0, 20) : [];
+    log(`    DEBUG tool.run type=${typeof (tool as any).run}, keys=${toolKeys.join(",")}`);
+    log(`    DEBUG input (${inputType}) preview: ${inputPreview}`);
+  } catch (err) {
+    try { log(`    DEBUG inspect failed: ${(err as Error).message}`); } catch {}
+  }
   // Provide bridge helpers only to tools that declare they need the bridge
   const needsBridge =
     (tool as any).spec?.requiresBridge === true ||
@@ -811,7 +831,9 @@ function interpolateValue(
 // ── Reference resolver ─────────────────────────────────────────────────
 
 function resolveRef(ref: string, context: GraphExecutionContext): unknown {
-  const parts = ref.split(".");
+  // Normalize bracket numeric indexes (e.g. messages[0].uid -> messages.0.uid)
+  const norm = String(ref).trim().replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+  const parts = norm.split(".");
 
   // vars.<name>[.path] — mutable variable store written by operation nodes
   if (parts[0] === "vars") {
@@ -984,68 +1006,84 @@ async function runLoopSCC(
 
     let shouldExit = false;
     const iterReachable = new Set<string>([group.entryId]);
+    // Track which nodes have already executed in this iteration so that
+    // multi-pass re-scans don't duplicate side-effects.
+    const iterExecuted = new Set<string>();
 
-    for (const nodeId of group.withinOrder) {
-      if (!iterReachable.has(nodeId)) continue;
+    // Multi-pass: when a node late in withinOrder makes an earlier node
+    // reachable (e.g. Operation 2 at pos 9 → HasNext at pos 4), a single
+    // linear scan would miss the earlier node.  Re-scan until no new
+    // nodes are executed.
+    let madeProgress = true;
+    while (madeProgress && !shouldExit) {
+      madeProgress = false;
 
-      const node = nodeMap.get(nodeId)!;
-      const policy = node.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
-      options.onNodeStart?.(node.id, node.name);
-      const nodeOutput = await executeNodeWithPolicy(node, context, globalConfig, graph, options, policy);
+      for (const nodeId of group.withinOrder) {
+        if (options.signal?.aborted) { shouldExit = true; break; }
+        if (!iterReachable.has(nodeId)) continue;
+        if (iterExecuted.has(nodeId)) continue;
+        iterExecuted.add(nodeId);
+        madeProgress = true;
 
-      if (nodeOutput.metadata) {
-        (nodeOutput.metadata as Record<string, unknown>).iteration = iter;
-      }
+        const node = nodeMap.get(nodeId)!;
+        const policy = node.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
+        options.onNodeStart?.(node.id, node.name);
+        const nodeOutput = await executeNodeWithPolicy(node, context, globalConfig, graph, options, policy);
 
-      results.push(nodeOutput);
-      context.nodeOutputs[node.outputKey ?? node.id] = nodeOutput;
-      options.onNodeComplete?.(nodeOutput);
+        if (nodeOutput.metadata) {
+          (nodeOutput.metadata as Record<string, unknown>).iteration = iter;
+        }
 
-      if (nodeOutput.status === "error" && policy.type === "halt") {
-        return { results, error: nodeOutput.error };
-      }
+        results.push(nodeOutput);
+        context.nodeOutputs[node.outputKey ?? node.id] = nodeOutput;
+        options.onNodeComplete?.(nodeOutput);
 
-      if (
-        nodeOutput.status === "success" ||
-        (policy.type === "fallback" && nodeOutput.status !== "error")
-      ) {
-        // Check condition branches for SCC exit
-        if (node.type === "condition" && node.branches) {
-          for (const branch of node.branches) {
-            if (!group.scc.has(branch.target) && evaluateCondition(branch.condition, context)) {
-              exitTarget = branch.target;
+        if (nodeOutput.status === "error" && policy.type === "halt") {
+          return { results, error: nodeOutput.error };
+        }
+
+        if (
+          nodeOutput.status === "success" ||
+          (policy.type === "fallback" && nodeOutput.status !== "error")
+        ) {
+          // Check condition branches for SCC exit
+          if (node.type === "condition" && node.branches) {
+            for (const branch of node.branches) {
+              if (!group.scc.has(branch.target) && evaluateCondition(branch.condition, context)) {
+                exitTarget = branch.target;
+                shouldExit = true;
+                break;
+              }
+            }
+            if (!shouldExit && node.defaultTarget && !group.scc.has(node.defaultTarget)) {
+              exitTarget = node.defaultTarget;
               shouldExit = true;
-              break;
             }
           }
-          if (!shouldExit && node.defaultTarget && !group.scc.has(node.defaultTarget)) {
-            exitTarget = node.defaultTarget;
-            shouldExit = true;
+
+          // Propagate reachability within SCC (regular edges)
+          for (const edge of outgoing.get(nodeId) ?? []) {
+            if (group.scc.has(edge.target)) {
+              if (!edge.condition || evaluateCondition(edge.condition, context)) {
+                iterReachable.add(edge.target);
+              }
+            }
+          }
+          // Propagate reachability within SCC (condition branches)
+          if (node.type === "condition" && node.branches) {
+            for (const branch of node.branches) {
+              if (group.scc.has(branch.target) && evaluateCondition(branch.condition, context)) {
+                iterReachable.add(branch.target);
+              }
+            }
+            if (node.defaultTarget && group.scc.has(node.defaultTarget)) {
+              iterReachable.add(node.defaultTarget);
+            }
           }
         }
 
-        // Propagate reachability within SCC (regular edges)
-        for (const edge of outgoing.get(nodeId) ?? []) {
-          if (group.scc.has(edge.target)) {
-            if (!edge.condition || evaluateCondition(edge.condition, context)) {
-              iterReachable.add(edge.target);
-            }
-          }
-        }
-        // Propagate reachability within SCC (condition branches)
-        if (node.type === "condition" && node.branches) {
-          for (const branch of node.branches) {
-            if (group.scc.has(branch.target) && evaluateCondition(branch.condition, context)) {
-              iterReachable.add(branch.target);
-            }
-          }
-          if (node.defaultTarget && group.scc.has(node.defaultTarget)) {
-            iterReachable.add(node.defaultTarget);
-          }
-        }
+        if (shouldExit) break;
       }
-
-      if (shouldExit) break;
     }
 
     if (shouldExit) break;

@@ -5,7 +5,16 @@ import { pathToFileURL } from "node:url";
 import type { ToolContract } from "../../types/index.js";
 import { toolsDir, pathExists } from "../../utils/index.js";
 import { getInstalledItem } from "../marketplace/installed.js";
-import { ensureToolDeps } from "./toolDeps.js";
+import { ensureToolDeps, clearVerified } from "./toolDeps.js";
+
+// ── Module cache ───────────────────────────────────────────────────────
+// Keyed by absolute tool path.  Stores the last-seen mtime and the fully-
+// resolved ToolContract so unchanged tools are served from memory on every
+// loadTools() call (one stat() per file, no re-import required).
+// When a file's mtime changes the entry is evicted, deps are re-checked,
+// and the module is re-imported via a cache-busting URL so Node's ESM
+// loader treats it as a fresh module, picking up the updated code.
+const moduleCache = new Map<string, { mtime: number; contract: ToolContract }>();
 
 /**
  * Scans ~/.solix/tools for tool.js modules.
@@ -33,13 +42,34 @@ export async function loadTools(): Promise<ToolContract[]> {
       if (!(await pathExists(toolPath))) continue;
 
       try {
+        // Stat the file to detect changes.  One stat() per tool per loadTools()
+        // call is negligible overhead (~0.1 ms each) and lets us serve unchanged
+        // tools entirely from memory while picking up edits immediately.
+        const fileStat = await stat(toolPath);
+        const mtime = fileStat.mtimeMs;
+        const cached = moduleCache.get(toolPath);
+
+        if (cached && cached.mtime === mtime) {
+          // File unchanged — return the cached contract with no import needed.
+          tools.push(cached.contract);
+          continue;
+        }
+
+        // File is new or has been updated on disk.
+        // Evict the deps-verified entry so ensureToolDeps re-checks the manifest.
+        if (cached) {
+          clearVerified(join(contributorDir, toolDir));
+        }
+
         // Ensure any dependencies declared in the tool's package.json are
         // installed into the tool's own node_modules before we import it.
-        // This call is a no-op when deps are already present (cached after
-        // the first check per process), so repeated loadTools() calls are cheap.
         await ensureToolDeps(join(contributorDir, toolDir));
 
-        const mod = await import(pathToFileURL(toolPath).href);
+        // Append `?t=<mtime>` to the file URL so Node's ESM loader treats this
+        // as a distinct module specifier, bypassing its native registry cache
+        // and loading the updated file from disk.
+        const url = pathToFileURL(toolPath).href + `?t=${mtime}`;
+        const mod = await import(url);
         const contract: ToolContract = mod.default ?? mod;
 
         // Merge a named `spec` export onto the contract when the default
@@ -79,6 +109,9 @@ export async function loadTools(): Promise<ToolContract[]> {
         } catch {
           // ignore
         }
+
+        // Store the resolved contract so the next loadTools() call is free.
+        moduleCache.set(toolPath, { mtime, contract });
         tools.push(contract);
       } catch (err) {
         console.warn(`[ToolLoader] Failed to import ${toolPath}:`, err);
