@@ -14870,7 +14870,7 @@ const activeLinkStyle = {
 };
 function Sidebar() {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("nav", { style: navStyle, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "0 1.2rem 1rem", fontWeight: 700, fontSize: "1.2rem" }, children: "SolixAI" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "0 1.2rem 1rem", fontWeight: 700, fontSize: "1.2rem" }, children: "NyteShift" }),
     links.map((l) => /* @__PURE__ */ jsxRuntimeExports.jsx(
       NavLink,
       {
@@ -14887,7 +14887,7 @@ function AgentList() {
   const [newName, setNewName] = reactExports.useState("");
   const [error, setError] = reactExports.useState("");
   const load = async () => {
-    setAgents(await window.solixApi.listAgents());
+    setAgents(await window.nyteShiftApi.listAgents());
   };
   reactExports.useEffect(() => {
     load();
@@ -14895,7 +14895,7 @@ function AgentList() {
   const handleCreate = async () => {
     if (!newName.trim()) return;
     try {
-      await window.solixApi.createAgent(newName.trim());
+      await window.nyteShiftApi.createAgent(newName.trim());
       setNewName("");
       setError("");
       await load();
@@ -14905,7 +14905,7 @@ function AgentList() {
   };
   const handleDelete = async (name) => {
     if (!confirm(`Delete agent "${name}"?`)) return;
-    await window.solixApi.deleteAgent(name);
+    await window.nyteShiftApi.deleteAgent(name);
     await load();
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
@@ -14952,19 +14952,19 @@ function AgentDetail() {
   const [running, setRunning] = reactExports.useState(false);
   reactExports.useEffect(() => {
     if (!name) return;
-    window.solixApi.getAgentConfig(name).then(setConfig);
-    window.solixApi.readSoul(name).then(setSoul);
+    window.nyteShiftApi.getAgentConfig(name).then(setConfig);
+    window.nyteShiftApi.readSoul(name).then(setSoul);
   }, [name]);
   const handleSaveSoul = async () => {
     if (!name) return;
-    await window.solixApi.writeSoul(name, soul);
+    await window.nyteShiftApi.writeSoul(name, soul);
   };
   const handleRun = async () => {
     if (!name || !task.trim()) return;
     setRunning(true);
     setResult("");
     try {
-      const res = await window.solixApi.runAutonomous(name, task);
+      const res = await window.nyteShiftApi.runAutonomous(name, task);
       setResult(res.finalOutput);
     } catch (err) {
       setResult(`Error: ${err.message}`);
@@ -15030,11 +15030,11 @@ function AgentDetail() {
 function SkillList() {
   const [skills, setSkills] = reactExports.useState([]);
   reactExports.useEffect(() => {
-    window.solixApi.listSkills().then(setSkills);
+    window.nyteShiftApi.listSkills().then(setSkills);
   }, []);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { children: "Skills" }),
-    skills.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "No skills installed. Sync from the marketplace or add skills to ~/.solix/skills." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { style: { width: "100%", borderCollapse: "collapse" }, children: [
+    skills.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "No skills installed. Sync from the marketplace or add skills to ~/.nyteshift/skills." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { style: { width: "100%", borderCollapse: "collapse" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { style: { textAlign: "left", borderBottom: "2px solid #ddd" }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("th", { style: { padding: 8 }, children: "Name" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("th", { style: { padding: 8 }, children: "Contributor" }),
@@ -15051,11 +15051,11 @@ function SkillList() {
 function ToolList() {
   const [tools, setTools] = reactExports.useState([]);
   reactExports.useEffect(() => {
-    window.solixApi.listTools().then(setTools);
+    window.nyteShiftApi.listTools().then(setTools);
   }, []);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { children: "Tools" }),
-    tools.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "No tools installed. Sync from the marketplace or add tools to ~/.solix/tools." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { style: { width: "100%", borderCollapse: "collapse" }, children: [
+    tools.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "No tools installed. Sync from the marketplace or add tools to ~/.nyteshift/tools." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { style: { width: "100%", borderCollapse: "collapse" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { style: { textAlign: "left", borderBottom: "2px solid #ddd" }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("th", { style: { padding: 8 }, children: "Name" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("th", { style: { padding: 8 }, children: "Contributor" }),
@@ -15074,11 +15074,11 @@ function ProviderConfig() {
   const [config, setConfig] = reactExports.useState({});
   const [saved, setSaved] = reactExports.useState(false);
   reactExports.useEffect(() => {
-    window.solixApi.listProviders().then(setProviders);
-    window.solixApi.readConfig().then(setConfig);
+    window.nyteShiftApi.listProviders().then(setProviders);
+    window.nyteShiftApi.readConfig().then(setConfig);
   }, []);
   const handleSave = async () => {
-    await window.solixApi.writeConfig(config);
+    await window.nyteShiftApi.writeConfig(config);
     setSaved(true);
     setTimeout(() => setSaved(false), 2e3);
   };

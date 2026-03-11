@@ -26,7 +26,7 @@ NyteShift lets you create **agents** that can:
 NyteShift/
 ├── packages/
 │   ├── core/      — Runtime: skills, tools, providers, pipelines, config
-│   ├── cli/       — CLI (`solix` command)
+│   ├── cli/       — CLI (`nyteshift` command)
 │   └── ui/        — Electron desktop app
 ├── package.json   — npm workspaces root
 └── tsconfig.base.json
@@ -51,7 +51,7 @@ links the CLI):
 .\install.ps1
 ```
 
-This will install dependencies, compile every package, and make the `solix`
+This will install dependencies, compile every package, and make the `nyteshift`
 command available globally. If you prefer manual steps, the commands below
 also work:
 
