@@ -27,7 +27,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
     if (this.state.hasError) {
       return (
         this.props.fallback ?? (
-          <div style={{ padding: "2rem", color: "var(--solix-red)" }}>
+          <div style={{ padding: "2rem", color: "var(--nyteshift-red)" }}>
             <strong>Something went wrong:</strong>
             <pre style={{ marginTop: 8, fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
               {this.state.message}

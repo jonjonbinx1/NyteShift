@@ -70,12 +70,12 @@ export function TriggersView(): React.JSX.Element {
   const [tab, setTab] = useState<"triggers" | "runs">("triggers");
 
   const load = useCallback(async () => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     const [allTriggers, allAgents, status, allRuns] = await Promise.all([
-      window.solixApi.triggersListAll(),
-      window.solixApi.listAgents(),
-      window.solixApi.triggersEngineStatus(),
-      window.solixApi.triggersRuns(),
+      window.nyteShiftApi.triggersListAll(),
+      window.nyteShiftApi.listAgents(),
+      window.nyteShiftApi.triggersEngineStatus(),
+      window.nyteShiftApi.triggersRuns(),
     ]);
     setTriggers(allTriggers);
     setAgents(allAgents);
@@ -87,43 +87,43 @@ export function TriggersView(): React.JSX.Element {
 
   // Live updates from the engine.
   useEffect(() => {
-    if (!window.solixApi) return;
-    window.solixApi.onTriggerRunUpdate(() => {
+    if (!window.nyteShiftApi) return;
+    window.nyteShiftApi.onTriggerRunUpdate(() => {
       // Refresh runs on any update.
-      window.solixApi!.triggersRuns().then(setRuns).catch(console.error);
+      window.nyteShiftApi!.triggersRuns().then(setRuns).catch(console.error);
     });
   }, []);
 
   const handleToggleEngine = async () => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     if (engineRunning) {
-      await window.solixApi.triggersEngineStop();
+      await window.nyteShiftApi.triggersEngineStop();
     } else {
-      await window.solixApi.triggersEngineStart();
+      await window.nyteShiftApi.triggersEngineStart();
     }
-    const status = await window.solixApi.triggersEngineStatus();
+    const status = await window.nyteShiftApi.triggersEngineStatus();
     setEngineRunning(status.running);
   };
 
   const handleToggleTrigger = async (trigger: TriggerDefinitionInfo) => {
-    if (!window.solixApi) return;
-    await window.solixApi.triggersUpdate(trigger.id, { enabled: !trigger.enabled });
+    if (!window.nyteShiftApi) return;
+    await window.nyteShiftApi.triggersUpdate(trigger.id, { enabled: !trigger.enabled });
     await load();
   };
 
   const handleDelete = async (triggerId: string) => {
     if (!confirm("Delete this trigger?")) return;
-    if (!window.solixApi) return;
-    await window.solixApi.triggersDelete(triggerId);
+    if (!window.nyteShiftApi) return;
+    await window.nyteShiftApi.triggersDelete(triggerId);
     setSelectedTrigger(null);
     await load();
   };
 
   const handleFire = async (triggerId: string) => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     setFiring(triggerId);
     try {
-      await window.solixApi.triggersFire(triggerId);
+      await window.nyteShiftApi.triggersFire(triggerId);
       await load();
     } catch (err) {
       console.error("Fire trigger error:", err);

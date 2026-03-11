@@ -2,7 +2,7 @@
  * Persistence layer for trigger definitions.
  *
  * Trigger definitions are stored per-agent at:
- *   ~/.solix/agents/<agent-name>/triggers.json
+ *   ~/.nyteshift/agents/<agent-name>/triggers.json
  *
  * This keeps trigger configuration co-located with the agent it belongs to,
  * matching Anthropic's assistant-level configuration pattern.

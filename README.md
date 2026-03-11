@@ -1,10 +1,10 @@
-# SolixAI
+# NyteShift
 
 An agentic platform with autonomous and triggered execution modes.
 
 ## Overview
 
-SolixAI lets you create **agents** that can:
+NyteShift lets you create **agents** that can:
 
 - **Autonomous mode** — Given a task, the agent plans and executes using skills and tools.
 - **Triggered mode** — When an event occurs (cron, email, webhook, etc.), run a pre-configured pipeline.
@@ -13,17 +13,17 @@ SolixAI lets you create **agents** that can:
 
 | Concept      | Description |
 |-------------|-------------|
-| **Skills**   | Markdown prompt files with YAML frontmatter (`~/.solix/skills`) |
-| **Tools**    | JS/TS modules that perform concrete actions (`~/.solix/tools`) |
+| **Skills**   | Markdown prompt files with YAML frontmatter (`~/.nyteshift/skills`) |
+| **Tools**    | JS/TS modules that perform concrete actions (`~/.nyteshift/tools`) |
 | **Providers**| LLM backends — OpenAI, Anthropic, OpenRouter (built-in) |
 | **Soul.md**  | Per-agent system prompt injected into every conversation |
-| **Triggers** | Event-driven pipeline starters (`~/.solix/triggers`) |
+| **Triggers** | Event-driven pipeline starters (`~/.nyteshift/triggers`) |
 | **Sub-Agents** | Orchestrator-workers delegation — agents can spawn other agents as tool calls |
 
 ## Monorepo Structure
 
 ```
-SolixAI/
+NyteShift/
 ├── packages/
 │   ├── core/      — Runtime: skills, tools, providers, pipelines, config
 │   ├── cli/       — CLI (`solix` command)
@@ -64,16 +64,16 @@ npm run build
 
 ```bash
 # Create an agent
-solix agent create my-agent
+nyteshift agent create my-agent
 
 # List agents
-solix agent list
+nyteshift agent list
 
 # Run a task
-solix agent run my-agent "Summarize the latest news"
+nyteshift agent run my-agent "Summarize the latest news"
 
 # Show config
-solix config show
+nyteshift config show
 ```
 
 ### Electron UI
@@ -84,10 +84,10 @@ npm run dev:ui
 
 ## User-Level Storage
 
-All runtime content lives under `~/.solix/`:
+All runtime content lives under `~/.nyteshift/`:
 
 ```
-~/.solix/
+~/.nyteshift/
 ├── config.json
 ├── agents/<name>/
 │   ├── config.json
@@ -99,12 +99,12 @@ All runtime content lives under `~/.solix/`:
 
 ## Marketplace
 
-Marketplace content (skills, tools, themes, triggers, soul templates) lives in a separate repository: **SolixAI-Marketplace**. Use `solix marketplace sync` to pull content into your local `~/.solix` directory.
+Marketplace content (skills, tools, themes, triggers, soul templates) lives in a separate repository: **NyteShift-Marketplace**. Use `nyteshift marketplace sync` to pull content into your local `~/.nyteshift` directory.
 
 You can manage updates via the CLI:
 
-- `solix marketplace update [<category>/<contributor>/<name>]` – check for or apply updates to installed items. Running without a path scans all installed items.
-- `solix marketplace auto <global|category/contributor/name> <on|off>` – enable or disable automatic updates globally or for a specific item. Global setting is also persisted to your user config.
+- `nyteshift marketplace update [<category>/<contributor>/<name>]` – check for or apply updates to installed items. Running without a path scans all installed items.
+- `nyteshift marketplace auto <global|category/contributor/name> <on|off>` – enable or disable automatic updates globally or for a specific item. Global setting is also persisted to your user config.
 
 ## License
 

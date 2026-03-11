@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { GraphNodeInfo } from "../global.js";
 

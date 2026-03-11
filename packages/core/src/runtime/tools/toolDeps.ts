@@ -4,7 +4,7 @@
  * Allows marketplace tools to declare their own npm dependencies in a
  * `package.json` file sitting alongside their `tool.js`.  Dependencies are
  * installed into the tool's own `node_modules` directory so they are
- * completely isolated from the SolixAI core package — there is no version
+ * completely isolated from the NyteShift core package — there is no version
  * conflict risk and no write access to the host project is required.
  *
  * Resolution flow (runs once per tool, per process start):

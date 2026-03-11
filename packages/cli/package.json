@@ -1,10 +1,10 @@
 {
-  "name": "@solix/cli",
+  "name": "@nyteshift/cli",
   "version": "0.1.0",
-  "description": "SolixAI command-line interface",
+  "description": "NyteShift command-line interface",
   "type": "module",
   "bin": {
-    "solix": "./bin/solix"
+    "nyteshift": "./bin/nyteshift"
   },
   "main": "dist/index.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
-    "@solix/core": "*",
+    "@nyteshift/core": "*",
     "commander": "^12.1.0",
     "chalk": "^5.3.0"
   },

@@ -3,52 +3,52 @@ import { join } from "node:path";
 
 // ── Path helpers ───────────────────────────────────────────────────────
 
-/** Root of the user-level SolixAI directory: ~/.solix */
-export function solixHome(): string {
-  return join(homedir(), ".solix");
+/** Root of the user-level NyteShift directory: ~/.nyteshift */
+export function nyteShiftHome(): string {
+  return join(homedir(), ".nyteshift");
 }
 
-/** ~/.solix/skills */
+/** ~/.nyteshift/skills */
 export function skillsDir(): string {
-  return join(solixHome(), "skills");
+  return join(nyteShiftHome(), "skills");
 }
 
-/** ~/.solix/tools */
+/** ~/.nyteshift/tools */
 export function toolsDir(): string {
-  return join(solixHome(), "tools");
+  return join(nyteShiftHome(), "tools");
 }
 
-/** ~/.solix/agents */
+/** ~/.nyteshift/agents */
 export function agentsDir(): string {
-  return join(solixHome(), "agents");
+  return join(nyteShiftHome(), "agents");
 }
 
-/** ~/.solix/triggers */
+/** ~/.nyteshift/triggers */
 export function triggersDir(): string {
-  return join(solixHome(), "triggers");
+  return join(nyteShiftHome(), "triggers");
 }
 
-/** ~/.solix/graphs */
+/** ~/.nyteshift/graphs */
 export function graphsDir(): string {
-  return join(solixHome(), "graphs");
+  return join(nyteShiftHome(), "graphs");
 }
 
-/** ~/.solix/config.json — global user config */
+/** ~/.nyteshift/config.json — global user config */
 export function globalConfigPath(): string {
-  return join(solixHome(), "config.json");
+  return join(nyteShiftHome(), "config.json");
 }
 
-/** ~/.solix/agents/<name>/config.json */
+/** ~/.nyteshift/agents/<name>/config.json */
 export function agentConfigPath(name: string): string {
   return join(agentsDir(), toKebab(name), "config.json");
 }
 
-/** ~/.solix/agents/<name>/soul.md */
+/** ~/.nyteshift/agents/<name>/soul.md */
 export function agentSoulPath(name: string): string {
   return join(agentsDir(), toKebab(name), "soul.md");
 }
 
-/** ~/.solix/agents/<name>/memory/ — persistent external memory store */
+/** ~/.nyteshift/agents/<name>/memory/ — persistent external memory store */
 export function agentMemoryDir(name: string): string {
   return join(agentsDir(), toKebab(name), "memory");
 }

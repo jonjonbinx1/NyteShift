@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { solixHome, readJsonFile, writeJsonFile, pathExists } from "../../utils/index.js";
+import { nyteShiftHome, readJsonFile, writeJsonFile, pathExists } from "../../utils/index.js";
 import { computeDirectoryHash } from "../../utils/index.js";
 import { installMarketplaceItem } from "./marketplaceBrowser.js";
 import {
@@ -36,7 +36,7 @@ export interface InstalledIndex {
   items: InstalledItem[];
 }
 
-const INSTALLED_INDEX_PATH = join(solixHome(), "installed.json");
+const INSTALLED_INDEX_PATH = join(nyteShiftHome(), "installed.json");
 
 export async function readInstalledIndex(): Promise<InstalledIndex> {
   if (!(await pathExists(INSTALLED_INDEX_PATH))) {
@@ -98,7 +98,7 @@ export async function setItemAutoUpdate(
     // Item exists on disk but was not yet tracked in installed.json (e.g. it
     // was installed before the index-tracking system was introduced).
     // Auto-register it now so subsequent operations work correctly.
-    const dest = join(solixHome(), category, contributor, name);
+    const dest = join(nyteShiftHome(), category, contributor, name);
     if (!(await pathExists(dest))) {
       throw new Error(`Item not installed: ${category}/${contributor}/${name}`);
     }
@@ -113,7 +113,7 @@ export async function setItemAutoUpdate(
 }
 
 /**
- * Scan ~/.solix/skills and ~/.solix/tools for items that exist on disk but
+ * Scan ~/.nyteshift/skills and ~/.nyteshift/tools for items that exist on disk but
  * are not yet recorded in installed.json (e.g. items installed before the
  * index-tracking system was introduced).  Missing entries are registered
  * with a computed directory hash and default autoUpdate=false.
@@ -126,7 +126,7 @@ export async function reconcileInstalledItems(): Promise<void> {
   const categories = ["skills", "tools"] as const;
 
   for (const category of categories) {
-    const root = join(solixHome(), category);
+    const root = join(nyteShiftHome(), category);
     if (!(await pathExists(root))) continue;
 
     let contributors: string[];

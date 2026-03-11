@@ -516,7 +516,7 @@ export class TriggerEngine extends EventEmitter {
 
       // Verify HMAC if secret is set.
       if (trigger.webhookSecret) {
-        const sig = req.headers["x-solix-signature"] as string | undefined;
+        const sig = req.headers["x-nyteshift-signature"] as string | undefined;
         if (!verifyWebhookSignature(body, trigger.webhookSecret, sig)) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid signature" }));
@@ -618,7 +618,7 @@ export class TriggerEngine extends EventEmitter {
 
   /**
    * Manually fire a trigger by id with an optional payload.
-   * This is the API used by the CLI `solix triggers fire` command and
+   * This is the API used by the CLI `nyteshift triggers fire` command and
    * the UI "Run Now" button.
    */
   async fireManual(
@@ -649,9 +649,10 @@ export class TriggerEngine extends EventEmitter {
     event: TriggerEvent,
   ): Promise<TriggerRun> {
     const runId = randomUUID();
-    const task = renderTemplate(trigger.taskTemplate, event);
+    const task = renderTemplate(trigger.taskTemplate ?? "", event);
 
-    log(`executing trigger "${trigger.name}" (${trigger.type}) for agent "${trigger.agentName}" — task: "${task.slice(0, 120)}"`);
+    const targetDesc = (trigger as any).targetType === "graph" ? `graph "${(trigger as any).targetId ?? "?"}"` : `agent "${trigger.agentName}"`;
+    log(`executing trigger "${trigger.name}" (${trigger.type}) for ${targetDesc} — task: "${String(task).slice(0, 120)}"`);
 
     const run: TriggerRun = {
       id: runId,
@@ -670,22 +671,42 @@ export class TriggerEngine extends EventEmitter {
     this.emit("run:started", run);
 
     try {
-      const result: PipelineResult = await runAutonomousTask(
-        trigger.agentName,
-        task,
-        {
-          provider: trigger.provider,
-          model: trigger.model,
-          maxSteps: trigger.maxSteps ?? 10,
-        },
-      );
+      if ((trigger as any).targetType === "graph" && (trigger as any).targetId) {
+        // Run a graph when the trigger targets a graph. Pass the trigger payload
+        // as the graph input (manual fire) or fall back to any configured
+        // `triggerInput` on the definition.
+        const { runGraphTracked } = await import("../graph/graphRunRegistry.js");
+        const graphInput = (event.payload as Record<string, unknown>) ?? trigger.triggerInput ?? {};
+        const { result: graphResult } = await runGraphTracked(
+          (trigger as any).targetId,
+          { input: graphInput, provider: trigger.provider, model: trigger.model },
+          { source: "trigger", triggerId: trigger.id, triggerName: trigger.name, triggerType: trigger.type },
+        );
 
-      run.status = "completed";
-      run.result = result;
-      run.completedAt = Date.now();
+        run.status = "completed";
+        run.result = graphResult as any;
+        run.completedAt = Date.now();
 
-      log(`trigger "${trigger.name}" completed — output: "${result.finalOutput.slice(0, 120)}"`);
-      this.emit("run:completed", run);
+        log(`trigger "${trigger.name}" completed — graph trace="${(graphResult as any)?.traceId ?? ""}"`);
+        this.emit("run:completed", run);
+      } else {
+        const result: PipelineResult = await runAutonomousTask(
+          trigger.agentName,
+          task,
+          {
+            provider: trigger.provider,
+            model: trigger.model,
+            maxSteps: trigger.maxSteps ?? 10,
+          },
+        );
+
+        run.status = "completed";
+        run.result = result;
+        run.completedAt = Date.now();
+
+        log(`trigger "${trigger.name}" completed — output: "${result.finalOutput.slice(0, 120)}"`);
+        this.emit("run:completed", run);
+      }
     } catch (err) {
       run.status = "failed";
       run.error = (err as Error).message ?? String(err);

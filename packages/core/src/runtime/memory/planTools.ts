@@ -1,5 +1,5 @@
 /**
- * Built-in Plan Tools — SolixAI
+ * Built-in Plan Tools — NyteShift
  *
  * Provides five agent-callable tools for structured, disk-backed task
  * management following Anthropic's best practices for long-running agentic
@@ -10,11 +10,11 @@
  *    — Anthropic, "Building Effective Agents"
  *
  * Tools exposed:
- *   solix/plan_start      — create a plan with an outline
- *   solix/plan_checkpoint — append a step checkpoint
- *   solix/plan_summarize  — compress older steps into a summary
- *   solix/plan_read       — rehydrate plan state
- *   solix/plan_finish     — mark plan complete / failed / aborted
+ *   nyteshift/plan_start      — create a plan with an outline
+ *   nyteshift/plan_checkpoint — append a step checkpoint
+ *   nyteshift/plan_summarize  — compress older steps into a summary
+ *   nyteshift/plan_read       — rehydrate plan state
+ *   nyteshift/plan_finish     — mark plan complete / failed / aborted
  *
  * Plans are always available (injected like memory tools) so every agent
  * can manage long tasks without marketplace installation.  Retrieval is
@@ -46,7 +46,7 @@ export function createPlanTools(agentName: string): ToolContract[] {
 
     // ── plan_start ────────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "plan_start",
       version: "1.0.0",
       description:
@@ -112,7 +112,7 @@ export function createPlanTools(agentName: string): ToolContract[] {
 
     // ── plan_checkpoint ───────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "plan_checkpoint",
       version: "1.0.0",
       description:
@@ -204,7 +204,7 @@ export function createPlanTools(agentName: string): ToolContract[] {
 
     // ── plan_summarize ────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "plan_summarize",
       version: "1.0.0",
       description:
@@ -256,7 +256,7 @@ export function createPlanTools(agentName: string): ToolContract[] {
 
     // ── plan_read ─────────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "plan_read",
       version: "1.0.0",
       description:
@@ -360,7 +360,7 @@ export function createPlanTools(agentName: string): ToolContract[] {
 
     // ── plan_finish ───────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "plan_finish",
       version: "1.0.0",
       description:

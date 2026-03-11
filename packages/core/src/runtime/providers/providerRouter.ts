@@ -1,5 +1,5 @@
 import type {
-  SolixProvider,
+  NyteShiftProvider,
   ModelInfo,
   ProviderCallParams,
   ProviderCallResult,
@@ -12,7 +12,7 @@ import { createOpenRouterProvider } from "./openrouterProvider.js";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { solixHome } from "../../utils/index.js";
+import { nyteShiftHome } from "../../utils/index.js";
 
 // ── Logging ────────────────────────────────────────────────────────────────
 const log  = (...a: unknown[]) => console.log("[providerRouter]",  ...a);
@@ -21,7 +21,7 @@ const logE = (...a: unknown[]) => console.error("[providerRouter]", ...a);
 
 // ── Built-in registry ──────────────────────────────────────────────────
 
-const providers = new Map<string, SolixProvider>();
+const providers = new Map<string, NyteShiftProvider>();
 
 let _userProvidersLoaded: Promise<void> | null = null;
 let _userProvidersLoadedResolve: (() => void) | null = null;
@@ -36,7 +36,7 @@ function ensureUserProvidersPromise(): void {
 
 function ensureBuiltins(): void {
   if (providers.size > 0) return;
-  const builtins: SolixProvider[] = [
+  const builtins: NyteShiftProvider[] = [
     createOpenAIProvider(),
     createAnthropicProvider(),
     createOpenRouterProvider(),
@@ -45,16 +45,16 @@ function ensureBuiltins(): void {
     providers.set(p.id, p);
     log(`registered built-in provider "${p.id}"`);
   }
-  // Attempt to load user-provided providers from ~/.solix/providers
+  // Attempt to load user-provided providers from ~/.nyteshift/providers
   // (fire-and-forget; failures are logged but do not block startup).
   ensureUserProvidersPromise();
-  log(`scanning ~/.solix/providers for user providers…`);
+  log(`scanning ~/.nyteshift/providers for user providers…`);
   loadUserProviders().then((ups) => {
     let registered = 0;
     for (const up of ups) {
       try {
         if (up && up.id && typeof up.call === "function") {
-          providers.set(up.id, up as SolixProvider);
+          providers.set(up.id, up as NyteShiftProvider);
           log(`registered user provider "${up.id}"`);
           registered++;
         } else {
@@ -73,9 +73,9 @@ function ensureBuiltins(): void {
   });
 }
 
-/** Scan ~/.solix/providers for JS modules and import them. */
+/** Scan ~/.nyteshift/providers for JS modules and import them. */
 async function loadUserProviders(): Promise<any[]> {
-  const dir = join(solixHome(), "providers");
+  const dir = join(nyteShiftHome(), "providers");
   try {
     const entries = await readdir(dir);
     const found: any[] = [];
@@ -125,7 +125,7 @@ async function loadUserProviders(): Promise<any[]> {
 // ── Public API ─────────────────────────────────────────────────────────
 
 /** Return the list of registered providers. */
-export function listProviders(): SolixProvider[] {
+export function listProviders(): NyteShiftProvider[] {
   ensureBuiltins();
   return [...providers.values()];
 }
@@ -138,7 +138,7 @@ export function whenUserProvidersLoaded(): Promise<void> {
 }
 
 /** Get a provider by id. */
-export function getProvider(id: string): SolixProvider | undefined {
+export function getProvider(id: string): NyteShiftProvider | undefined {
   ensureBuiltins();
   return providers.get(id);
 }
@@ -178,8 +178,8 @@ export async function callProvider(
   const raw: any = await provider.call(params);
 
   // Optional verbose debug: print the raw provider response when enabled.
-  // Set SOLIX_DEBUG_PROVIDER_RAW=1 or SOLIX_DEBUG=1 to enable.
-  if (process.env.SOLIX_DEBUG_PROVIDER_RAW === "1" || process.env.SOLIX_DEBUG === "1") {
+  // Set NYTESHIFT_DEBUG_PROVIDER_RAW=1 or NYTESHIFT_DEBUG=1 to enable.
+  if (process.env.NYTESHIFT_DEBUG_PROVIDER_RAW === "1" || process.env.NYTESHIFT_DEBUG === "1") {
     try {
       const util = await import("node:util");
       log(`[providerRouter] raw response from provider="${providerId}" model="${params.model}": ${util.inspect(raw, { depth: 4 })}`);

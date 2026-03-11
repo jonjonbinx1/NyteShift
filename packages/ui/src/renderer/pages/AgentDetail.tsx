@@ -389,7 +389,7 @@ function TypingIndicator() {
           style={{
             width: 7, height: 7, borderRadius: "50%",
             background: C.subtext0, display: "inline-block",
-            animation: `solixBounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+            animation: `nyteShiftBounce 1.2s ease-in-out ${i * 0.2}s infinite`,
           }}
         />
       ))}
@@ -501,10 +501,10 @@ export function AgentDetail(): React.JSX.Element {
 
   // ── Load agent data + restore/create session on mount ─────────────────
   useEffect(() => {
-    if (!name || !window.solixApi) return;
+    if (!name || !window.nyteShiftApi) return;
 
     // Load agent config
-    window.solixApi.getAgentConfig(name).then((cfg) => {
+    window.nyteShiftApi.getAgentConfig(name).then((cfg) => {
       const c = (cfg || {}) as Record<string, any>;
       setConfig(c);
       if (c.provider) setSelProvider(c.provider as string);
@@ -513,8 +513,8 @@ export function AgentDetail(): React.JSX.Element {
       if (c.maxTokens !== undefined) setMaxTokens(String(c.maxTokens));
     }).catch(console.error);
 
-    window.solixApi.readSoul(name).then(setSoul).catch(console.error);
-    window.solixApi.listProviders().then(setProviders).catch(console.error);
+    window.nyteShiftApi.readSoul(name).then(setSoul).catch(console.error);
+    window.nyteShiftApi.listProviders().then(setProviders).catch(console.error);
 
     // Restore or create session
     const existing = chatStore.getActiveSession(name);
@@ -535,8 +535,8 @@ export function AgentDetail(): React.JSX.Element {
 
   // ── Fetch models when provider changes ───────────────────────────────────
   useEffect(() => {
-    if (!selProvider || !window.solixApi) return;
-    const api = window.solixApi as any;
+    if (!selProvider || !window.nyteShiftApi) return;
+    const api = window.nyteShiftApi as any;
     if (typeof api.listProviderModels !== "function") return;
     api.listProviderModels(selProvider)
       .then((ms: Model[]) => {
@@ -596,8 +596,8 @@ export function AgentDetail(): React.JSX.Element {
     };
     setConfig(next);
     await Promise.all([
-      window.solixApi!.writeAgentConfig(name, next),
-      window.solixApi!.writeSoul(name, soul),
+      window.nyteShiftApi!.writeAgentConfig(name, next),
+      window.nyteShiftApi!.writeSoul(name, soul),
     ]);
     setSavedSettings(true);
     setTimeout(() => setSavedSettings(false), 2000);
@@ -655,7 +655,7 @@ export function AgentDetail(): React.JSX.Element {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-      const res = await window.solixApi!.runAutonomous(name, taskText, {
+      const res = await window.nyteShiftApi!.runAutonomous(name, taskText, {
         provider: selProvider || undefined,
         model: selModel || undefined,
         temperature: parseFloat(temperature) || undefined,
@@ -702,15 +702,15 @@ export function AgentDetail(): React.JSX.Element {
     <>
       {/* Inject keyframe animations */}
       <style>{`
-        @keyframes solixBounce {
+        @keyframes nyteShiftBounce {
           0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
           30% { transform: translateY(-6px); opacity: 1; }
         }
-        @keyframes solixSpin {
+        @keyframes nyteShiftSpin {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
         }
-        @keyframes solixPulse {
+        @keyframes nyteShiftPulse {
           0%, 100% { opacity: 0.15; }
           50%       { opacity: 0.45; }
         }
@@ -1189,7 +1189,7 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
             display: "inline-block", width: 12, height: 12,
             border: `2px solid ${C.surface1}`, borderTop: `2px solid ${C.mauve}`,
             borderRadius: "50%", flexShrink: 0,
-            animation: "solixSpin 0.8s linear infinite",
+            animation: "nyteShiftSpin 0.8s linear infinite",
           }} />
           <span style={{ fontSize: 13, color: C.text, flex: 1, transition: "opacity 0.3s" }}>
             {phases[phase]}
@@ -1211,10 +1211,10 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
             </button>
             <button
               onClick={async () => {
-                if (!window.solixApi) return;
+                if (!window.nyteShiftApi) return;
                 setCancelling(true);
                 try {
-                  await window.solixApi.cancelRun(agentName, sessionId);
+                  await window.nyteShiftApi.cancelRun(agentName, sessionId);
                 } catch (err) {
                   console.error("Cancel request failed:", err);
                 } finally {
@@ -1248,7 +1248,7 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
                 height: 8, borderRadius: 4,
                 background: `rgba(203,166,247,0.1)`,
                 width: `${w}%`,
-                animation: `solixPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
+                animation: `nyteShiftPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
               }} />
             ))}
             <span style={{ fontSize: 11, color: C.overlay0, fontStyle: "italic" }}>

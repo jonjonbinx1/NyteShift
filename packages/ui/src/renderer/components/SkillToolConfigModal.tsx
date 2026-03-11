@@ -62,10 +62,10 @@ export function SkillToolConfigModal({
 
   // ── Load values when scope changes ──────────────────────────────────
   useEffect(() => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     setLoading(true);
     const agentName = scope === "global" ? undefined : scope;
-    window.solixApi
+    window.nyteShiftApi
       .skillToolConfigRead(kind, qualifiedName, agentName)
       .then((v) => {
         setValues(v ?? {});
@@ -99,11 +99,11 @@ export function SkillToolConfigModal({
   };
 
   const handleSave = async () => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     setSaving(true);
     try {
       const agentName = scope === "global" ? undefined : scope;
-      await window.solixApi.skillToolConfigWrite(kind, qualifiedName, values, agentName);
+      await window.nyteShiftApi.skillToolConfigWrite(kind, qualifiedName, values, agentName);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
@@ -118,7 +118,7 @@ export function SkillToolConfigModal({
     setPendingAction(null);
     setActionStates((prev) => ({ ...prev, [field.key]: "running" }));
     try {
-      const result = await window.solixApi!.toolRunConfigAction(qualifiedName, field.key);
+      const result = await window.nyteShiftApi!.toolRunConfigAction(qualifiedName, field.key);
       const msg = typeof result === "string" ? result : (result as any)?.message ?? "Done";
       setActionResults((prev) => ({ ...prev, [field.key]: msg }));
       setActionStates((prev) => ({ ...prev, [field.key]: "done" }));

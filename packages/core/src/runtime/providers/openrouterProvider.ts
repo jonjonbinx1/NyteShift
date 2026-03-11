@@ -1,5 +1,5 @@
 import type {
-  SolixProvider,
+  NyteShiftProvider,
   ModelInfo,
   ProviderCallParams,
   ProviderCallResult,
@@ -18,7 +18,7 @@ import { resolveConfig } from "../config/configResolver.js";
 const log  = (...a: unknown[]) => console.log("[provider:openrouter]",  ...a);
 const logE = (...a: unknown[]) => console.error("[provider:openrouter]", ...a);
 
-export function createOpenRouterProvider(): SolixProvider {
+export function createOpenRouterProvider(): NyteShiftProvider {
   return {
     id: "openrouter",
 
@@ -87,8 +87,8 @@ export function createOpenRouterProvider(): SolixProvider {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": "https://solixai.dev",
-          "X-Title": "SolixAI",
+          "HTTP-Referer": "https://nyteshift.dev",
+          "X-Title": "NyteShift",
         },
         body: JSON.stringify({
           model: params.model,

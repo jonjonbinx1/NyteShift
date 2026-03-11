@@ -18,8 +18,8 @@
     "incremental": true,
     "baseUrl": ".",
     "paths": {
-      "@solix/core": ["packages/core/src"],
-      "@solix/*": ["packages/*/src"]
+      "@nyteshift/core": ["packages/core/src"],
+      "@nyteshift/*": ["packages/*/src"]
     }
   }
 }

@@ -5,7 +5,7 @@ import type { TriggerEvent } from "../../types/index.js";
 import { triggersDir, pathExists } from "../../utils/index.js";
 
 /**
- * List all trigger directories under ~/.solix/triggers.
+ * List all trigger directories under ~/.nyteshift/triggers.
  */
 export async function listTriggers(): Promise<string[]> {
   const root = triggersDir();
@@ -19,7 +19,7 @@ export async function listTriggers(): Promise<string[]> {
  * Fire a trigger for a given agent.
  *
  * The trigger module is expected at:
- *   ~/.solix/triggers/<triggerName>/trigger.js
+ *   ~/.nyteshift/triggers/<triggerName>/trigger.js
  *
  * It must default-export `{ run: (event: TriggerEvent) => Promise<void> }`.
  */

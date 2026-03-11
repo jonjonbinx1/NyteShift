@@ -5,12 +5,12 @@ import {
   createAgent,
   deleteAgent,
   runAutonomousTask,
-} from "@solix/core";
+} from "@nyteshift/core";
 
 export function registerAgentCommands(program: Command): void {
   const agent = program.command("agent").description("Manage agents");
 
-  // ── solix agent list ─────────────────────────────────────────────────
+  // ── nyteshift agent list ─────────────────────────────────────────────────
 
   agent
     .command("list")
@@ -18,7 +18,7 @@ export function registerAgentCommands(program: Command): void {
     .action(async () => {
       const agents = await listAgents();
       if (agents.length === 0) {
-        console.log(chalk.yellow("No agents found. Create one with: solix agent create <name>"));
+        console.log(chalk.yellow("No agents found. Create one with: nyteshift agent create <name>"));
         return;
       }
       console.log(chalk.bold("Agents:"));
@@ -27,7 +27,7 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  // ── solix agent create <name> ────────────────────────────────────────
+  // ── nyteshift agent create <name> ────────────────────────────────────────
 
   agent
     .command("create <name>")
@@ -42,7 +42,7 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  // ── solix agent delete <name> ────────────────────────────────────────
+  // ── nyteshift agent delete <name> ────────────────────────────────────────
 
   agent
     .command("delete <name>")
@@ -57,7 +57,7 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  // ── solix agent run <name> "<task>" ──────────────────────────────────
+  // ── nyteshift agent run <name> "<task>" ──────────────────────────────────
 
   agent
     .command("run <name> <task>")

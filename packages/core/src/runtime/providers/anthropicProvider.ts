@@ -1,5 +1,5 @@
 import type {
-  SolixProvider,
+  NyteShiftProvider,
   ModelInfo,
   ProviderCallParams,
   ProviderCallResult,
@@ -15,7 +15,7 @@ import { resolveConfig } from "../config/configResolver.js";
 const log  = (...a: unknown[]) => console.log("[provider:anthropic]",  ...a);
 const logE = (...a: unknown[]) => console.error("[provider:anthropic]", ...a);
 
-export function createAnthropicProvider(): SolixProvider {
+export function createAnthropicProvider(): NyteShiftProvider {
   return {
     id: "anthropic",
 

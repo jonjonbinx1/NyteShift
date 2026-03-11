@@ -7,10 +7,10 @@ import { skillsDir, readTextFile, pathExists } from "../../utils/index.js";
 import { getInstalledItem } from "../marketplace/installed.js";
 
 /**
- * Scans ~/.solix/skills for skill.md files.
+ * Scans ~/.nyteshift/skills for skill.md files.
  *
  * Expected layout:
- *   ~/.solix/skills/<contributor>/<skill-name>/skill.md
+ *   ~/.nyteshift/skills/<contributor>/<skill-name>/skill.md
  */
 export async function loadSkills(): Promise<Skill[]> {
   const root = skillsDir();

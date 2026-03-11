@@ -11,11 +11,11 @@ export function AgentList(): React.JSX.Element {
 
   const load = async () => {
     console.log("[AgentList] load() called");
-    if (!window.solixApi) {
-      console.warn("[AgentList] solixApi unavailable");
+    if (!window.nyteShiftApi) {
+      console.warn("[AgentList] nyteShiftApi unavailable");
       return;
     }
-    const list = await window.solixApi.listAgents();
+    const list = await window.nyteShiftApi.listAgents();
     console.log("[AgentList] agents:", list);
     setAgents(list);
   };
@@ -24,7 +24,7 @@ export function AgentList(): React.JSX.Element {
 
   const handleDelete = async (name: string) => {
     if (!confirm(`Delete agent "${name}"?`)) return;
-    await window.solixApi!.deleteAgent(name);
+    await window.nyteShiftApi!.deleteAgent(name);
     await load();
   };
 

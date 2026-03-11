@@ -13,15 +13,15 @@ import {
   checkAndUpdateItem,
   setGlobalAutoUpdate,
   setItemAutoUpdate,
-} from "@solix/core";
+} from "@nyteshift/core";
 
 // types
-import type { MarketplaceItem } from "@solix/core";
+import type { MarketplaceItem } from "@nyteshift/core";
 
 export function registerMarketplaceCommands(program: Command): void {
   const marketplace = program.command("marketplace").description("Marketplace commands");
 
-  // ── solix marketplace sync ───────────────────────────────────────────
+  // ── nyteshift marketplace sync ───────────────────────────────────────────
 
   marketplace
     .command("sync")
@@ -35,7 +35,7 @@ export function registerMarketplaceCommands(program: Command): void {
       }
     });
 
-  // ── solix marketplace list ───────────────────────────────────────────
+  // ── nyteshift marketplace list ───────────────────────────────────────────
 
   marketplace
     .command("list")
@@ -45,7 +45,7 @@ export function registerMarketplaceCommands(program: Command): void {
     .action(async (opts: { category?: string; search?: string }) => {
       const items = await browseMarketplace(opts);
       if (items.length === 0) {
-        console.log(chalk.yellow("No items found. Run `solix marketplace sync` first."));
+        console.log(chalk.yellow("No items found. Run `nyteshift marketplace sync` first."));
         return;
       }
       console.log(chalk.bold(`\n  Found ${items.length} item(s):\n`));
@@ -57,7 +57,7 @@ export function registerMarketplaceCommands(program: Command): void {
       console.log();
     });
 
-  // ── solix marketplace categories ─────────────────────────────────────
+  // ── nyteshift marketplace categories ─────────────────────────────────────
 
   marketplace
     .command("categories")
@@ -65,7 +65,7 @@ export function registerMarketplaceCommands(program: Command): void {
     .action(async () => {
       const cats = await listMarketplaceCategories();
       if (cats.length === 0) {
-        console.log(chalk.yellow("No categories found. Run `solix marketplace sync` first."));
+        console.log(chalk.yellow("No categories found. Run `nyteshift marketplace sync` first."));
         return;
       }
       console.log(chalk.bold("\n  Categories:\n"));
@@ -73,7 +73,7 @@ export function registerMarketplaceCommands(program: Command): void {
       console.log();
     });
 
-  // ── solix marketplace install ────────────────────────────────────────
+  // ── nyteshift marketplace install ────────────────────────────────────────
 
   marketplace
     .command("install <path>")
@@ -81,14 +81,14 @@ export function registerMarketplaceCommands(program: Command): void {
     .action(async (itemPath: string) => {
       const parts = itemPath.split("/");
       if (parts.length !== 3) {
-        console.error(chalk.red("Usage: solix marketplace install <category>/<contributor>/<name>"));
+        console.error(chalk.red("Usage: nyteshift marketplace install <category>/<contributor>/<name>"));
         process.exit(1);
       }
       const [category, contributor, name] = parts;
       const all = await browseMarketplace({ category });
       const match = all.find((i: MarketplaceItem) => i.contributor === contributor && i.name === name);
       if (!match) {
-        console.error(chalk.red(`Item not found: ${itemPath}. Run \`solix marketplace sync\` and \`solix marketplace list\` first.`));
+        console.error(chalk.red(`Item not found: ${itemPath}. Run \`nyteshift marketplace sync\` and \`nyteshift marketplace list\` first.`));
         process.exit(1);
       }
       const res = await installMarketplaceItem(match);
@@ -99,7 +99,7 @@ export function registerMarketplaceCommands(program: Command): void {
       }
     });
 
-  // ── solix marketplace sources ────────────────────────────────────────
+  // ── nyteshift marketplace sources ────────────────────────────────────────
 
   const sourcesCmd = marketplace.command("sources").description("Manage marketplace sources");
 
@@ -148,7 +148,7 @@ export function registerMarketplaceCommands(program: Command): void {
       }
       const parts = path.split("/");
       if (parts.length !== 3) {
-        console.error(chalk.red("Usage: solix marketplace update <category>/<contributor>/<name>"));
+        console.error(chalk.red("Usage: nyteshift marketplace update <category>/<contributor>/<name>"));
         process.exit(1);
       }
       const [category, contributor, name] = parts;
@@ -167,7 +167,7 @@ export function registerMarketplaceCommands(program: Command): void {
       } else {
         const parts = scope.split("/");
         if (parts.length !== 3) {
-          console.error(chalk.red("Usage: solix marketplace auto <global|category/contributor/name> <on|off>"));
+          console.error(chalk.red("Usage: nyteshift marketplace auto <global|category/contributor/name> <on|off>"));
           process.exit(1);
         }
         const [category, contributor, name] = parts;

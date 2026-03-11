@@ -18,14 +18,14 @@
  *         tool.ts
  */
 
-/** Persisted config for all marketplace sources — lives at ~/.solix/marketplace.json */
+/** Persisted config for all marketplace sources — lives at ~/.nyteshift/marketplace.json */
 export interface MarketplaceConfig {
   /** Ordered list of marketplace sources. First match wins on name collisions. */
   sources: MarketplaceSource[];
 }
 
 export interface MarketplaceSource {
-  /** Human-readable label, e.g. "Official SolixAI" */
+  /** Human-readable label, e.g. "Official NyteShift" */
   name: string;
   /** Git clone URL (HTTPS or SSH) */
   url: string;
@@ -59,7 +59,7 @@ export interface MarketplaceItem {
    * Kept for backward compatibility with CLI callers that still clone repos.
    */
   localPath?: string;
-  /** Whether this item is already installed in ~/.solix/<category>/<contributor>/<name> */
+  /** Whether this item is already installed in ~/.nyteshift/<category>/<contributor>/<name> */
   installed: boolean;
   /** Optional description from README.md or frontmatter */
   description: string;

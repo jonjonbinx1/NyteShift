@@ -1,4 +1,4 @@
-# solix-tasks
+# nyteshift-tasks
 
 ## Task: Fix UI for Chat Completions
 - [ ] Implementation

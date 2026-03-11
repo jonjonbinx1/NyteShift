@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import {
-  solixHome,
+  nyteShiftHome,
   skillsDir,
   toolsDir,
   agentsDir,
@@ -8,12 +8,12 @@ import {
 } from "../../utils/index.js";
 
 /**
- * Ensure all required ~/.solix sub-directories exist.
+ * Ensure all required ~/.nyteshift sub-directories exist.
  * Safe to call on every startup — mkdir is no-op when dirs already exist.
  */
-export async function ensureSolixDirs(): Promise<void> {
+export async function ensureNyteShiftDirs(): Promise<void> {
   const dirs = [
-    solixHome(),
+    nyteShiftHome(),
     skillsDir(),
     toolsDir(),
     agentsDir(),

@@ -1,5 +1,5 @@
 /**
- * Built-in Sub-Agent Tools — SolixAI
+ * Built-in Sub-Agent Tools — NyteShift
  *
  * Implements Anthropic's **orchestrator-workers** pattern for multi-agent
  * delegation.  A parent agent can dynamically break down complex tasks and
@@ -30,13 +30,13 @@
  *      nested delegation trees.
  *
  *   5. **Existing agents as workers** — the parent can delegate to any
- *      agent that exists in ~/.solix/agents/.  Each worker agent's soul,
+ *      agent that exists in ~/.nyteshift/agents/.  Each worker agent's soul,
  *      skills and tools are loaded normally, so specialised agents can be
  *      composed into larger workflows.
  *
  * Available tools:
- *   solix/sub_agent_run  — delegate a task to a named agent
- *   solix/sub_agent_list — list available agents for delegation
+ *   nyteshift/sub_agent_run  — delegate a task to a named agent
+ *   nyteshift/sub_agent_list — list available agents for delegation
  */
 
 import type { ToolContract, SubAgentResult, AutonomousTaskOptions } from "../../types/index.js";
@@ -91,7 +91,7 @@ export interface SubAgentToolsOptions {
   /**
    * Whether the agent is allowed to fire sub-agents asynchronously.
    * Read from the agent's `allowAsyncSubAgents` config flag.
-   * When true a third built-in tool `solix/sub_agent_collect` is injected.
+   * When true a third built-in tool `nyteshift/sub_agent_collect` is injected.
    */
   allowAsync?: boolean;
 }
@@ -127,7 +127,7 @@ export function createSubAgentTools(opts: SubAgentToolsOptions): ToolContract[] 
 
     // ── sub_agent_run ─────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "sub_agent_run",
       version: "1.0.0",
       description: canDelegate
@@ -369,7 +369,7 @@ export function createSubAgentTools(opts: SubAgentToolsOptions): ToolContract[] 
 
     // ── sub_agent_list ────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "sub_agent_list",
       version: "1.0.0",
       description:
@@ -421,7 +421,7 @@ export function createSubAgentTools(opts: SubAgentToolsOptions): ToolContract[] 
     // ── sub_agent_collect (async mode only) ───────────────────────────
     ...(opts.allowAsync
       ? [{
-          contributor: "solix",
+          contributor: "nyteshift",
           name: "sub_agent_collect",
           version: "1.0.0",
           description:

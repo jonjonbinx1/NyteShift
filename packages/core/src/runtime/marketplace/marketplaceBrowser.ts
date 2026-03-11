@@ -3,14 +3,14 @@
  * discovers all available items without cloning or storing anything locally.
  *
  * Files are only downloaded to the user's machine when they explicitly choose
- * to install an item.  Installed items land in ~/.solix/<category>/<contributor>/<name>
+ * to install an item.  Installed items land in ~/.nyteshift/<category>/<contributor>/<name>
  * exactly as before — the user-visible behaviour is unchanged.
  */
 
 import { rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { pathExists, solixHome, computeDirectoryHash } from "../../utils/index.js";
+import { pathExists, nyteShiftHome, computeDirectoryHash } from "../../utils/index.js";
 import { readMarketplaceConfig } from "./marketplaceConfig.js";
 import type { MarketplaceItem, MarketplaceCategory } from "./types.js";
 import {
@@ -83,7 +83,7 @@ function descriptionFromReadme(content: string): string {
 }
 
 async function isInstalled(category: string, contributor: string, name: string): Promise<boolean> {
-  return pathExists(join(solixHome(), category, contributor, name));
+  return pathExists(join(nyteShiftHome(), category, contributor, name));
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -222,7 +222,7 @@ export async function listMarketplaceCategories(): Promise<MarketplaceCategory[]
  * Install a marketplace item.
  *
  * Downloads all files for the item from the remote GitHub repo into
- * ~/.solix/<category>/<contributor>/<name>.
+ * ~/.nyteshift/<category>/<contributor>/<name>.
  *
  * Accepts `remotePath` (preferred, new callers) or falls back to legacy
  * `localPath` for CLI callers that still use a locally-cloned cache.
@@ -238,7 +238,7 @@ export async function installMarketplaceItem(item: {
   /** Name of the source to install from (defaults to first enabled source). */
   source?: string;
 }): Promise<{ installed: boolean; path: string; message: string }> {
-  const dest = join(solixHome(), item.category, item.contributor, item.name);
+  const dest = join(nyteShiftHome(), item.category, item.contributor, item.name);
 
   // These are populated during the remote download path
   let remoteTreeSha: string | undefined;
@@ -320,7 +320,7 @@ export async function installMarketplaceItem(item: {
 }
 
 /**
- * Uninstall a marketplace item: remove ~/.solix/<category>/<contributor>/<name>
+ * Uninstall a marketplace item: remove ~/.nyteshift/<category>/<contributor>/<name>
  * and remove it from the installed index.
  */
 export async function uninstallMarketplaceItem(item: {
@@ -328,7 +328,7 @@ export async function uninstallMarketplaceItem(item: {
   contributor: string;
   name: string;
 }): Promise<{ message: string }> {
-  const dest = join(solixHome(), item.category, item.contributor, item.name);
+  const dest = join(nyteShiftHome(), item.category, item.contributor, item.name);
   try {
     await rm(dest, { recursive: true, force: true });
     await removeInstalledItem(item.category, item.contributor, item.name);

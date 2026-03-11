@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 /**
- * Expose a safe API to the renderer process via `window.solixApi`.
+ * Expose a safe API to the renderer process via `window.nyteShiftApi`.
  */
 // Forward renderer console output to main process for easier debugging
 const forward = (level: "log" | "warn" | "error", args: unknown[]) => {
@@ -29,7 +29,7 @@ try {
   (window as any).__preload_executed = true;
 } catch {}
 
-contextBridge.exposeInMainWorld("solixApi", {
+contextBridge.exposeInMainWorld("nyteShiftApi", {
   // Agents
   listAgents: (): Promise<string[]> => ipcRenderer.invoke("agents:list"),
   createAgent: (name: string) => ipcRenderer.invoke("agents:create", name),
@@ -141,6 +141,10 @@ contextBridge.exposeInMainWorld("solixApi", {
     provider?: string;
     model?: string;
     maxSteps?: number;
+    // Optional graph-target fields
+    targetType?: string;
+    targetId?: string;
+    triggerInput?: Record<string, unknown>;
     // Discord fields
     discordBotToken?: string;
     discordGuildId?: string;
@@ -204,6 +208,7 @@ contextBridge.exposeInMainWorld("solixApi", {
   graphRun: (graphOrId: unknown, opts?: unknown) => ipcRenderer.invoke("graph:run", graphOrId, opts),
   graphRunStatus: (runId: string) => ipcRenderer.invoke("graph:run:status", runId),
   graphRuns: () => ipcRenderer.invoke("graph:runs"),
+  graphRunsForGraph: (graphId: string) => ipcRenderer.invoke("graph:runs:forGraph", graphId),
   graphRunCancel: (runId: string) => ipcRenderer.invoke("graph:run:cancel", runId),
   onGraphNodeStart: (cb: (data: unknown) => void) => {
     ipcRenderer.on("graph:nodeStart", (_e, data) => cb(data));

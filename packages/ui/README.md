@@ -1,6 +1,6 @@
-# @solix/ui
+# @nyteshift/ui
 
-Electron desktop application for SolixAI.
+Electron desktop application for NyteShift.
 
 ## Development
 
@@ -22,11 +22,11 @@ npm run build:all
 ### Main Process (`src/main/main.ts`)
 
 - Creates a `BrowserWindow`
-- Registers IPC handlers that bridge the renderer to `@solix/core`
+- Registers IPC handlers that bridge the renderer to `@nyteshift/core`
 
 ### Preload (`src/main/preload.ts`)
 
-- Exposes `window.solixApi` via `contextBridge`
+- Exposes `window.nyteShiftApi` via `contextBridge`
 - All core operations are available as async functions
 
 ### Renderer (`src/renderer/`)

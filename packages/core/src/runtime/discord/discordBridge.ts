@@ -1,5 +1,5 @@
 /**
- * Discord Bridge — connects a Discord channel to a SolixAI agent.
+ * Discord Bridge — connects a Discord channel to a NyteShift agent.
  *
  * Two operating modes (following OpenClaw's channel-adapter architecture):
  *
@@ -18,7 +18,7 @@
  * an informative error is thrown at connection time.
  *
  * Security: bot tokens are stored per-agent at
- *   ~/.solix/agents/<agentName>/discord-bridge.json
+ *   ~/.nyteshift/agents/<agentName>/discord-bridge.json
  * or inline in the TriggerDefinition.  Tokens are never logged.
  *
  * Design references:

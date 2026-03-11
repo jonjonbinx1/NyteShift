@@ -36,7 +36,7 @@ export function GraphsView(): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const list = await window.solixApi?.graphList() ?? [];
+      const list = await window.nyteShiftApi?.graphList() ?? [];
       setGraphs(list.sort((a, b) => b.updatedAt - a.updatedAt));
     } catch (e) {
       setError((e as Error).message);
@@ -52,7 +52,7 @@ export function GraphsView(): React.JSX.Element {
     if (!confirm(`Delete graph "${g.name}"? This cannot be undone.`)) return;
     setDeleting(g.id);
     try {
-      await window.solixApi?.graphDelete(g.id);
+      await window.nyteShiftApi?.graphDelete(g.id);
       await load();
     } catch (e) {
       alert((e as Error).message);
@@ -200,6 +200,17 @@ export function GraphsView(): React.JSX.Element {
                 }}
               >
                 Open Builder
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); navigate(`/graph-runs?graphId=${encodeURIComponent(g.id)}`); }}
+                style={{
+                  padding: "7px 12px", background: "transparent",
+                  border: `1px solid ${C.surface2}`,
+                  borderRadius: 6, color: C.subtext1, cursor: "pointer",
+                  fontSize: "0.8rem",
+                }}
+              >
+                Runs
               </button>
               <button
                 onClick={(e) => handleDelete(g, e)}

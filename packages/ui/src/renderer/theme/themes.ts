@@ -40,7 +40,7 @@ export const catppuccinMocha: ThemeDefinition = {
   id: "catppuccin-mocha",
   name: "Mocha",
   contributor: "Catppuccin",
-  description: "The original warm dark theme. Default for Solix.",
+  description: "The original warm dark theme. Default for NyteShift.",
   palette: {
     base: "#1e1e2e",
     mantle: "#181825",

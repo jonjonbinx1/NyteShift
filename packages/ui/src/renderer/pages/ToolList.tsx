@@ -40,19 +40,19 @@ export function ToolList(): React.JSX.Element {
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
 
   const reload = () => {
-    if (!window.solixApi) return;
-    window.solixApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
+    if (!window.nyteShiftApi) return;
+    window.nyteShiftApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
   };
 
   useEffect(() => {
     reload();
-    if (window.solixApi?.onToolsChanged) window.solixApi.onToolsChanged(reload);
-    window.solixApi?.listAgents().then(setAgents).catch(console.error);
+    if (window.nyteShiftApi?.onToolsChanged) window.nyteShiftApi.onToolsChanged(reload);
+    window.nyteShiftApi?.listAgents().then(setAgents).catch(console.error);
     loadInstalledIndex();
   }, []);
 
   const loadInstalledIndex = async () => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     try {
       const idx = await a.marketplaceInstalled();
@@ -71,7 +71,7 @@ export function ToolList(): React.JSX.Element {
   };
 
   const handleUpdateTool = async (t: ToolInfo) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     const key = `${t.contributor}/${t.name}`;
     setUpdatingItems((prev) => new Set([...prev, key]));
@@ -79,7 +79,7 @@ export function ToolList(): React.JSX.Element {
       const res = await a.marketplaceUpdate({ category: "tools", contributor: t.contributor, name: t.name });
       flash(res?.message ?? (res?.updated ? "Updated" : "Already up to date"));
       await loadInstalledIndex();
-        window.solixApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
+        window.nyteShiftApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -88,7 +88,7 @@ export function ToolList(): React.JSX.Element {
   };
 
   const handleUninstallTool = async (t: ToolInfo) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     const key = `${t.contributor}/${t.name}`;
     if (!confirm(`Uninstall tool ${t.name}? This will remove the on-disk tool.`)) return;
@@ -97,7 +97,7 @@ export function ToolList(): React.JSX.Element {
       const res = await a.marketplaceUninstall({ category: "tools", contributor: t.contributor, name: t.name });
       flash(res?.message ?? "Uninstalled");
       await loadInstalledIndex();
-        window.solixApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
+        window.nyteShiftApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -106,7 +106,7 @@ export function ToolList(): React.JSX.Element {
   };
 
   const handleAutoToggleTool = async (t: ToolInfo, en: boolean) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     const key = `${t.contributor}/${t.name}`;
     setUpdatingItems((prev) => new Set([...prev, key]));
@@ -153,7 +153,7 @@ export function ToolList(): React.JSX.Element {
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
   const handleUpdateAllTools = async (contributor?: string) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     setUpdatingAll(true);
     try {
@@ -169,7 +169,7 @@ export function ToolList(): React.JSX.Element {
       }
       flash(updated > 0 ? `Updated ${updated} tool${updated !== 1 ? "s" : ""}` : "All tools up to date");
       await loadInstalledIndex();
-      window.solixApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
+      window.nyteShiftApi!.listTools().then((ts: any) => setTools(ts)).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -178,7 +178,7 @@ export function ToolList(): React.JSX.Element {
   };
 
   const handleGlobalAutoToggle = async (en: boolean) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     await a.marketplaceSetGlobalAutoUpdate(en);
     setGlobalAutoUpdate(en);
@@ -224,7 +224,7 @@ export function ToolList(): React.JSX.Element {
         <h1 style={{ margin: "0 0 8px", fontSize: "1.6rem", fontWeight: 700, letterSpacing: "-0.02em" }}>Tools</h1>
         <div style={{ textAlign: "center", padding: "4rem 1rem", color: c.muted, background: c.surface, borderRadius: 14, border: `1px solid ${c.border}` }}>
           <p style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: 6 }}>No tools installed</p>
-          <p style={{ fontSize: "0.88rem" }}>Sync from the <strong style={{ color: c.purple }}>Marketplace</strong> or add tool modules to <code style={{ color: c.subtext }}>~/.solix/tools</code>.</p>
+          <p style={{ fontSize: "0.88rem" }}>Sync from the <strong style={{ color: c.purple }}>Marketplace</strong> or add tool modules to <code style={{ color: c.subtext }}>~/.nyteshift/tools</code>.</p>
         </div>
       </div>
     );

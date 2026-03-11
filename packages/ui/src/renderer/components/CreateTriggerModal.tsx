@@ -22,6 +22,8 @@ interface TriggerDefinitionInfo {
   discordMode?: "trigger" | "bridge";
   createdAt: number;
   updatedAt: number;
+  targetType?: string;
+  targetId?: string;
 }
 
 interface Props {
@@ -523,6 +525,9 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
   const isEdit = !!editTrigger;
   const [name, setName] = useState(editTrigger?.name ?? "");
   const [agentName, setAgentName] = useState(editTrigger?.agentName ?? defaultAgent ?? agents[0] ?? "");
+  const [targetType, setTargetType] = useState<string>(editTrigger?.targetType ?? "agent");
+  const [graphs, setGraphs] = useState<Array<{ id: string; name?: string }>>([]);
+  const [selectedGraphId, setSelectedGraphId] = useState<string | undefined>(editTrigger?.targetId);
   // Map monthly/oneoff to "cron" in the type picker so they show as "Scheduled".
   const [type, setType] = useState<TriggerType>(
     editTrigger ? (["monthly", "oneoff"].includes(editTrigger.type) ? "cron" : editTrigger.type as TriggerType) : "cron"
@@ -552,6 +557,15 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
     }
   }, [type, name, isEdit]);
 
+  // Fetch available graphs for graph-target triggers.
+  useEffect(() => {
+    window.nyteShiftApi?.graphList?.().then((gs: any[]) => {
+      const mapped = (gs || []).map((g) => ({ id: g.id, name: g.name }));
+      setGraphs(mapped);
+      if (!selectedGraphId && mapped.length > 0) setSelectedGraphId(mapped[0].id);
+    }).catch(() => {});
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { setError("Name is required"); return; }
@@ -568,6 +582,7 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
         if (scheduleOutput.runAt < Date.now()) { setError("One-off trigger date must be in the future"); return; }
       }
     }
+    if (targetType === "graph" && !selectedGraphId) { setError("Select a graph to trigger"); return; }
 
     // Determine the actual engine type to submit.
     const actualType: TriggerType = type === "cron" ? scheduleOutput.subType : type;
@@ -588,10 +603,12 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
 
     try {
       if (isEdit) {
-        await window.solixApi!.triggersUpdate(editTrigger!.id, {
+        await window.nyteShiftApi!.triggersUpdate(editTrigger!.id, {
           name: name.trim(), agentName, type: actualType, enabled,
           taskTemplate: taskTemplate.trim(),
           ...scheduledFields,
+          targetType,
+          targetId: targetType === "graph" ? selectedGraphId : undefined,
           webhookPath: type === "webhook" ? webhookPath.trim() : undefined,
           webhookSecret: type === "webhook" && webhookSecret.trim() ? webhookSecret.trim() : undefined,
           maxSteps: parseInt(maxSteps, 10) || 10,
@@ -603,10 +620,12 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
           } : {}),
         });
       } else {
-        await window.solixApi!.triggersCreate({
+        await window.nyteShiftApi!.triggersCreate({
           name: name.trim(), agentName, type: actualType, enabled,
           taskTemplate: taskTemplate.trim(),
           ...scheduledFields,
+          targetType,
+          targetId: targetType === "graph" ? selectedGraphId : undefined,
           webhookPath: type === "webhook" ? webhookPath.trim() : undefined,
           webhookSecret: type === "webhook" && webhookSecret.trim() ? webhookSecret.trim() : undefined,
           maxSteps: parseInt(maxSteps, 10) || 10,
@@ -650,6 +669,54 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
               <option key={a} value={a}>{a}</option>
             ))}
           </select>
+
+          {/* Target selector: agent vs graph */}
+          <label style={labelStyle}>Target</label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <button
+              type="button"
+              onClick={() => setTargetType("agent")}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: `1.5px solid ${targetType === "agent" ? c.accent : c.border}`,
+                background: targetType === "agent" ? "rgba(203,166,247,0.12)" : c.surface,
+                color: targetType === "agent" ? c.accent : c.subtext,
+                cursor: "pointer",
+                fontSize: "0.85rem",
+                fontWeight: targetType === "agent" ? 600 : 400,
+              }}
+            >
+              Agent
+            </button>
+            <button
+              type="button"
+              onClick={() => setTargetType("graph")}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: `1.5px solid ${targetType === "graph" ? c.accent : c.border}`,
+                background: targetType === "graph" ? "rgba(203,166,247,0.12)" : c.surface,
+                color: targetType === "graph" ? c.accent : c.subtext,
+                cursor: "pointer",
+                fontSize: "0.85rem",
+                fontWeight: targetType === "graph" ? 600 : 400,
+              }}
+            >
+              Graph
+            </button>
+          </div>
+
+          {targetType === "graph" && (
+            <>
+              <label style={labelStyle}>Graph</label>
+              <select value={selectedGraphId ?? ""} onChange={(e) => setSelectedGraphId(e.target.value)} style={inputStyle}>
+                {graphs.map((g) => <option key={g.id} value={g.id}>{g.name ?? g.id}</option>)}
+              </select>
+            </>
+          )}
 
           {/* Type */}
           <label style={labelStyle}>Trigger Type</label>

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { ThemePalette } from "../theme/themes.js";
-import type { GraphNodeInfo, GraphEdgeInfo, ModelInfo, ToolInfo, OperationActionInfo } from "../global.js";
+import type { GraphNodeInfo, GraphEdgeInfo, GraphDefinitionInfo, ModelInfo, ToolInfo, OperationActionInfo, CatchTrigger } from "../global.js";
 import { SchemaForm } from "./SchemaForm.js";
 
 const OPERATORS = [
@@ -9,8 +9,8 @@ const OPERATORS = [
   { value: "neq", label: "not equals" },
   { value: "gt", label: "greater than" },
   { value: "lt", label: "less than" },
-  { value: "gte", label: "â‰¥" },
-  { value: "lte", label: "â‰¤" },
+  { value: "gte", label: "≥" },
+  { value: "lte", label: "≤" },
   { value: "contains", label: "contains" },
   { value: "not_contains", label: "does not contain" },
   { value: "starts_with", label: "starts with" },
@@ -23,10 +23,10 @@ const OPERATORS = [
 const NO_VALUE_OPS = ["exists", "not_exists"];
 
 const ERROR_POLICY_TYPES = [
-  { value: "halt", label: "Halt â€” stop the graph on error" },
-  { value: "retry", label: "Retry â€” retry the node N times" },
-  { value: "skip", label: "Skip â€” skip this node and continue" },
-  { value: "fallback", label: "Fallback â€” use a fallback value" },
+  { value: "halt", label: "Halt — stop the graph on error" },
+  { value: "retry", label: "Retry — retry the node N times" },
+  { value: "skip", label: "Skip — skip this node and continue" },
+  { value: "fallback", label: "Fallback — use a fallback value" },
 ];
 
 // Helper: extract pick and suffix from a template string like {{fetch.output.messages.0.uid}}
@@ -146,6 +146,22 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   const otherNodes = (allNodes ?? []).filter((n: GraphNodeInfo) => n.id !== node.id);
   
   const [models, setModels] = useState<ModelInfo[]>([]);
+
+  // Graph list for trigger target selection
+  const [graphs, setGraphs] = useState<GraphDefinitionInfo[]>([]);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const g = await window.nyteShiftApi?.graphList() ?? [];
+        if (!mounted) return;
+        setGraphs(g as GraphDefinitionInfo[]);
+      } catch (e) {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
   const qualifiedNodeToolName = node.toolName ?? "";
   const selectedTool = tools.find(t => `${t.contributor}/${t.name}` === qualifiedNodeToolName || t.name === qualifiedNodeToolName);
 
@@ -153,7 +169,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
     try {
       const pid = prov ?? node.provider ?? providers?.[0];
       if (!pid) { setModels([]); return; }
-      const m = await window.solixApi?.listProviderModels(pid) ?? [];
+      const m = await window.nyteShiftApi?.listProviderModels(pid) ?? [];
       setModels(m);
       if ((!node.model || node.model === "") && m.length) {
         set("model", m[0].id);
@@ -188,7 +204,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   const [varPickerIndex, setVarPickerIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    // sync when node.toolInput externally changes â€” skip while user is actively editing
+    // sync when node.toolInput externally changes — skip while user is actively editing
     if (isJsonFocused.current) return;
     try {
       const inp = node.toolInput ?? {};
@@ -258,7 +274,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
       const end = el.selectionEnd ?? start;
       const next = rawToolJson.slice(0, start) + tpl + rawToolJson.slice(end);
       setRawToolJson(next);
-      // restore cursor â€” commit happens on blur
+      // restore cursor — commit happens on blur
       setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = start + tpl.length; }, 0);
       return;
     }
@@ -266,7 +282,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   };
 
   const onRawJsonChange = (s: string) => {
-    // Only update local display state â€” commit to node on blur to avoid
+    // Only update local display state — commit to node on blur to avoid
     // the useEffect reformatting the textarea and jumping the cursor.
     setRawToolJson(s);
   };
@@ -306,14 +322,14 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
       }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: "0.85rem" }}>Node Config</div>
-          <div style={{ fontSize: "0.7rem", color: C.subtext0, marginTop: 2 }}>{node.type} Â· {node.id}</div>
+          <div style={{ fontSize: "0.7rem", color: C.subtext0, marginTop: 2 }}>{node.type} · {node.id}</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {onDuplicate && (
-            <button onClick={onDuplicate} style={{ ...btnSm(C), color: C.blue }} title="Duplicate">â§‰</button>
+            <button onClick={onDuplicate} style={{ ...btnSm(C), color: C.blue }} title="Duplicate">⧉</button>
           )}
           {onDelete && node.type !== "input" && node.type !== "output" && (
-            <button onClick={onDelete} style={{ ...btnSm(C), color: C.red }} title="Delete">âœ•</button>
+            <button onClick={onDelete} style={{ ...btnSm(C), color: C.red }} title="Delete">✕</button>
           )}
         </div>
       </div>
@@ -345,7 +361,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </div>
         )}
 
-        {/* â”€â”€ LLM fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ---- LLM fields ---- */}
         {node.type === "llm" && (
           <>
             <div style={sectionStyle}>
@@ -389,7 +405,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
             </div>
             <div style={sectionStyle}>
               <label style={labelStyle}>System Prompt</label>
-              <textarea style={textareaStyle} value={node.systemPrompt ?? ""} placeholder="You areâ€¦"
+              <textarea style={textareaStyle} value={node.systemPrompt ?? ""} placeholder="You are…"
                 onChange={e => set("systemPrompt", e.target.value || undefined)} />
             </div>
             <div style={sectionStyle}>
@@ -404,13 +420,13 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </>
         )}
 
-        {/* â”€â”€ Agent fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ---- Agent fields ---- */}
         {node.type === "agent" && (
           <>
             <div style={sectionStyle}>
               <label style={labelStyle}>Agent</label>
               <select style={selectStyle} value={node.agentName ?? ""} onChange={e => set("agentName", e.target.value || undefined)}>
-                <option value="">â€” select agent â€”</option>
+                <option value="">— select agent —</option>
                 {agents.map(a => <option key={a} value={a}>{a}</option>)}
               </select>
             </div>
@@ -456,7 +472,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </>
         )}
 
-        {/* â”€â”€ Tool fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ---- Tool fields ---- */}
         {node.type === "tool" && (
           <>
             <div style={sectionStyle}>
@@ -464,7 +480,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
               {tools.length > 0
                 ? (
                   <select style={selectStyle} value={node.toolName ?? ""} onChange={e => set("toolName", e.target.value || undefined)}>
-                    <option value="">â€” select tool â€”</option>
+                    <option value="">— select tool —</option>
                     {tools.map(t => {
                       const qualified = `${t.contributor}/${t.name}`;
                       return <option key={qualified} value={qualified}>{qualified}</option>;
@@ -539,7 +555,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                           sel.value = '';
                           if (suffixInput) suffixInput.value = '';
                         }}>
-                          <option value="">Insert refâ€¦</option>
+                          <option value="">Insert ref…</option>
                           {Object.keys(vars ?? {}).length > 0 && (
                             <optgroup label="Vars">
                               {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
@@ -563,7 +579,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                 toolInputMode === "fields" ? (
                   <div>
                     {(toolFields.length === 0) && (
-                      <div style={{ color: C.overlay0, fontSize: "0.82rem", marginBottom: 8 }}>No fields yet â€” add keys to build the JSON tool input.</div>
+                      <div style={{ color: C.overlay0, fontSize: "0.82rem", marginBottom: 8 }}>No fields yet — add keys to build the JSON tool input.</div>
                     )}
                     {toolFields.map((f, i) => {
                       const parts = extractTemplateParts(f.value);
@@ -610,7 +626,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                                   if (suffixInput) suffixInput.value = '';
                                 }}
                               >
-                                <option value="">Use refâ€¦</option>
+                                <option value="">Use ref…</option>
                                 {Object.keys(vars ?? {}).length > 0 && (
                                   <optgroup label="Vars">
                                     {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
@@ -633,7 +649,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                               }} />
                             </div>
                           </div>
-                          <button onClick={() => removeField(i)} style={{ ...btnSm(C), color: C.red }}>âœ•</button>
+                          <button onClick={() => removeField(i)} style={{ ...btnSm(C), color: C.red }}>✕</button>
                         </div>
                       );
                     })}
@@ -679,7 +695,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                           sel.value = '';
                           if (suffixInput) suffixInput.value = '';
                         }}>
-                          <option value="">Insert refâ€¦</option>
+                          <option value="">Insert ref…</option>
                           {Object.keys(vars ?? {}).length > 0 && (
                             <optgroup label="Vars">
                               {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
@@ -704,12 +720,62 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </>
         )}
 
-        {/* â”€â”€ Condition fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ---- Trigger fields ---- */}
+        {node.type === "trigger" && (
+          <>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Target Type</label>
+              <select style={selectStyle} value={node.targetType ?? "graph"} onChange={e => set("targetType", e.target.value as any)}>
+                <option value="graph">Graph</option>
+                <option value="agent">Agent</option>
+              </select>
+            </div>
+
+            <div style={sectionStyle}>
+              <label style={labelStyle}>{(node.targetType === "agent") ? "Agent Target" : "Graph Target"}</label>
+              {node.targetType === "agent" ? (
+                <select style={selectStyle} value={node.targetId ?? ""} onChange={e => set("targetId", e.target.value || undefined)}>
+                  <option value="">— select agent —</option>
+                  {agents.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+              ) : (
+                <select style={selectStyle} value={node.targetId ?? ""} onChange={e => set("targetId", e.target.value || undefined)}>
+                  <option value="">— select graph —</option>
+                  {graphs.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              )}
+              <div style={{ fontSize: "0.68rem", color: C.overlay0, marginTop: 6 }}>You can also enter an id manually below.</div>
+              <input style={{ ...inputStyle, marginTop: 6 }} value={node.targetId ?? ""} onChange={e => set("targetId", e.target.value || undefined)} />
+            </div>
+
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Await Result?</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={!!node.awaitResult} onChange={e => set("awaitResult", e.target.checked)} />
+                <span style={{ color: C.overlay0, fontSize: "0.8rem" }}>When checked, wait synchronously for child run to finish (prefer async for cycles)</span>
+              </div>
+            </div>
+
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Trigger Input (JSON)</label>
+              <textarea style={{ ...textareaStyle, minHeight: 80 }} value={typeof node.triggerInput === "string" ? node.triggerInput : JSON.stringify(node.triggerInput ?? {}, null, 2)} onChange={e => {
+                try { set("triggerInput", JSON.parse(e.target.value) as any); } catch { set("triggerInput", e.target.value as any); }
+              }} />
+            </div>
+
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Timeout (ms)</label>
+              <input style={inputStyle} type="number" min={0} value={node.timeoutMs ?? ""} placeholder="Optional" onChange={e => set("timeoutMs", e.target.value ? Number(e.target.value) : undefined)} />
+            </div>
+          </>
+        )}
+
+        {/* ---- Condition fields ---- */}
         {node.type === "condition" && (
           <ConditionEditor node={node} otherNodes={otherNodes} onChange={onChange} C={C} inputStyle={inputStyle} selectStyle={selectStyle} labelStyle={labelStyle} vars={vars} />
         )}
 
-        {/* â”€â”€ Operation fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ---- Operation fields ---- */}
         {node.type === "operation" && (
           <div style={sectionStyle}>
             <label style={labelStyle}>Operation</label>
@@ -719,12 +785,12 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                 const prev: OperationActionInfo = node.operationAction ?? { op: "inc", varName: "" };
                 set("operationAction", { ...prev, op: e.target.value as OperationActionInfo["op"] });
               }}>
-              <option value="inc">inc â€” increment a number</option>
-              <option value="dec">dec â€” decrement a number</option>
-              <option value="set">set â€” assign a value</option>
-              <option value="copy">copy â€” copy from a node ref</option>
-              <option value="toggle">toggle â€” flip a boolean</option>
-              <option value="append">append â€” push to an array</option>
+              <option value="inc">inc — increment a number</option>
+              <option value="dec">dec — decrement a number</option>
+              <option value="set">set — assign a value</option>
+              <option value="copy">copy — copy from a node ref</option>
+              <option value="toggle">toggle — flip a boolean</option>
+              <option value="append">append — push to an array</option>
             </select>
             <label style={{ ...labelStyle, marginTop: 8 }}>Variable Name</label>
             <input style={inputStyle}
@@ -794,7 +860,52 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           </div>
         )}
 
-        {/* â”€â”€ Input/Output fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ---- Catch fields ---- */}
+        {node.type === "catch" && (
+          <div style={sectionStyle}>
+            <label style={labelStyle}>Catch Triggers</label>
+            <div style={{ fontSize: "0.7rem", color: C.overlay0, marginBottom: 8, lineHeight: 1.5 }}>
+              <strong style={{ color: C.text }}>No input edge required.</strong>{" "}
+              This node is triggered automatically by the runtime when a loop in this graph
+              exits for a selected reason — you do not need to connect anything to it.
+              Wire outgoing edges to cleanup, notification, or output nodes.
+              Its output is <code style={{ color: C.teal }}>{"{ exitReason, vars }"}</code> — reference
+              it as <code style={{ color: C.teal }}>{`{{${node.id}.output.exitReason}}`}</code> downstream.
+            </div>
+            {(["maxIterations", "error", "abort"] as CatchTrigger[]).map(trigger => {
+              const checked = node.catchTriggers?.includes(trigger) ?? false;
+              const labels: Record<CatchTrigger, string> = {
+                maxIterations: "Max iterations — loop ran out of allowed iterations",
+                error: "Error — a node inside the loop halted with an unhandled error",
+                abort: "Abort — the run was cancelled",
+              };
+              return (
+                <label key={trigger} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    style={{ marginTop: 3, cursor: "pointer" }}
+                    onChange={e => {
+                      const current = node.catchTriggers ?? [];
+                      const next: CatchTrigger[] = e.target.checked
+                        ? [...current, trigger]
+                        : current.filter(t => t !== trigger);
+                      set("catchTriggers", next);
+                    }}
+                  />
+                  <span style={{ fontSize: "0.78rem", color: C.text, lineHeight: 1.4 }}>{labels[trigger]}</span>
+                </label>
+              );
+            })}
+            {!node.catchTriggers?.length && (
+              <div style={{ fontSize: "0.7rem", color: C.red, marginTop: 4 }}>
+                Select at least one trigger above.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ---- Input/Output fields ---- */}
         {node.type === "input" && (
           <div style={sectionStyle}>
             <div style={{ fontSize: "0.75rem", color: C.subtext0, lineHeight: 1.5 }}>
@@ -812,13 +923,13 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
               onChange={e => set("promptTemplate", e.target.value || undefined)}
             />
             <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
-              Optional â€” if blank, the last node's output is collected automatically.
+              Optional — if blank, the last node's output is collected automatically.
             </div>
           </div>
         )}
 
-        {/* â”€â”€ Error Policy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-        {node.type !== "input" && node.type !== "output" && (
+        {/* ---- Error Policy ---- */}
+        {node.type !== "input" && node.type !== "output" && node.type !== "catch" && (
           <div style={{ borderTop: `1px solid ${C.surface1}`, paddingTop: 12, marginTop: 4 }}>
             <div style={{ ...labelStyle, marginBottom: 6, fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Error Policy</div>
             <div style={sectionStyle}>
@@ -863,7 +974,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   );
 }
 
-// â”€â”€ Condition branch editor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ---- Condition branch editor ----
 
 function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyle, labelStyle, vars }: {
   node: GraphNodeInfo;
@@ -918,7 +1029,7 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
             <button
               onClick={(e) => { e.stopPropagation(); removeBranch(i); }}
               style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: "0.8rem" }}
-            >âœ•</button>
+            >✕</button>
             <span style={{ color: C.overlay0, fontSize: "0.75rem" }}>{open === i ? "â–²" : "â–¼"}</span>
           </div>
 
@@ -1054,7 +1165,7 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
                         sel.value = '';
                         if (suffixInput) suffixInput.value = '';
                       }}>
-                        <option value="">Use refâ€¦</option>
+                        <option value="">Use ref…</option>
                         {Object.keys(vars ?? {}).length > 0 && (
                           <optgroup label="Vars">
                             {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
@@ -1084,7 +1195,7 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
               <div>
                 <label style={labelStyle}>Target Node</label>
                 <select style={selectStyle} value={b.target ?? ""} onChange={e => update(i, { target: e.target.value })}>
-                  <option value="">â€” connect on canvas â€”</option>
+                  <option value="">— connect on canvas —</option>
                   {otherNodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
                 </select>
               </div>
@@ -1113,7 +1224,7 @@ function ConditionEditor({ node, otherNodes, onChange, C, inputStyle, selectStyl
   );
 }
 
-// â”€â”€ Template hint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ---- Template hint ----
 
 function TemplateTip({ C, nodes }: { C: ThemePalette; nodes: GraphNodeInfo[] }) {
   return (
@@ -1125,7 +1236,7 @@ function TemplateTip({ C, nodes }: { C: ThemePalette; nodes: GraphNodeInfo[] }) 
   );
 }
 
-// â”€â”€ Tiny button style helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ---- Tiny button style helper ----
 
 function btnSm(C: ThemePalette): React.CSSProperties {
   return {

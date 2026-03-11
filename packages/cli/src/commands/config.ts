@@ -1,11 +1,11 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { readGlobalConfig } from "@solix/core";
+import { readGlobalConfig } from "@nyteshift/core";
 
 export function registerConfigCommands(program: Command): void {
   const config = program.command("config").description("Configuration commands");
 
-  // ── solix config show ────────────────────────────────────────────────
+  // ── nyteshift config show ────────────────────────────────────────────────
 
   config
     .command("show")

@@ -113,7 +113,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       key,
       setTimeout(() => {
         saveTimers.current.delete(key);
-        window.solixApi?.saveChatSession(session).catch((err: unknown) =>
+        window.nyteShiftApi?.saveChatSession(session).catch((err: unknown) =>
           console.error("[ChatStore] save failed:", err),
         );
       }, 500),
@@ -144,8 +144,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         return cached;
       }
       // Load from disk
-      if (!window.solixApi) return null;
-      const session = await window.solixApi.loadChatSession(agentName, sessionId);
+      if (!window.nyteShiftApi) return null;
+      const session = await window.nyteShiftApi.loadChatSession(agentName, sessionId);
       if (!session) return null;
       st.sessions.set(key, session);
       st.activeSessionIds.set(agentName, sessionId);
@@ -171,7 +171,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (st.activeSessionIds.get(agentName) === sessionId) {
         st.activeSessionIds.delete(agentName);
       }
-      await window.solixApi?.deleteChatSession(agentName, sessionId);
+      await window.nyteShiftApi?.deleteChatSession(agentName, sessionId);
       await api.refreshSessionList(agentName);
       bump();
     },
@@ -184,7 +184,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }
       st.activeSessionIds.delete(agentName);
       st.sessionLists.delete(agentName);
-      await window.solixApi?.deleteAllChatSessions(agentName);
+      await window.nyteShiftApi?.deleteAllChatSessions(agentName);
       bump();
     },
 
@@ -236,8 +236,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     },
 
     async refreshSessionList(agentName: string): Promise<void> {
-      if (!window.solixApi) return;
-      const list = await window.solixApi.listChatSessions(agentName);
+      if (!window.nyteShiftApi) return;
+      const list = await window.nyteShiftApi.listChatSessions(agentName);
       stateRef.current.sessionLists.set(agentName, list);
       bump();
     },
@@ -249,8 +249,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   // Listen for background run completions and record the output
   useEffect(() => {
-    if (!window.solixApi) return;
-    const apiAny = window.solixApi as any;
+    if (!window.nyteShiftApi) return;
+    const apiAny = window.nyteShiftApi as any;
     if (typeof apiAny.onRunCompleted !== "function") return;
     apiAny.onRunCompleted((data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => {
       const key = makeKey(data.agentName, data.sessionId);
@@ -266,8 +266,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           steps: data.result.steps,
         };
         if (!stateRef.current.sessions.has(key)) {
-          if (window.solixApi) {
-            window.solixApi.loadChatSession(data.agentName, data.sessionId).then((sess: any) => {
+          if (window.nyteShiftApi) {
+            window.nyteShiftApi.loadChatSession(data.agentName, data.sessionId).then((sess: any) => {
               if (sess) {
                 stateRef.current.sessions.set(key, sess);
                 api.addMessage(data.agentName, data.sessionId, msg);

@@ -1,5 +1,5 @@
 /**
- * Agent Memory Manager — SolixAI
+ * Agent Memory Manager — NyteShift
  *
  * Implements the "external storage" memory tier described in Anthropic's
  * augmented-LLM building-block model (https://www.anthropic.com/research/building-effective-agents).
@@ -18,12 +18,12 @@
  *     CLI, Discord, triggers).
  *
  *  4. **Minimal footprint** — memories are stored as individual JSON files
- *     (one per key) under ~/.solix/agents/<agentName>/memory/.  This keeps
+ *     (one per key) under ~/.nyteshift/agents/<agentName>/memory/.  This keeps
  *     reads O(1) by key and avoids loading the entire store when only one
  *     value is needed.
  *
  * Storage layout:
- *   ~/.solix/agents/<agentName>/memory/<key>.json
+ *   ~/.nyteshift/agents/<agentName>/memory/<key>.json
  *
  * Each file shape: {@link MemoryEntry}
  */
