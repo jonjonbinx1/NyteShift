@@ -1,7 +1,7 @@
 // ── Agent Graph Store ──────────────────────────────────────────────────
 //
 // Filesystem-backed CRUD for graph definitions.
-// Graphs are stored as individual JSON files in ~/.solix/graphs/<id>.json
+// Graphs are stored as individual JSON files in ~/.nyteshift/graphs/<id>.json
 
 import { readdir, mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";

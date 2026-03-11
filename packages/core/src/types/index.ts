@@ -1,4 +1,4 @@
-// ── SolixAI Core Type Definitions ──────────────────────────────────────
+// ── NyteShift Core Type Definitions ──────────────────────────────────────
 
 // ── Messages ───────────────────────────────────────────────────────────
 
@@ -35,7 +35,7 @@ export interface ProviderCallResult {
   };
 }
 
-export interface SolixProvider {
+export interface NyteShiftProvider {
   id: string;
   listModels(): Promise<ModelInfo[]>;
   call(params: ProviderCallParams): Promise<ProviderCallResult>;
@@ -203,7 +203,7 @@ export interface AgentConfig {
 
 // ── Config Hierarchy ───────────────────────────────────────────────────
 
-export interface SolixConfig {
+export interface NyteShiftConfig {
   defaultProvider?: string;
   defaultModel?: string;
   temperature?: number;
@@ -299,6 +299,10 @@ export interface PipelineStep {
 
 export interface PipelineResult {
   agentName: string;
+  /** Whether this trigger targets an agent or a graph. Defaults to agent. */
+  targetType?: "agent" | "graph";
+  /** When `targetType` is "graph", the graph ID to invoke. */
+  targetId?: string;
   steps: PipelineStep[];
   finalOutput: string;
   /** Aggregated chain-of-thought from all steps. */
@@ -436,6 +440,9 @@ export interface TriggerDefinition {
   /** Max autonomous steps for triggered runs (default 10). */
   maxSteps?: number;
 
+  /** Optional structured input forwarded to a graph when `targetType === 'graph'`. */
+  triggerInput?: Record<string, unknown>;
+
   // ── Discord-specific fields ─────────────────────────────────────────
 
   /**
@@ -481,7 +488,7 @@ export interface TriggerRun {
   agentName: string;
   status: "running" | "completed" | "failed";
   event: TriggerEvent;
-  result?: PipelineResult;
+  result?: PipelineResult | unknown;
   error?: string;
   startedAt: number;
   completedAt?: number;
@@ -502,7 +509,7 @@ export interface PipelineStepConfig {
 /**
  * Persistent configuration for a Discord bridge (chat-proxy mode).
  *
- * Stored per-agent at ~/.solix/agents/<name>/discord-bridge.json.
+ * Stored per-agent at ~/.nyteshift/agents/<name>/discord-bridge.json.
  * Follows the channel-adapter pattern from OpenClaw and Anthropic's
  * multi-channel assistant architecture.
  */

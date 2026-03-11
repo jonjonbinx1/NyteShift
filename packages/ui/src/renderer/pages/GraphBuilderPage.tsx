@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { ThemePalette } from "../theme/themes.js";
-import type { GraphDefinitionInfo, GraphNodeInfo, GraphEdgeInfo, GraphExecutionResultInfo, ToolInfo, NodeRunState, NodeRunEvent } from "../global.js";
+import type { GraphDefinitionInfo, GraphNodeInfo, GraphEdgeInfo, GraphExecutionResultInfo, GraphRunRecordInfo, ToolInfo, NodeRunState, NodeRunEvent, CatchTrigger } from "../global.js";
 import { GraphCanvas, NODE_TYPE_STYLES } from "../components/GraphCanvas.js";
 import { NodeConfigPanel } from "../components/NodeConfigPanel.js";
 import VarsEditor from "../components/VarsEditor.js";
@@ -40,13 +40,14 @@ export function GraphBuilderPage(): React.JSX.Element {
   const [graph, setGraph] = useState<GraphDefinitionInfo>(newGraph);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"visual" | "json">("visual");
+  const [tab, setTab] = useState<"visual" | "json" | "runs">("visual");
   const [jsonText, setJsonText] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [varsOpen, setVarsOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"" | "saved" | "error">("");
+  const [edgeError, setEdgeError] = useState<string | null>(null);
 
   // Run state
   const [runOpen, setRunOpen] = useState(false);
@@ -64,6 +65,10 @@ export function GraphBuilderPage(): React.JSX.Element {
   const graphRef = useRef<GraphDefinitionInfo>(graph);
   useEffect(() => { graphRef.current = graph; }, [graph]);
 
+  // Past runs for this graph (loaded when switching to Runs tab)
+  const [pastRuns, setPastRuns] = useState<GraphRunRecordInfo[]>([]);
+  const [pastRunsLoading, setPastRunsLoading] = useState(false);
+
   // Meta for config panel dropdowns
   const [agents, setAgents] = useState<string[]>([]);
   const [providers, setProviders] = useState<string[]>([]);
@@ -75,7 +80,7 @@ export function GraphBuilderPage(): React.JSX.Element {
     (async () => {
       setLoading(true);
       try {
-        const g = await window.solixApi?.graphLoad(id!);
+        const g = await window.nyteShiftApi?.graphLoad(id!);
         if (g) { setGraph(g); setJsonText(JSON.stringify(g, null, 2)); }
         else navigate("/graphs");
       } catch { navigate("/graphs"); }
@@ -87,7 +92,7 @@ export function GraphBuilderPage(): React.JSX.Element {
   useEffect(() => {
     (async () => {
       try {
-        const ags = await window.solixApi?.listAgents() ?? [];
+        const ags = await window.nyteShiftApi?.listAgents() ?? [];
         // listAgents historically returned string[]; some callers may return
         // { name } records — normalize to string names for dropdowns.
         const names = (ags as any[]).map((a) => (typeof a === "string" ? a : (a?.name ?? String(a))));
@@ -95,7 +100,7 @@ export function GraphBuilderPage(): React.JSX.Element {
       } catch { /* best effort */ }
       // Providers: prefer the runtime-registered providers (same pattern as ProviderConfig)
       try {
-        const ps = await window.solixApi?.listProviders() ?? [];
+        const ps = await window.nyteShiftApi?.listProviders() ?? [];
         setProviders(ps.map((p: any) => p.id));
       } catch {
         // fallback to a small known list if provider enumeration fails
@@ -103,20 +108,20 @@ export function GraphBuilderPage(): React.JSX.Element {
       }
       // subscribe to provider changes (e.g. user added providers at runtime)
       try {
-        window.solixApi?.onProvidersChanged?.(() => {
-          window.solixApi?.listProviders().then((ps: any) => setProviders(ps.map((p: any) => p.id))).catch(console.error);
+        window.nyteShiftApi?.onProvidersChanged?.(() => {
+          window.nyteShiftApi?.listProviders().then((ps: any) => setProviders(ps.map((p: any) => p.id))).catch(console.error);
         });
       } catch {}
       // Tools: populate available tools (detailed info) for tool node dropdowns
       try {
-        const ts = await window.solixApi?.listTools() ?? [];
+        const ts = await window.nyteShiftApi?.listTools() ?? [];
         setTools(ts as ToolInfo[]);
       } catch {
         setTools([]);
       }
       try {
-        window.solixApi?.onToolsChanged?.(() => {
-          window.solixApi?.listTools().then((ts: any) => setTools(ts as ToolInfo[])).catch(console.error);
+        window.nyteShiftApi?.onToolsChanged?.(() => {
+          window.nyteShiftApi?.listTools().then((ts: any) => setTools(ts as ToolInfo[])).catch(console.error);
         });
       } catch {}
     })();
@@ -124,7 +129,7 @@ export function GraphBuilderPage(): React.JSX.Element {
 
   // ── Register IPC listeners for run events ──────────────────────────────────
   useEffect(() => {
-    window.solixApi?.onGraphNodeStart?.((data: any) => {
+    window.nyteShiftApi?.onGraphNodeStart?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       const nodeId: string = data.nodeId;
       const nodeName: string = data.nodeName;
@@ -142,7 +147,7 @@ export function GraphBuilderPage(): React.JSX.Element {
         status: "running",
       } as NodeRunEvent]);
     });
-    window.solixApi?.onGraphNodeComplete?.((data: any) => {
+    window.nyteShiftApi?.onGraphNodeComplete?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       const no = data.nodeOutput;
       const nodeId: string = no.nodeId;
@@ -197,7 +202,7 @@ export function GraphBuilderPage(): React.JSX.Element {
         return [...prev, newEntry];
       });
     });
-    window.solixApi?.onGraphRunComplete?.((data: any) => {
+    window.nyteShiftApi?.onGraphRunComplete?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       setRunning(false);
       if (data.result) setRunResult(data.result);
@@ -210,7 +215,7 @@ export function GraphBuilderPage(): React.JSX.Element {
     if (isNew || !graph?.id) return;
     (async () => {
       try {
-        const runs = await window.solixApi?.graphRuns() ?? [];
+        const runs = await window.nyteShiftApi?.graphRuns() ?? [];
         const myRuns = (runs as any[]).filter(r => r.graphId === graph.id);
         if (!myRuns || myRuns.length === 0) return;
         const latest = myRuns.reduce((a, b) => ((a.startedAt ?? 0) > (b.startedAt ?? 0) ? a : b));
@@ -259,7 +264,7 @@ export function GraphBuilderPage(): React.JSX.Element {
   }, [graph?.id, isNew]);
 
   // ── Graph mutations ─────────────────────────────────────────────────────────
-  // Normalize tool names to installed canonical names (e.g. solix/gmail)
+  // Normalize tool names to installed canonical names (e.g. nyteshift/gmail)
   const canonicalizeToolName = useCallback((name?: string) => {
     if (!name) return undefined;
     const trimmed = String(name).trim();
@@ -280,7 +285,7 @@ export function GraphBuilderPage(): React.JSX.Element {
     const byNameCi = tools.find(t => t.name.toLowerCase() === lower);
     if (byNameCi) return `${byNameCi.contributor}/${byNameCi.name}`;
 
-    // trailing segment match (e.g., saved "gmail" matches "solix/gmail")
+    // trailing segment match (e.g., saved "gmail" matches "nyteshift/gmail")
     const byTrailing = tools.find(t => `${t.contributor}/${t.name}`.toLowerCase().endsWith(`/${lower}`));
     if (byTrailing) return `${byTrailing.contributor}/${byTrailing.name}`;
 
@@ -311,10 +316,14 @@ export function GraphBuilderPage(): React.JSX.Element {
       ? { promptTemplate: "{{input.query}}", temperature: 0.7 }
       : type === "agent"
       ? { promptTemplate: "{{input.task}}", maxSteps: 20 }
+      : type === "trigger"
+      ? { targetType: "graph", targetId: "", awaitResult: false, triggerInput: {} }
       : type === "condition"
       ? { branches: [{ label: "Branch 1", condition: { ref: "input.value", operator: "exists" }, target: "" }] }
       : type === "operation"
       ? { operationAction: { op: "inc", varName: "page", amount: 1 } }
+      : type === "catch"
+      ? { catchTriggers: ["maxIterations", "error"] as CatchTrigger[] }
       : {};
 
     const name = `${NODE_TYPE_STYLES[type]?.label ?? type} ${count + 1}`;
@@ -359,6 +368,16 @@ export function GraphBuilderPage(): React.JSX.Element {
 
   const addEdge = useCallback((source: string, target: string) => {
     if (source === target) return;
+    // UI: prevent drawing incoming edges to a catch node (catch nodes fire
+    // on loop exit; incoming edges are unnecessary and may confuse users)
+    const targetNode = graphRef.current.nodes.find(n => n.id === target);
+    if (targetNode?.type === "catch") {
+      setEdgeError("Cannot connect to Catch node — it fires on loop exit.");
+      // clear after a short delay
+      setTimeout(() => setEdgeError(null), 3000);
+      return;
+    }
+
     setGraph(g => {
       // no duplicate edges
       if (g.edges.some(e => e.source === source && e.target === target)) return g;
@@ -411,7 +430,7 @@ export function GraphBuilderPage(): React.JSX.Element {
     try {
       const toSave = normalizeGraphToolNames(graph);
       // persist canonicalized graph and update UI
-      await window.solixApi?.graphSave(toSave);
+      await window.nyteShiftApi?.graphSave(toSave);
       setGraph(toSave);
       setJsonText(JSON.stringify(toSave, null, 2));
       setSaveStatus("saved");
@@ -466,10 +485,10 @@ export function GraphBuilderPage(): React.JSX.Element {
     try {
       // Normalize tool names, save first so runner can load by ID
       const toSave = normalizeGraphToolNames(graph);
-      await window.solixApi?.graphSave(toSave);
+      await window.nyteShiftApi?.graphSave(toSave);
       setGraph(toSave);
       setJsonText(JSON.stringify(toSave, null, 2));
-      const res = await window.solixApi?.graphRun(toSave.id, { input }) as { runId: string };
+      const res = await window.nyteShiftApi?.graphRun(toSave.id, { input }) as { runId: string };
       setRunId(res.runId);
       runIdRef.current = res.runId;
     } catch (e) {
@@ -479,7 +498,7 @@ export function GraphBuilderPage(): React.JSX.Element {
   };
 
   const handleCancelRun = async () => {
-    if (runId) await window.solixApi?.graphRunCancel(runId);
+    if (runId) await window.nyteShiftApi?.graphRunCancel(runId);
     setRunning(false);
   };
 
@@ -491,7 +510,7 @@ export function GraphBuilderPage(): React.JSX.Element {
     setValidating(true);
     setValidationErrors(null);
     try {
-      const result = await window.solixApi?.graphValidate(graph);
+      const result = await window.nyteShiftApi?.graphValidate(graph);
       if (result?.valid) setValidationErrors([]);
       else setValidationErrors(result?.errors?.map((e: any) => e.message || String(e)) ?? ["Unknown error"]);
     } catch (e) {
@@ -561,15 +580,27 @@ export function GraphBuilderPage(): React.JSX.Element {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 2, background: C.mantle, borderRadius: 6, padding: 2 }}>
-          {(["visual", "json"] as const).map(t => (
-            <button key={t} onClick={() => t === "json" ? onSwitchToJson() : setTab("visual")}
+          {(["visual", "json", "runs"] as const).map(t => (
+            <button key={t} onClick={() => {
+              if (t === "json") onSwitchToJson();
+              else if (t === "runs") {
+                setTab("runs");
+                // Refresh past runs list
+                if (graph?.id && !isNew) {
+                  setPastRunsLoading(true);
+                  window.nyteShiftApi?.graphRunsForGraph(graph.id).then((r) => {
+                    setPastRuns(r ?? []);
+                  }).catch(console.error).finally(() => setPastRunsLoading(false));
+                }
+              } else setTab("visual");
+            }}
               style={{
                 padding: "4px 12px", border: "none", borderRadius: 5, cursor: "pointer",
                 background: tab === t ? C.surface0 : "transparent",
                 color: tab === t ? C.text : C.subtext0,
                 fontSize: "0.8rem", fontWeight: tab === t ? 600 : 400,
               }}>
-              {t === "visual" ? "🗺 Visual" : "{ } JSON"}
+              {t === "visual" ? "🗺 Visual" : t === "json" ? "{ } JSON" : "▶ Runs"}
             </button>
           ))}
         </div>
@@ -583,10 +614,6 @@ export function GraphBuilderPage(): React.JSX.Element {
           style={{ ...actionBtn(C), background: `${C.green}22`, border: `1px solid ${C.green}`, color: C.green }}>
           ▶ Run
         </button>
-        <button onClick={() => navigate(runId ? `/graph-run/${encodeURIComponent(runId)}` : "/graph-runs")}
-          style={{ ...actionBtn(C), background: "transparent", border: `1px solid ${C.surface2}`, color: C.text }}>
-          Runs
-        </button>
         <button onClick={handleSave} disabled={saving}
           style={{ ...actionBtn(C), background: C.mauve, color: "#1e1e2e" }}>
           {saving ? "Saving…" : "Save"}
@@ -595,6 +622,7 @@ export function GraphBuilderPage(): React.JSX.Element {
 
         {saveStatus === "saved" && <span style={{ color: C.green, fontSize: "0.78rem" }}>✓ Saved</span>}
         {saveStatus === "error" && <span style={{ color: C.red, fontSize: "0.78rem" }}>✗ Error</span>}
+        {edgeError && <span style={{ color: C.yellow, fontSize: "0.78rem", marginLeft: 8 }}>{edgeError}</span>}
       </div>
 
       {/* ── Validation errors ──────────────────────────────────────── */}
@@ -621,7 +649,7 @@ export function GraphBuilderPage(): React.JSX.Element {
           <NodePalette onAdd={addNode} C={C} />
         )}
 
-        {/* Center: Canvas or JSON */}
+        {/* Center: Canvas, JSON, or Runs */}
         {tab === "visual" ? (
           <GraphCanvas
             nodes={graph.nodes}
@@ -638,7 +666,7 @@ export function GraphBuilderPage(): React.JSX.Element {
             onDeleteEdge={deleteEdge}
             onClearBranchTarget={clearBranchTarget}
           />
-        ) : (
+        ) : tab === "json" ? (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: C.mantle }}>
             <textarea
               style={{
@@ -662,9 +690,25 @@ export function GraphBuilderPage(): React.JSX.Element {
               </span>
             </div>
           </div>
+        ) : (
+          <GraphRunsPanel
+            C={C}
+            graphId={graph.id}
+            runs={pastRuns}
+            loading={pastRunsLoading}
+            currentRunId={runId}
+            onNavigate={(id) => navigate(`/graph-run/${encodeURIComponent(id)}`)}
+            onRefresh={() => {
+              if (!graph?.id) return;
+              setPastRunsLoading(true);
+              window.nyteShiftApi?.graphRunsForGraph(graph.id).then((r) => {
+                setPastRuns(r ?? []);
+              }).catch(console.error).finally(() => setPastRunsLoading(false));
+            }}
+          />
         )}
 
-        {/* Right: Node Config Panel */}
+        {/* Right: Node Config Panel (visual tab only) */}
         {tab === "visual" && selectedNode && (
           <NodeConfigPanel
             node={selectedNode}
@@ -985,4 +1029,104 @@ function actionBtn(C: ThemePalette): React.CSSProperties {
     padding: "5px 12px", border: "none", borderRadius: 6,
     cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap",
   };
+}
+
+// ── GraphRunsPanel ─────────────────────────────────────────────────────────
+
+function relTime(ts: number): string {
+  const d = Date.now() - ts;
+  if (d < 60_000) return `${Math.floor(d / 1000)}s ago`;
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`;
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function sourceLabel(run: GraphRunRecordInfo): string {
+  if (run.source === "trigger") return `Trigger: ${run.triggerName ?? run.triggerId ?? "unknown"} (${run.triggerType ?? "?"})`;
+  if (run.source === "trigger-node") return "Trigger Node";
+  return "Manual";
+}
+
+interface GraphRunsPanelProps {
+  C: ThemePalette;
+  graphId: string;
+  runs: GraphRunRecordInfo[];
+  loading: boolean;
+  currentRunId: string | null;
+  onNavigate(runId: string): void;
+  onRefresh(): void;
+}
+
+function GraphRunsPanel({ C, runs, loading, currentRunId, onNavigate, onRefresh }: GraphRunsPanelProps): React.JSX.Element {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: C.base }}>
+      {/* Header */}
+      <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.surface1}`, display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>Run History</span>
+        <span style={{ color: C.overlay0, fontSize: "0.8rem" }}>{runs.length} run{runs.length !== 1 ? "s" : ""}</span>
+        <div style={{ flex: 1 }} />
+        <button onClick={onRefresh} disabled={loading}
+          style={{ padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.surface1}`, background: C.surface0, color: C.text, cursor: "pointer", fontSize: "0.78rem" }}>
+          {loading ? "Refreshing…" : "↺ Refresh"}
+        </button>
+      </div>
+
+      {/* Run list */}
+      <div style={{ flex: 1, overflow: "auto", padding: 14 }}>
+        {loading && runs.length === 0 && (
+          <div style={{ color: C.overlay0, padding: "20px 0", textAlign: "center", fontSize: "0.85rem" }}>Loading…</div>
+        )}
+        {!loading && runs.length === 0 && (
+          <div style={{ color: C.overlay0, padding: "40px 0", textAlign: "center", fontSize: "0.85rem" }}>
+            No runs recorded yet. Run this graph manually or attach a trigger.
+          </div>
+        )}
+        {runs.map((r) => {
+          const isCurrent = r.runId === currentRunId;
+          const statusColor = r.status === "done" ? C.green : r.status === "error" ? C.red : C.yellow;
+          const statusIcon = r.status === "done" ? "✓" : r.status === "error" ? "✗" : "⏳";
+          const sourceColor = r.source === "manual" ? C.mauve : r.source === "trigger" ? C.blue : C.peach;
+          return (
+            <div key={r.runId} style={{
+              padding: "10px 14px", borderRadius: 8, marginBottom: 8,
+              border: `1px solid ${isCurrent ? C.mauve : C.surface1}`,
+              background: C.surface0,
+              display: "flex", alignItems: "center", gap: 12,
+            }}>
+              <div style={{ width: 20, textAlign: "center", color: statusColor, fontWeight: 700 }}>{statusIcon}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{
+                    fontSize: "0.72rem", fontWeight: 600, padding: "2px 7px", borderRadius: 10,
+                    background: `${sourceColor}22`, color: sourceColor, border: `1px solid ${sourceColor}44`,
+                  }}>
+                    {r.source === "manual" ? "Manual" : r.source === "trigger-node" ? "Trigger Node" : "Trigger"}
+                  </span>
+                  {(r.source === "trigger" || r.source === "trigger-node") && (
+                    <span style={{ color: C.subtext0, fontSize: "0.78rem" }}>{sourceLabel(r)}</span>
+                  )}
+                  {isCurrent && (
+                    <span style={{ fontSize: "0.7rem", color: C.mauve }}>● current</span>
+                  )}
+                </div>
+                <div style={{ marginTop: 3, fontSize: "0.78rem", color: C.overlay0 }}>
+                  {relTime(r.startedAt)} · {r.nodeProgress.length} node event{r.nodeProgress.length !== 1 ? "s" : ""}
+                  {r.error && <span style={{ color: C.red }}> · {r.error}</span>}
+                </div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ color: statusColor, fontSize: "0.78rem", fontWeight: 600, marginBottom: 6 }}>
+                  {r.status === "running" ? "Running…" : r.status === "done" ? "Done" : "Error"}
+                </div>
+                <button onClick={() => onNavigate(r.runId)}
+                  style={{ padding: "4px 12px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text, cursor: "pointer", fontSize: "0.78rem" }}>
+                  View
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

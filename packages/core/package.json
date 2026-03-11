@@ -1,7 +1,7 @@
 {
-  "name": "@solix/core",
+  "name": "@nyteshift/core",
   "version": "0.1.0",
-  "description": "SolixAI core runtime — skills, tools, providers, pipelines",
+  "description": "NyteShift core runtime — skills, tools, providers, pipelines",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

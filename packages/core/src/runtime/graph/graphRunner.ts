@@ -30,6 +30,7 @@ import type {
 } from "./types.js";
 import { validateGraph, tarjanSCC } from "./graphValidator.js";
 import { loadGraph } from "./graphStore.js";
+import { runGraphTracked } from "./graphRunRegistry.js";
 import { resolveConfig } from "../config/configResolver.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { getTool } from "../tools/toolLoader.js";
@@ -50,13 +51,28 @@ const log  = (...a: unknown[]) => console.log("[graph:runner]", ...a);
 const logW = (...a: unknown[]) => console.warn("[graph:runner]", ...a);
 const logE = (...a: unknown[]) => console.error("[graph:runner]", ...a);
 
+// ── Internal types ─────────────────────────────────────────────────────
+
+/**
+ * Reason a loop SCC stopped iterating.
+ *
+ * - "condition"     — a condition node branched out of the SCC (clean exit)
+ * - "maxIterations" — the loop consumed all allowed iterations
+ * - "error"         — a halt-policy error occurred inside the loop
+ * - "abort"         — the run was cancelled via AbortSignal
+ *
+ * "condition" exits do NOT trigger catch nodes.  The other three do when
+ * a catch node declares the matching CatchTrigger.
+ */
+type LoopExitReason = "condition" | "maxIterations" | "error" | "abort";
+
 // ── Public entry point ─────────────────────────────────────────────────
 
 /**
  * Execute an agent graph.
  *
  * @param graphOrId  A full {@link GraphDefinition} object or the graph ID
- *                   (loads from `~/.solix/graphs/<id>.json`).
+ *                   (loads from `~/.nyteshift/graphs/<id>.json`).
  * @param options    Execution options (input variables, signal, callbacks).
  */
 export async function runGraph(
@@ -97,6 +113,7 @@ export async function runGraph(
     traceId,
     startedAt,
     signal: options.signal,
+    _triggerDepth: options._triggerDepth ?? 0,
   };
 
   // ── Build lookup structures ───────────────────────────────────────────
@@ -141,6 +158,18 @@ export async function runGraph(
       const nodeId = group.id;
       const node = nodeMap.get(nodeId)!;
 
+      // Catch nodes fire via post-SCC logic; skip here to prevent double-execution
+      // or spurious skipped-output entries if the catch node never triggered.
+      if (node.type === "catch") {
+        if (!context.nodeOutputs[node.outputKey ?? node.id]) {
+          const skipOut = makeSkippedOutput(node);
+          nodeResults.push(skipOut);
+          context.nodeOutputs[node.outputKey ?? node.id] = skipOut;
+          options.onNodeComplete?.(skipOut);
+        }
+        continue;
+      }
+
       if (!reachable.has(nodeId)) {
         const skipOut = makeSkippedOutput(node);
         nodeResults.push(skipOut);
@@ -150,8 +179,10 @@ export async function runGraph(
       }
 
       const policy = node.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
-      options.onNodeStart?.(node.id, node.name);
+      options.onNodeStart?.(node.id, node.name, node.type);
       const nodeOutput = await executeNodeWithPolicy(node, context, globalConfig, graph, options, policy);
+      // Annotate returned output with node type for UI/icon rendering
+      try { (nodeOutput as any).nodeType = node.type; } catch {}
       nodeResults.push(nodeOutput);
       context.nodeOutputs[node.outputKey ?? node.id] = nodeOutput;
       options.onNodeComplete?.(nodeOutput);
@@ -187,6 +218,38 @@ export async function runGraph(
       const loopResult = await runLoopSCC(group, graph, context, nodeMap, outgoing, globalConfig, options);
       nodeResults.push(...loopResult.results);
       // onNodeComplete is already called inside runLoopSCC — do not duplicate.
+
+      // ── Fire catch nodes ────────────────────────────────────────────────
+      // Execute matching catch nodes immediately so their outputs are
+      // available to downstream nodes in the remainder of the plan.
+      // This runs before the error-halt check so catch nodes with
+      // trigger="error" fire even when the loop halted on an error.
+      context._loopExitReason = loopResult.exitReason;
+      let catchHalt = false;
+      for (const catchNode of graph.nodes) {
+        if (catchNode.type !== "catch") continue;
+        if (!(catchNode.catchTriggers ?? []).some(t => t === loopResult.exitReason)) continue;
+        // Guard: don't re-fire if a previous SCC in this run already triggered it.
+        if (context.nodeOutputs[catchNode.outputKey ?? catchNode.id]) continue;
+        log(`  catch node "${catchNode.id}" triggered (reason="${loopResult.exitReason}")`);
+        options.onNodeStart?.(catchNode.id, catchNode.name, catchNode.type);
+        const catchPolicy = catchNode.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
+        const catchOut = await executeNodeWithPolicy(catchNode, context, globalConfig, graph, options, catchPolicy);
+        try { (catchOut as any).nodeType = catchNode.type; } catch {}
+        nodeResults.push(catchOut);
+        context.nodeOutputs[catchNode.outputKey ?? catchNode.id] = catchOut;
+        options.onNodeComplete?.(catchOut);
+        if (catchOut.status === "error" && catchPolicy.type === "halt") {
+          graphError = catchOut.error;
+          graphStatus = "failed";
+          catchHalt = true;
+          break;
+        }
+        if (catchOut.status === "success" || (catchPolicy.type === "fallback" && catchOut.status !== "error")) {
+          propagateReachability(catchNode, outgoing.get(catchNode.id) ?? [], context, reachable);
+        }
+      }
+      if (catchHalt) break;
 
       if (loopResult.error) {
         graphError = loopResult.error;
@@ -270,7 +333,7 @@ function propagateReachability(
 async function executeNodeWithPolicy(
   node: GraphNode,
   context: GraphExecutionContext,
-  globalConfig: import("../../types/index.js").SolixConfig,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
   graph: GraphDefinition,
   options: GraphRunOptions,
   policy: ErrorPolicy,
@@ -301,6 +364,7 @@ async function executeNodeWithPolicy(
     return {
       nodeId: node.id,
       nodeName: node.name,
+      nodeType: node.type,
       output: policy.fallbackValue ?? null,
       metadata: { elapsedMs: 0 },
       status: "success",
@@ -314,6 +378,7 @@ async function executeNodeWithPolicy(
     return {
       nodeId: node.id,
       nodeName: node.name,
+      nodeType: node.type,
       output: policy.fallbackValue ?? null,
       metadata: { elapsedMs: 0 },
       status: "skipped",
@@ -326,6 +391,7 @@ async function executeNodeWithPolicy(
   return {
     nodeId: node.id,
     nodeName: node.name,
+    nodeType: node.type,
     output: null,
     metadata: { elapsedMs: 0 },
     status: "error",
@@ -339,7 +405,7 @@ async function executeNodeWithPolicy(
 async function executeNode(
   node: GraphNode,
   context: GraphExecutionContext,
-  globalConfig: import("../../types/index.js").SolixConfig,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
   graph: GraphDefinition,
   options: GraphRunOptions,
 ): Promise<NodeOutput> {
@@ -358,6 +424,10 @@ async function executeNode(
       return executeConditionNode(node, context);
     case "operation":
       return executeOperationNode(node, context);
+    case "catch":
+      return executeCatchNode(node, context);
+    case "trigger":
+      return executeTriggerNode(node, context, globalConfig, graph, options);
     default:
       throw new Error(`Unknown node type "${(node as GraphNode).type}".`);
   }
@@ -413,7 +483,7 @@ function executeOutputNode(node: GraphNode, context: GraphExecutionContext): Nod
 async function executeLlmNode(
   node: GraphNode,
   context: GraphExecutionContext,
-  globalConfig: import("../../types/index.js").SolixConfig,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
   graph: GraphDefinition,
   options: GraphRunOptions,
 ): Promise<NodeOutput> {
@@ -477,7 +547,7 @@ async function executeLlmNode(
 async function executeAgentNode(
   node: GraphNode,
   context: GraphExecutionContext,
-  globalConfig: import("../../types/index.js").SolixConfig,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
   graph: GraphDefinition,
   options: GraphRunOptions,
 ): Promise<NodeOutput> {
@@ -723,43 +793,93 @@ function executeOperationNode(
   };
 }
 
+// ── Catch node ─────────────────────────────────────────────────────────
+
+/**
+ * Execute a catch node.
+ *
+ * The node emits `{ exitReason, vars }` so downstream cleanup nodes can
+ * inspect why the loop stopped and what the final variable state was.
+ * The exit reason is also available via `_loopExitReason` on the context
+ * for any template that reads `{{vars.*}}` — it is intentionally NOT
+ * merged into `vars` to avoid polluting the user-visible variable store.
+ */
+function executeCatchNode(node: GraphNode, context: GraphExecutionContext): NodeOutput {
+  const exitReason = context._loopExitReason ?? "unknown";
+  log(`    catch node "${node.id}" — exitReason="${exitReason}"`);
+  return {
+    nodeId: node.id,
+    nodeName: node.name,
+    output: {
+      exitReason,
+      vars: { ...context.vars },
+    },
+    metadata: { elapsedMs: 0 },
+    status: "success",
+    timestamp: Date.now(),
+  };
+}
+
 // ── Condition evaluator ────────────────────────────────────────────────
 
 function evaluateCondition(
   predicate: ConditionPredicate,
   context: GraphExecutionContext,
 ): boolean {
-  const refValue = resolveRef(predicate.ref, context);
+  // Resolve the reference value. Support mustache templates in `predicate.ref`:
+  // - If `ref` contains `{{...}}`, interpolate it first. If interpolation
+  //   yields a string that resolves to a known path, attempt to resolve it.
+  // - Otherwise treat `ref` as a dot-path and resolve directly.
+  let refValue: unknown;
+  if (typeof predicate.ref === "string" && predicate.ref.includes("{{")) {
+    const interpolated = interpolateValue(predicate.ref, context);
+    if (typeof interpolated === "string") {
+      const maybePath = interpolated.trim();
+      const resolved = resolveRef(maybePath, context);
+      refValue = resolved !== undefined ? resolved : interpolated;
+    } else {
+      refValue = interpolated;
+    }
+  } else {
+    refValue = resolveRef(String(predicate.ref), context);
+  }
+
+  // Interpolate the predicate value (supports templates and deep objects).
+  const expected = interpolateValue(predicate.value, context);
 
   switch (predicate.operator) {
     case "eq":
-      return refValue === predicate.value;
+      return refValue === expected;
     case "neq":
-      return refValue !== predicate.value;
+      return refValue !== expected;
     case "gt":
-      return typeof refValue === "number" && typeof predicate.value === "number" && refValue > predicate.value;
+      return typeof refValue === "number" && typeof expected === "number" && (refValue as number) > (expected as number);
     case "lt":
-      return typeof refValue === "number" && typeof predicate.value === "number" && refValue < predicate.value;
+      return typeof refValue === "number" && typeof expected === "number" && (refValue as number) < (expected as number);
     case "gte":
-      return typeof refValue === "number" && typeof predicate.value === "number" && refValue >= predicate.value;
+      return typeof refValue === "number" && typeof expected === "number" && (refValue as number) >= (expected as number);
     case "lte":
-      return typeof refValue === "number" && typeof predicate.value === "number" && refValue <= predicate.value;
+      return typeof refValue === "number" && typeof expected === "number" && (refValue as number) <= (expected as number);
     case "contains":
-      return typeof refValue === "string" && typeof predicate.value === "string" && refValue.includes(predicate.value);
+      if (typeof refValue === "string" && typeof expected === "string") return (refValue as string).includes(expected as string);
+      if (Array.isArray(refValue)) return (refValue as unknown[]).includes(expected);
+      return false;
     case "not_contains":
-      return typeof refValue === "string" && typeof predicate.value === "string" && !refValue.includes(predicate.value);
+      if (typeof refValue === "string" && typeof expected === "string") return !(refValue as string).includes(expected as string);
+      if (Array.isArray(refValue)) return !(refValue as unknown[]).includes(expected);
+      return false;
     case "starts_with":
-      return typeof refValue === "string" && typeof predicate.value === "string" && refValue.startsWith(predicate.value);
+      return typeof refValue === "string" && typeof expected === "string" && (refValue as string).startsWith(expected as string);
     case "ends_with":
-      return typeof refValue === "string" && typeof predicate.value === "string" && refValue.endsWith(predicate.value);
+      return typeof refValue === "string" && typeof expected === "string" && (refValue as string).endsWith(expected as string);
     case "exists":
       return refValue !== undefined && refValue !== null;
     case "not_exists":
       return refValue === undefined || refValue === null;
     case "matches": {
-      if (typeof refValue !== "string" || typeof predicate.value !== "string") return false;
+      if (typeof refValue !== "string" || typeof expected !== "string") return false;
       try {
-        return new RegExp(predicate.value).test(refValue);
+        return new RegExp(expected as string).test(refValue as string);
       } catch {
         return false;
       }
@@ -880,18 +1000,28 @@ type NodeGroup =
 
 function buildAdjacencyForRunner(graph: GraphDefinition): Map<string, string[]> {
   const adj = new Map<string, string[]>();
-  for (const node of graph.nodes) adj.set(node.id, []);
+  // Catch nodes are excluded from adjacency: they are reactive nodes fired
+  // by runtime exit reasons, not by edge traversal.  Excluding them here
+  // ensures SCC computation never absorbs them into a loop group.
+  const catchIds = new Set(graph.nodes.filter(n => n.type === "catch").map(n => n.id));
+
+  for (const node of graph.nodes) {
+    if (!catchIds.has(node.id)) adj.set(node.id, []);
+  }
 
   for (const edge of graph.edges ?? []) {
+    if (catchIds.has(edge.target)) continue; // catch nodes receive no SCC edges
     adj.get(edge.source)?.push(edge.target);
   }
   for (const node of graph.nodes) {
     if (node.type === "condition" && node.branches) {
       const targets = adj.get(node.id)!;
+      if (!targets) continue;
       for (const branch of node.branches) {
+        if (catchIds.has(branch.target)) continue;
         if (!targets.includes(branch.target)) targets.push(branch.target);
       }
-      if (node.defaultTarget && !targets.includes(node.defaultTarget)) {
+      if (node.defaultTarget && !catchIds.has(node.defaultTarget) && !targets.includes(node.defaultTarget)) {
         targets.push(node.defaultTarget);
       }
     }
@@ -994,15 +1124,19 @@ async function runLoopSCC(
   context: GraphExecutionContext,
   nodeMap: Map<string, GraphNode>,
   outgoing: Map<string, GraphEdge[]>,
-  globalConfig: import("../../types/index.js").SolixConfig,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
   options: GraphRunOptions,
-): Promise<{ results: NodeOutput[]; error?: string; exitTarget?: string }> {
+): Promise<{ results: NodeOutput[]; error?: string; exitTarget?: string; exitReason: LoopExitReason }> {
   const maxIter = graph.maxIterations ?? 100;
   const results: NodeOutput[] = [];
   let exitTarget: string | undefined;
+  let exitReason: LoopExitReason = "maxIterations";
 
   for (let iter = 0; iter < maxIter; iter++) {
-    if (options.signal?.aborted) break;
+    if (options.signal?.aborted) {
+      exitReason = "abort";
+      break;
+    }
 
     let shouldExit = false;
     const iterReachable = new Set<string>([group.entryId]);
@@ -1027,8 +1161,9 @@ async function runLoopSCC(
 
         const node = nodeMap.get(nodeId)!;
         const policy = node.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
-        options.onNodeStart?.(node.id, node.name);
+        options.onNodeStart?.(node.id, node.name, node.type);
         const nodeOutput = await executeNodeWithPolicy(node, context, globalConfig, graph, options, policy);
+        try { (nodeOutput as any).nodeType = node.type; } catch {}
 
         if (nodeOutput.metadata) {
           (nodeOutput.metadata as Record<string, unknown>).iteration = iter;
@@ -1039,7 +1174,7 @@ async function runLoopSCC(
         options.onNodeComplete?.(nodeOutput);
 
         if (nodeOutput.status === "error" && policy.type === "halt") {
-          return { results, error: nodeOutput.error };
+          return { results, error: nodeOutput.error, exitReason: "error" };
         }
 
         if (
@@ -1051,12 +1186,14 @@ async function runLoopSCC(
             for (const branch of node.branches) {
               if (!group.scc.has(branch.target) && evaluateCondition(branch.condition, context)) {
                 exitTarget = branch.target;
+                exitReason = "condition";
                 shouldExit = true;
                 break;
               }
             }
             if (!shouldExit && node.defaultTarget && !group.scc.has(node.defaultTarget)) {
               exitTarget = node.defaultTarget;
+              exitReason = "condition";
               shouldExit = true;
             }
           }
@@ -1089,10 +1226,11 @@ async function runLoopSCC(
     if (shouldExit) break;
     if (iter === maxIter - 1) {
       log(`  loop SCC hit maxIterations (${maxIter}) — stopping`);
+      // exitReason stays "maxIterations"
     }
   }
 
-  return { results, exitTarget };
+  return { results, exitTarget, exitReason };
 }
 
 // ── Topological sort ───────────────────────────────────────────────────
@@ -1165,12 +1303,240 @@ function computeIncomingCount(graph: GraphDefinition): Map<string, number> {
   return counts;
 }
 
+// ── Trigger node ───────────────────────────────────────────────────────
+
+/**
+ * Maximum allowed nesting depth for trigger nodes to prevent accidental
+ * infinite recursion (e.g. graph A triggers graph A synchronously).
+ * Can be overridden via `graph.maxTriggerDepth` or the run options.
+ *
+ * Async trigger invocations do NOT consume depth budget because they are
+ * fire-and-forget and do not grow the call stack.
+ */
+const DEFAULT_MAX_TRIGGER_DEPTH = 8;
+
+/**
+ * In-process registry of async trigger runs launched by trigger nodes.
+ *
+ * Key: auto-generated runId  Value: status + optional result/error.
+ *
+ * The registry lives at module scope so async results are discoverable by
+ * the host process (e.g. the UI or CLI) without needing a round-trip to
+ * disk.  Entries are kept until the process exits or the map is explicitly
+ * cleared.
+ */
+interface AsyncTriggerEntry {
+  runId: string;
+  targetType: "graph" | "agent";
+  targetId: string;
+  startedAt: number;
+  status: "running" | "completed" | "failed";
+  result?: unknown;
+  error?: string;
+}
+
+export const asyncTriggerRegistry = new Map<string, AsyncTriggerEntry>();
+
+async function executeTriggerNode(
+  node: GraphNode,
+  context: GraphExecutionContext,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
+  graph: GraphDefinition,
+  options: GraphRunOptions,
+): Promise<NodeOutput> {
+  const startTime = Date.now();
+
+  const targetType = node.targetType ?? "agent";
+  const targetId   = node.targetId ?? "";
+  const awaitResult = node.awaitResult !== false; // default true
+
+  if (!targetId) {
+    throw new Error(`Trigger node "${node.id}" has no targetId configured.`);
+  }
+
+  // Resolve input for the child run (template interpolation).
+  const rawInput = node.triggerInput ?? {};
+  const childInput = interpolateValue(rawInput, context) as Record<string, unknown>;
+
+  const provider = options.provider ?? (globalConfig.defaultProvider as string | undefined);
+  const model    = options.model    ?? (globalConfig.defaultModel    as string | undefined);
+
+  // ── Fire-and-forget (async) path ──────────────────────────────────────
+  if (!awaitResult) {
+    const runId = `trigger:${randomUUID()}`;
+    const entry: AsyncTriggerEntry = {
+      runId,
+      targetType,
+      targetId,
+      startedAt: Date.now(),
+      status: "running",
+    };
+    asyncTriggerRegistry.set(runId, entry);
+
+    const fireAsync = async () => {
+      try {
+        let result: unknown;
+        if (targetType === "graph") {
+          const tracked = await runGraphTracked(
+            targetId,
+            { input: childInput, provider, model, _triggerDepth: 0 },
+            { source: "trigger-node", parentGraphId: graph.id },
+          );
+          result = tracked.result;
+          // Keep asyncTriggerRegistry in sync with the resolved runId.
+          entry.runId = tracked.runId;
+          asyncTriggerRegistry.set(tracked.runId, entry);
+          asyncTriggerRegistry.delete(runId);
+        } else {
+          const runAgent = await getRunAutonomousTask();
+          result = await runAgent(targetId, childInput.task as string ?? "", {
+            provider,
+            model,
+            maxSteps: typeof node.maxSteps === "number" ? node.maxSteps : 10,
+          });
+        }
+        entry.status = "completed";
+        entry.result = result;
+        log(`    trigger node "${node.id}" async run completed (runId=${runId})`);
+      } catch (err) {
+        entry.status = "failed";
+        entry.error = (err as Error).message ?? String(err);
+        logE(`    trigger node "${node.id}" async run failed (runId=${runId}):`, entry.error);
+      }
+    };
+
+    // Fire without await — intentional
+    fireAsync().catch(logE);
+
+    log(`    trigger node "${node.id}" — async ${targetType} "${targetId}" fired (runId=${runId})`);
+
+    return {
+      nodeId: node.id,
+      nodeName: node.name,
+      output: { isAsync: true, runId, targetType, targetId },
+      metadata: { elapsedMs: Date.now() - startTime },
+      status: "success",
+      timestamp: Date.now(),
+    };
+  }
+
+  // ── Synchronous path ──────────────────────────────────────────────────
+  // Depth guard: prevent unbounded recursive graph/agent invocations.
+  const currentDepth = context._triggerDepth ?? 0;
+  const maxDepth     = (graph as any).maxTriggerDepth ?? DEFAULT_MAX_TRIGGER_DEPTH;
+
+  if (currentDepth >= maxDepth) {
+    throw new Error(
+      `Trigger node "${node.id}" aborted: maximum sync trigger depth (${maxDepth}) reached. ` +
+      `Set awaitResult=false (async) for recursive invocations or add a condition guard.`,
+    );
+  }
+
+  log(`    trigger node "${node.id}" — sync ${targetType} "${targetId}" (depth=${currentDepth + 1}/${maxDepth})`);
+
+  // Build an AbortSignal that also respects an optional timeout.
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let ownController: AbortController | undefined;
+  let effectiveSignal = context.signal;
+
+  if (node.timeoutMs && node.timeoutMs > 0) {
+    ownController = new AbortController();
+    // Chain parent signal so parent abort cascades too.
+    if (context.signal) {
+      context.signal.addEventListener("abort", () => ownController!.abort(), { once: true });
+    }
+    timeoutId = setTimeout(() => {
+      ownController!.abort();
+    }, node.timeoutMs);
+    effectiveSignal = ownController.signal;
+  }
+
+  try {
+    let result: unknown;
+
+    if (targetType === "graph") {
+      const { result: graphResult } = await runGraphTracked(
+        targetId,
+        {
+          input: childInput,
+          signal: effectiveSignal,
+          provider,
+          model,
+          _triggerDepth: currentDepth + 1,
+          onNodeStart:    options.onNodeStart,
+          onNodeComplete: options.onNodeComplete,
+        },
+        { source: "trigger-node", parentGraphId: graph.id },
+      );
+
+      const elapsed = Date.now() - startTime;
+      log(`    trigger node "${node.id}" — child graph "${targetId}" completed in ${elapsed}ms`);
+
+      return {
+        nodeId: node.id,
+        nodeName: node.name,
+        output: graphResult.finalOutput,
+        metadata: {
+          elapsedMs: elapsed,
+          triggerType: "graph",
+          targetId,
+          childStatus: graphResult.status,
+          childTraceId: graphResult.traceId,
+        },
+        status: graphResult.status === "failed" ? "error" : "success",
+        error: graphResult.status === "failed" ? graphResult.error : undefined,
+        timestamp: Date.now(),
+      };
+    } else {
+      // targetType === "agent"
+      const runAgent = await getRunAutonomousTask();
+      const agentTask: string =
+        typeof childInput.task === "string" && childInput.task
+          ? childInput.task
+          : node.promptTemplate
+            ? interpolateTemplate(node.promptTemplate, context)
+            : `Run agent ${targetId}`;
+
+      const agentResult = await runAgent(targetId, agentTask, {
+        provider,
+        model,
+        maxSteps: typeof node.maxSteps === "number" ? node.maxSteps : 10,
+        signal: effectiveSignal,
+      });
+
+      const elapsed = Date.now() - startTime;
+      log(`    trigger node "${node.id}" — agent "${targetId}" completed in ${elapsed}ms`);
+
+      return {
+        nodeId: node.id,
+        nodeName: node.name,
+        output: agentResult.finalOutput,
+        metadata: {
+          elapsedMs: elapsed,
+          triggerType: "agent",
+          targetId,
+          agentSteps: agentResult.steps.length,
+        },
+        status: agentResult.aborted ? "error" : "success",
+        error: agentResult.aborted ? "Agent run was aborted." : undefined,
+        timestamp: Date.now(),
+      };
+    }
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+  // TypeScript requires an explicit return here even though both if/else
+  // branches above always return; suppress with a typed assertion.
+  throw new Error(`Trigger node "${node.id}": unexpected execution path.`);
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 function makeSkippedOutput(node: GraphNode): NodeOutput {
   return {
     nodeId: node.id,
     nodeName: node.name,
+    nodeType: node.type,
     output: null,
     metadata: { elapsedMs: 0 },
     status: "skipped",

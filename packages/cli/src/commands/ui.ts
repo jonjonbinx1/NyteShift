@@ -21,15 +21,15 @@ export function registerUiCommands(program: Command): void {
 
   ui
     .command("launch")
-    .description("Start the SolixAI Electron UI")
+    .description("Start the NyteShift Electron UI")
     .action(() => {
-      // Ensure ~/.solix dirs exist even before Electron boots
-      const base = path.join(homedir(), ".solix");
+      // Ensure ~/.nyteshift dirs exist even before Electron boots
+      const base = path.join(homedir(), ".nyteshift");
       for (const sub of ["", "agents", "skills", "tools", "triggers"]) {
         mkdirSync(path.join(base, sub), { recursive: true });
       }
-      console.log("Launching SolixAI UI…");
-      console.log("  ~/.solix location:", base);
+      console.log("Launching NyteShift UI…");
+      console.log("  ~/.nyteshift location:", base);
 
       // dist/commands/ → dist/ → cli/ → packages/ → workspace root → packages/ui
       const fromBin = path.resolve(__dirname, "../../../ui");
@@ -44,7 +44,7 @@ export function registerUiCommands(program: Command): void {
         const script = hasDist ? "preview" : "dev";
         runCommand("npm", ["run", script], { cwd: uiDir });
       } else {
-        console.error("Could not find packages/ui. Run from the SolixAI workspace root.");
+        console.error("Could not find packages/ui. Run from the NyteShift workspace root.");
         process.exit(1);
       }
     });

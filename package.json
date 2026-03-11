@@ -1,15 +1,15 @@
 {
-  "name": "solix-ai",
+  "name": "nyteshift",
   "private": true,
   "version": "0.1.0",
-  "description": "SolixAI — an agentic platform with autonomous and triggered modes",
+  "description": "NyteShift — an agentic platform with autonomous and triggered modes",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "build:all": "npm run build --workspace=@solix/core && npm run build --workspaces --if-present",
+    "build:all": "npm run build --workspace=@nyteshift/core && npm run build --workspaces --if-present",
     "dev:cli": "npm run dev --workspace=packages/cli",
     "dev:ui": "npm run dev --workspace=packages/ui",
     "lint": "npm run lint --workspaces --if-present",

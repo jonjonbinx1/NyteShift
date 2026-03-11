@@ -218,9 +218,9 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
 
   // Load existing config
   useEffect(() => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
 
-    window.solixApi.getAgentConfig(agentName).then((cfg) => {
+    window.nyteShiftApi.getAgentConfig(agentName).then((cfg) => {
       const c = (cfg || {}) as Record<string, any>;
       setConfig(c);
       setSelectedSkills((c.skills as string[]) || []);
@@ -236,11 +236,11 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       setCodePermission(perms.codeExecution ?? "allow");
     }).catch(console.error);
 
-    window.solixApi.listSkills().then(setSkills).catch(console.error);
-    window.solixApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
+    window.nyteShiftApi.listSkills().then(setSkills).catch(console.error);
+    window.nyteShiftApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
 
     // Load Discord bridge config
-    window.solixApi.discordBridgeConfigRead?.(agentName).then((cfg) => {
+    window.nyteShiftApi.discordBridgeConfigRead?.(agentName).then((cfg) => {
       if (cfg) {
         setDiscordBotToken(cfg.botToken || "");
         setDiscordGuildId(cfg.guildId || "");
@@ -249,7 +249,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
         setDiscordEnabled(cfg.enabled ?? false);
       }
     }).catch(console.error);
-    window.solixApi.discordBridgeStatus?.(agentName).then((s) => {
+    window.nyteShiftApi.discordBridgeStatus?.(agentName).then((s) => {
       setDiscordBridgeRunning(s?.running ?? false);
     }).catch(console.error);
   }, [agentName]);
@@ -262,7 +262,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
   }, [onClose]);
 
   const handleSave = async () => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     setSaving(true);
     try {
       const next: Record<string, unknown> = {
@@ -280,7 +280,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
           codeExecution: codePermission,
         },
       };
-      await window.solixApi.writeAgentConfig(agentName, next);
+      await window.nyteShiftApi.writeAgentConfig(agentName, next);
       setConfig(next as Record<string, any>);
 
       // Persist Discord bridge config alongside agent config.  We used to only
@@ -304,7 +304,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       if (trimmedToken) {
         cfg.botToken = trimmedToken;
       }
-      await window.solixApi.discordBridgeConfigWrite?.(agentName, cfg as any);
+      await window.nyteShiftApi.discordBridgeConfigWrite?.(agentName, cfg as any);
 
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -642,7 +642,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                         setDiscordLoading(true); setDiscordError("");
                         try {
                           // Save config first, then start.
-                          await window.solixApi?.discordBridgeConfigWrite?.(agentName, {
+                          await window.nyteShiftApi?.discordBridgeConfigWrite?.(agentName, {
                             botToken: discordBotToken.trim(),
                             agentName,
                             guildId: discordGuildId.trim() || undefined,
@@ -651,7 +651,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                             enabled: true,
                           });
                           setDiscordEnabled(true);
-                          await window.solixApi?.discordBridgeStart?.(agentName);
+                          await window.nyteShiftApi?.discordBridgeStart?.(agentName);
                           setDiscordBridgeRunning(true);
                         } catch (err) { setDiscordError((err as Error).message); }
                         finally { setDiscordLoading(false); }
@@ -669,7 +669,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                       onClick={async () => {
                         setDiscordLoading(true); setDiscordError("");
                         try {
-                          await window.solixApi?.discordBridgeStop?.(agentName);
+                          await window.nyteShiftApi?.discordBridgeStop?.(agentName);
                           setDiscordBridgeRunning(false);
                         } catch (err) { setDiscordError((err as Error).message); }
                         finally { setDiscordLoading(false); }
@@ -835,7 +835,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
                 <button
                   onClick={async () => {
                     if (!confirm(`Delete all chat history for "${agentName}"?`)) return;
-                    await window.solixApi?.deleteAllChatSessions?.(agentName);
+                    await window.nyteShiftApi?.deleteAllChatSessions?.(agentName);
                   }}
                   style={{
                     background: "rgba(243,139,168,0.1)", border: `1px solid rgba(243,139,168,0.3)`,

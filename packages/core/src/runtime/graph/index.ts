@@ -15,7 +15,13 @@ export type {
 export { validateGraph } from "./graphValidator.js";
 export type { GraphValidationError } from "./graphValidator.js";
 
-export { runGraph } from "./graphRunner.js";
+export { runGraph, asyncTriggerRegistry } from "./graphRunner.js";
+
+export {
+  graphRunRegistry,
+  runGraphTracked,
+} from "./graphRunRegistry.js";
+export type { GraphRunRecord, GraphRunMeta, GraphRunSource, GraphRunStatus } from "./graphRunRegistry.js";
 
 export {
   listGraphs,

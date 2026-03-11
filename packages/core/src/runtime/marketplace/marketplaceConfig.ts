@@ -1,29 +1,29 @@
 /**
  * Marketplace configuration manager.
  *
- * Stores the list of marketplace sources at ~/.solix/marketplace.json.
+ * Stores the list of marketplace sources at ~/.nyteshift/marketplace.json.
  * Provides a default entry for the official repo.
  */
 
 import { join } from "node:path";
-import { solixHome, readJsonFile, writeJsonFile, pathExists } from "../../utils/index.js";
+import { nyteShiftHome, readJsonFile, writeJsonFile, pathExists } from "../../utils/index.js";
 import type { MarketplaceConfig, MarketplaceSource } from "./types.js";
 
 const DEFAULT_SOURCE: MarketplaceSource = {
-  name: "Official SolixAI",
-  url: "https://github.com/jonjonbinx1/SolixAI-Marketplace.git",
+  name: "Official NyteShift",
+  url: "https://github.com/jonjonbinx1/NyteShift-Marketplace.git",
   branch: "main",
   enabled: true,
 };
 
-/** Path to ~/.solix/marketplace.json */
+/** Path to ~/.nyteshift/marketplace.json */
 export function marketplaceConfigPath(): string {
-  return join(solixHome(), "marketplace.json");
+  return join(nyteShiftHome(), "marketplace.json");
 }
 
-/** Path to ~/.solix/marketplace/ (where repos are cached) */
+/** Path to ~/.nyteshift/marketplace/ (where repos are cached) */
 export function marketplaceCacheDir(): string {
-  return join(solixHome(), "marketplace");
+  return join(nyteShiftHome(), "marketplace");
 }
 
 /** Derive a safe folder name from a source name */

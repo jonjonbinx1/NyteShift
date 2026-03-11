@@ -178,6 +178,43 @@ function validateNode(n: GraphNode): GraphValidationError[] {
     case "input":
     case "output":
       break;
+    case "catch":
+      if (!n.catchTriggers?.length) {
+        errors.push({
+          nodeId: n.id,
+          field: "catchTriggers",
+          message: "Catch node must specify at least one trigger (maxIterations, error, or abort).",
+        });
+      }
+      break;
+    case "trigger": {
+      if (!n.targetType) {
+        errors.push({
+          nodeId: n.id,
+          field: "targetType",
+          message: "Trigger node must specify targetType (\"graph\" or \"agent\").",
+        });
+      }
+      if (!n.targetId?.trim()) {
+        errors.push({
+          nodeId: n.id,
+          field: "targetId",
+          message: "Trigger node must specify a targetId (graph ID or agent name).",
+        });
+      }
+      // Warn when a trigger node invokes another agent with no task source.
+      // The task must come from triggerInput.task or promptTemplate.
+      if (n.targetType === "agent" && !n.promptTemplate && !n.triggerInput?.["task"]) {
+        errors.push({
+          nodeId: n.id,
+          field: "promptTemplate",
+          message:
+            "Trigger node targeting an agent should have a promptTemplate or " +
+            "triggerInput.task to specify the task description.",
+        });
+      }
+      break;
+    }
     default:
       errors.push({ nodeId: n.id, message: `Unknown node type "${n.type}".` });
   }
@@ -194,9 +231,17 @@ function buildAdjacency(
   nodeIds: Set<string>,
 ): Map<string, string[]> {
   const adj = new Map<string, string[]>();
+  // Build a set of catch-node IDs to exclude from SCC participation.
+  // Catch nodes are triggered by the runtime at exit-reason time; they
+  // are never loop participants and must never appear inside a cycle.
+  const catchIds = new Set(graph.nodes.filter(n => n.type === "catch").map(n => n.id));
+
   for (const id of nodeIds) adj.set(id, []);
 
   for (const edge of graph.edges ?? []) {
+    // Exclude edges whose target is a catch node — they have no role in
+    // SCC/cycle analysis (catch nodes are runtime-fired, not edge-driven).
+    if (catchIds.has(edge.target)) continue;
     if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
       adj.get(edge.source)!.push(edge.target);
     }
@@ -205,11 +250,12 @@ function buildAdjacency(
   for (const node of graph.nodes) {
     if (node.type !== "condition") continue;
     for (const branch of node.branches ?? []) {
+      if (catchIds.has(branch.target)) continue; // catch targets are not flow edges
       if (nodeIds.has(branch.target)) {
         adj.get(node.id)!.push(branch.target);
       }
     }
-    if (node.defaultTarget && nodeIds.has(node.defaultTarget)) {
+    if (node.defaultTarget && !catchIds.has(node.defaultTarget) && nodeIds.has(node.defaultTarget)) {
       adj.get(node.id)!.push(node.defaultTarget);
     }
   }
@@ -279,6 +325,17 @@ export function tarjanSCC(adj: Map<string, string[]>): Set<string>[] {
  *     1. At least one `condition` node inside the SCC.
  *     2. At least one branch of that condition node pointing OUTSIDE the SCC
  *        (the loop-exit path).
+ *
+ * Additional rule for trigger nodes in cycles:
+ *   A sync trigger node (awaitResult !== false) inside a cycle will cause
+ *   unbounded synchronous recursion unless a condition guard also breaks the
+ *   cycle.  If a sync trigger node is found in a cycle we verify that the
+ *   cycle ALSO satisfies the normal condition-exit rule above — the standard
+ *   SCC validation already enforces this, but we emit a more helpful
+ *   diagnostic that mentions the trigger node by name.
+ *
+ *   An async trigger node (awaitResult=false) inside a cycle is always fine
+ *   because it fires and continues without blocking the stack.
  */
 function validateSCCs(
   graph: GraphDefinition,
@@ -292,6 +349,9 @@ function validateSCCs(
   for (const scc of sccs) {
     if (scc.size === 1) {
       const [id] = scc;
+      // Catch nodes are always valid as standalone nodes — they fire via
+      // runtime exit reasons, not via graph edges or SCC membership.
+      if (nodeMap.get(id!)?.type === "catch") continue;
       // Self-loop?
       const hasSelfLoop = (adj.get(id!) ?? []).includes(id!);
       if (!hasSelfLoop) continue; // Normal single node — ok
@@ -299,6 +359,9 @@ function validateSCCs(
       // Self-loop: the node must be a condition (its default / branch provides the exit)
       const n = nodeMap.get(id!);
       if (n?.type !== "condition") {
+        // Special case: a trigger node with awaitResult=false (async) may safely
+        // self-loop because it never blocks the caller.
+        if (n?.type === "trigger" && n.awaitResult === false) continue;
         errors.push({
           nodeId: id,
           message: `Node "${id}" has a self-loop but is not a condition node. \
@@ -308,17 +371,33 @@ A self-loop requires a condition node to provide a loop-exit branch.`,
       continue;
     }
 
-    // Multi-node SCC — must have a condition node with an exit branch
+    // Multi-node SCC — check for sync trigger nodes first to emit actionable advice.
+    const syncTriggerIds = [...scc].filter((id) => {
+      const n = nodeMap.get(id);
+      return n?.type === "trigger" && n.awaitResult !== false;
+    });
+
+    // Must have a condition node with an exit branch.
     const hasCond = [...scc].some((id) => nodeMap.get(id)?.type === "condition");
     if (!hasCond) {
-      errors.push({
-        message: `Graph contains a cycle (${[...scc].join(", ")}) with no condition node. \
+      if (syncTriggerIds.length > 0) {
+        errors.push({
+          message:
+            `Cycle (${[...scc].join(", ")}) contains sync trigger node(s) ` +
+            `(${syncTriggerIds.join(", ")}) with no condition node to guard the loop. ` +
+            `Set awaitResult=false on the trigger node(s) for async fire-and-forget, ` +
+            `or add a condition node with an exit branch to bound the recursion.`,
+        });
+      } else {
+        errors.push({
+          message: `Graph contains a cycle (${[...scc].join(", ")}) with no condition node. \
 Add a condition node with at least one branch exiting the cycle to create a valid loop.`,
-      });
+        });
+      }
       continue;
     }
 
-    // Check that at least one condition node in the SCC has an exit branch
+    // Check that at least one condition node in the SCC has an exit branch.
     const hasExit = [...scc].some((id) => {
       const n = nodeMap.get(id);
       if (n?.type !== "condition") return false;
@@ -330,15 +409,23 @@ Add a condition node with at least one branch exiting the cycle to create a vali
     });
 
     if (!hasExit) {
-      errors.push({
-        message: `Loop cycle (${[...scc].join(", ")}) has no exit branch — this would loop forever. \
+      if (syncTriggerIds.length > 0) {
+        errors.push({
+          message:
+            `Loop cycle (${[...scc].join(", ")}) contains sync trigger node(s) ` +
+            `(${syncTriggerIds.join(", ")}) but the condition node has no exit branch — ` +
+            `this would recurse indefinitely. Set awaitResult=false on the trigger node(s) ` +
+            `or add a condition branch targeting a node outside the loop.`,
+        });
+      } else {
+        errors.push({
+          message: `Loop cycle (${[...scc].join(", ")}) has no exit branch — this would loop forever. \
 Add a branch on the condition node that targets a node outside the loop.`,
-      });
+        });
+      }
     }
   }
 
   return errors;
 }
-
-// ── Legacy helpers (kept for reference only, no longer called) ────────────
 

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fork } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import {
   listAgents,
   createAgent,
@@ -20,7 +21,7 @@ import {
   whenUserProvidersLoaded,
   callProvider,
   runAutonomousTask,
-  ensureSolixDirs,
+  ensureNyteShiftDirs,
   // Chat sessions
   listChatSessions,
   loadChatSession,
@@ -61,9 +62,10 @@ import {
   saveGraph,
   deleteGraph,
   validateGraph,
-  runGraph,
-} from "@solix/core";
-import type { ChatSession, TriggerType } from "@solix/core";
+  runGraphTracked,
+  graphRunRegistry,
+} from "@nyteshift/core";
+import type { ChatSession, TriggerType } from "@nyteshift/core";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -78,7 +80,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: "SolixAI",
+    title: "NyteShift",
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -88,9 +90,9 @@ function createWindow(): void {
 
   // Automatically open devtools for easier debugging when running in
   // development mode.  They can be disabled by setting the
-  // `SOLIX_DEVTOOLS=false` environment variable (useful for CI or when the
+  // `NYTESHIFT_DEVTOOLS=false` environment variable (useful for CI or when the
   // console is distracting).
-  if (process.env.ELECTRON_RENDERER_URL && process.env.SOLIX_DEVTOOLS !== "false") {
+  if (process.env.ELECTRON_RENDERER_URL && process.env.NYTESHIFT_DEVTOOLS !== "false") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
@@ -406,12 +408,12 @@ function registerIpc(): void {
 
   // Updates & auto‑update configuration
   ipcMain.handle("marketplace:checkUpdates", async () => {
-    const { autoUpdateInstalledItems } = await import("@solix/core");
+    const { autoUpdateInstalledItems } = await import("@nyteshift/core");
     return autoUpdateInstalledItems();
   });
 
   ipcMain.handle("marketplace:update", async (_e, item?: { category: string; contributor: string; name: string }) => {
-    const core = await import("@solix/core");
+    const core = await import("@nyteshift/core");
     if (item) {
       return core.checkAndUpdateItem(item.category, item.contributor, item.name);
     }
@@ -424,17 +426,17 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("marketplace:setAutoUpdate", async (_e, item: { category: string; contributor: string; name: string }, enabled: boolean) => {
-    const { setItemAutoUpdate } = await import("@solix/core");
+    const { setItemAutoUpdate } = await import("@nyteshift/core");
     return setItemAutoUpdate(item.category, item.contributor, item.name, enabled);
   });
 
   ipcMain.handle("marketplace:setGlobalAutoUpdate", async (_e, enabled: boolean) => {
-    const { setGlobalAutoUpdate } = await import("@solix/core");
+    const { setGlobalAutoUpdate } = await import("@nyteshift/core");
     return setGlobalAutoUpdate(enabled);
   });
 
   ipcMain.handle("marketplace:installed", async () => {
-    const { readInstalledIndex } = await import("@solix/core");
+    const { readInstalledIndex } = await import("@nyteshift/core");
     return readInstalledIndex();
   });
 
@@ -596,7 +598,11 @@ function registerIpc(): void {
       // Strip large result bodies for IPC serialisation safety.
       return runs.map((r) => ({
         ...r,
-        result: r.result ? { finalOutput: r.result.finalOutput, aborted: r.result.aborted, steps: r.result.steps.length } : undefined,
+        result: r.result ? {
+          finalOutput: (r.result as any).finalOutput,
+          aborted: (r.result as any).aborted,
+          steps: (r.result as any).steps?.length ?? 0,
+        } : undefined,
       }));
     } catch {
       return [];
@@ -608,7 +614,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:bridge:start", async (_e, agentName: string) => {
     console.log("[IPC] discord:bridge:start —", agentName);
     try {
-      const { startBridge } = await import("@solix/core");
+      const { startBridge } = await import("@nyteshift/core");
       await startBridge(agentName);
       return { running: true };
     } catch (err) {
@@ -620,7 +626,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:bridge:stop", async (_e, agentName: string) => {
     console.log("[IPC] discord:bridge:stop —", agentName);
     try {
-      const { stopBridge } = await import("@solix/core");
+      const { stopBridge } = await import("@nyteshift/core");
       await stopBridge(agentName);
       return { running: false };
     } catch (err) {
@@ -631,7 +637,7 @@ function registerIpc(): void {
 
   ipcMain.handle("discord:bridge:status", async (_e, agentName: string) => {
     try {
-      const { isBridgeRunning } = await import("@solix/core");
+      const { isBridgeRunning } = await import("@nyteshift/core");
       return { running: isBridgeRunning(agentName) };
     } catch {
       return { running: false };
@@ -640,7 +646,7 @@ function registerIpc(): void {
 
   ipcMain.handle("discord:bridge:config:read", async (_e, agentName: string) => {
     try {
-      const { readBridgeConfig } = await import("@solix/core");
+      const { readBridgeConfig } = await import("@nyteshift/core");
       return await readBridgeConfig(agentName);
     } catch {
       return null;
@@ -649,7 +655,7 @@ function registerIpc(): void {
 
   ipcMain.handle("discord:bridge:config:write", async (_e, agentName: string, config: any) => {
     try {
-      const { writeBridgeConfig } = await import("@solix/core");
+      const { writeBridgeConfig } = await import("@nyteshift/core");
       await writeBridgeConfig(agentName, config);
     } catch (err) {
       console.error("[IPC] discord:bridge:config:write — ERROR:", err);
@@ -662,7 +668,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:global:start", async () => {
     console.log("[IPC] discord:global:start");
     try {
-      const { startGlobalBridge } = await import("@solix/core");
+      const { startGlobalBridge } = await import("@nyteshift/core");
       await startGlobalBridge();
       return { running: true };
     } catch (err) {
@@ -674,7 +680,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:global:stop", async () => {
     console.log("[IPC] discord:global:stop");
     try {
-      const { stopGlobalBridge } = await import("@solix/core");
+      const { stopGlobalBridge } = await import("@nyteshift/core");
       await stopGlobalBridge();
       return { running: false };
     } catch (err) {
@@ -685,7 +691,7 @@ function registerIpc(): void {
 
   ipcMain.handle("discord:global:status", async () => {
     try {
-      const { isGlobalBridgeRunning } = await import("@solix/core");
+      const { isGlobalBridgeRunning } = await import("@nyteshift/core");
       return { running: isGlobalBridgeRunning() };
     } catch {
       return { running: false };
@@ -694,7 +700,7 @@ function registerIpc(): void {
 
   ipcMain.handle("discord:global:config:read", async () => {
     try {
-      const { readGlobalDiscordConfig } = await import("@solix/core");
+      const { readGlobalDiscordConfig } = await import("@nyteshift/core");
       return await readGlobalDiscordConfig();
     } catch {
       return null;
@@ -703,7 +709,7 @@ function registerIpc(): void {
 
   ipcMain.handle("discord:global:config:write", async (_e, config: any) => {
     try {
-      const { writeGlobalDiscordConfig } = await import("@solix/core");
+      const { writeGlobalDiscordConfig } = await import("@nyteshift/core");
       await writeGlobalDiscordConfig(config);
     } catch (err) {
       console.error("[IPC] discord:global:config:write — ERROR:", err);
@@ -716,7 +722,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:bridge:send", async (_e, agentName: string, opts: { channelId?: string; channelName?: string; content?: string; replyToId?: string; guildId?: string }) => {
     console.log("[IPC] discord:bridge:send —", agentName, opts.channelId ?? opts.channelName ?? "(no channel)");
     try {
-      const core = await import("@solix/core");
+      const core = await import("@nyteshift/core");
       const { getActiveBridges, isBridgeRunning, startBridge } = core as any;
 
       let bridge: any = null;
@@ -778,7 +784,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:bridge:fetch", async (_e, agentName: string, opts: { channelId?: string; limit?: number }) => {
     console.log("[IPC] discord:bridge:fetch —", agentName, opts.channelId);
     try {
-      const core = await import("@solix/core");
+      const core = await import("@nyteshift/core");
       const { getActiveBridges } = core as any;
       let bridge: any = null;
       for (const b of getActiveBridges().values()) {
@@ -801,7 +807,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:bridge:resolveChannel", async (_e, agentName: string, name: string) => {
     console.log("[IPC] discord:bridge:resolveChannel —", agentName, name);
     try {
-      const core = await import("@solix/core");
+      const core = await import("@nyteshift/core");
       const { getActiveBridges } = core as any;
       let bridge: any = null;
       for (const b of getActiveBridges().values()) {
@@ -830,7 +836,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:global:send", async (_e, opts: { channelId?: string; channelName?: string; content?: string; replyToId?: string; guildId?: string }) => {
     console.log("[IPC] discord:global:send —", opts.channelId ?? opts.channelName ?? "(no channel)");
     try {
-      const core = await import("@solix/core");
+      const core = await import("@nyteshift/core");
       const { getGlobalBridge, startGlobalBridge } = core as any;
       let bridge = getGlobalBridge();
       if (!bridge) bridge = await startGlobalBridge();
@@ -867,7 +873,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:global:fetch", async (_e, opts: { channelId: string; limit?: number }) => {
     console.log("[IPC] discord:global:fetch —", opts.channelId);
     try {
-      const core = await import("@solix/core");
+      const core = await import("@nyteshift/core");
       const { getGlobalBridge } = core as any;
       const bridge = getGlobalBridge();
       if (!bridge) throw new Error("Global bridge not running");
@@ -886,7 +892,7 @@ function registerIpc(): void {
   ipcMain.handle("discord:global:resolveChannel", async (_e, name: string) => {
     console.log("[IPC] discord:global:resolveChannel —", name);
     try {
-      const core = await import("@solix/core");
+      const core = await import("@nyteshift/core");
       const { getGlobalBridge } = core as any;
       const bridge = getGlobalBridge();
       if (!bridge) throw new Error("Global bridge not running");
@@ -964,18 +970,21 @@ function registerIpc(): void {
 
   // ── Agent Graph IPC ────────────────────────────────────────────────────
 
-  // Track running graph executions so we can push per-node events to renderer.
-  const activeGraphRuns = new Map<string, {
-    status: "running" | "done" | "error";
-    result?: unknown;
-    error?: string;
-    nodeProgress: unknown[];
-    /** Optional graph id associated with this run (if known) */
-    graphId?: string;
-    /** Timestamp (ms) when run was started */
-    startedAt?: number;
-  }>();
+  // Controllers for graph runs so the UI can request cancellation.
   const graphRunControllers = new Map<string, AbortController>();
+
+  // Forward graphRunRegistry events to the renderer so live progress works
+  // for ALL graph runs (manual, trigger-engine, trigger-node) uniformly.
+  graphRunRegistry.on("node:start", (data: { runId: string; nodeId: string; nodeName: string; nodeType?: string }) => {
+    try { mainWindow?.webContents.send("graph:nodeStart", data); } catch {}
+  });
+  graphRunRegistry.on("node:complete", (data: { runId: string; nodeOutput: unknown }) => {
+    try { mainWindow?.webContents.send("graph:nodeComplete", data); } catch {}
+  });
+  graphRunRegistry.on("run:complete", (data: { runId: string; result?: unknown; error?: string }) => {
+    try { mainWindow?.webContents.send("graph:runComplete", data); } catch {}
+    graphRunControllers.delete(data.runId);
+  });
 
   ipcMain.handle("graph:list", () => listGraphs());
   ipcMain.handle("graph:load", (_e, id: string) => loadGraph(id));
@@ -987,121 +996,99 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("graph:run", async (_e, graphOrId: unknown, opts?: unknown) => {
-    const runId = `graph:${Date.now()}`;
+    const runId = `graph:${randomUUID()}`;
     const controller = new AbortController();
     graphRunControllers.set(runId, controller);
-    const startedAt = Date.now();
-    const graphId = typeof graphOrId === "string" ? (graphOrId as string) : (graphOrId && (graphOrId as any).id ? (graphOrId as any).id : undefined);
-    activeGraphRuns.set(runId, { status: "running", nodeProgress: [], startedAt, graphId });
+    const options = { ...((opts as Record<string, unknown>) ?? {}), signal: controller.signal };
 
-    // Fire-and-forget — resolver returns the runId immediately.
-    runGraph(graphOrId as any, {
-      ...((opts as Record<string, unknown>) ?? {}),
-      signal: controller.signal,
-      onNodeStart: (nodeId: string, nodeName: string) => {
-        try { mainWindow?.webContents.send("graph:nodeStart", { runId, nodeId, nodeName }); } catch {}
-        // Record a lightweight "running" placeholder so renderer pages that query
-        // `graphRuns()` or `graphRunStatus()` can see the currently executing node
-        // even if they weren't listening when the start event was emitted.
-        try {
-          const entry = activeGraphRuns.get(runId);
-          if (entry) {
-            entry.nodeProgress.push({
-              nodeId,
-              nodeName,
-              output: null,
-              metadata: { elapsedMs: 0 },
-              status: "running",
-              timestamp: Date.now(),
-            });
-          }
-        } catch {}
-      },
-      onNodeComplete: (output: unknown) => {
-        const entry = activeGraphRuns.get(runId);
-        if (entry) {
-          try {
-            // Replace the last running placeholder for this node if present,
-            // otherwise just append the completed output.
-            const outAny = output as any;
-            const idx = entry.nodeProgress.map((p: any) => p).reverse().findIndex((p: any) => p && p.nodeId === outAny.nodeId && p.status === "running");
-            if (idx >= 0) {
-              // reverse index -> actual index
-              const realIdx = entry.nodeProgress.length - 1 - idx;
-              entry.nodeProgress[realIdx] = output;
-            } else {
-              entry.nodeProgress.push(output);
-            }
-          } catch (err) {
-            try { entry.nodeProgress.push(output); } catch {}
-          }
-        }
-        try { mainWindow?.webContents.send("graph:nodeComplete", { runId, nodeOutput: output }); } catch {}
-      },
-    }).then((result: unknown) => {
-      const prev = activeGraphRuns.get(runId) ?? { nodeProgress: [] } as any;
-      activeGraphRuns.set(runId, {
-        status: "done",
-        result,
-        nodeProgress: prev.nodeProgress ?? [],
-        startedAt: prev.startedAt ?? startedAt,
-        graphId: prev.graphId,
-      });
-      try { mainWindow?.webContents.send("graph:runComplete", { runId, result }); } catch {}
-      graphRunControllers.delete(runId);
-    }).catch((err: Error) => {
-      const error = err.message ?? String(err);
-      const prev = activeGraphRuns.get(runId) ?? { nodeProgress: [] } as any;
-      activeGraphRuns.set(runId, {
-        status: "error",
-        error,
-        nodeProgress: prev.nodeProgress ?? [],
-        startedAt: prev.startedAt ?? startedAt,
-        graphId: prev.graphId,
-      });
-      try { mainWindow?.webContents.send("graph:runComplete", { runId, error }); } catch {}
-      graphRunControllers.delete(runId);
-    });
+    // Fire-and-forget — returns the runId immediately; progress arrives via
+    // the registry event listeners above.
+    runGraphTracked(graphOrId as any, options as any, { source: "manual" }, runId).catch(() => {});
 
     return { runId };
   });
 
-  // List active and recent graph runs so renderer can navigate to them even
-  // after leaving the graph builder page.
+  // List all tracked runs (registry is the single source-of-truth).
   ipcMain.handle("graph:runs", () => {
-    const runs: any[] = [];
-    for (const [runId, info] of activeGraphRuns) {
-      runs.push({ runId, ...info });
-    }
-    return runs;
+    return graphRunRegistry.list().map((r) => ({
+      runId: r.runId,
+      graphId: r.graphId,
+      graphName: r.graphName,
+      status: r.status === "done" ? "done" : r.status === "error" ? "error" : "running",
+      result: r.result,
+      error: r.error,
+      nodeProgress: r.nodeProgress,
+      startedAt: r.startedAt,
+      source: r.source,
+      triggerId: r.triggerId,
+      triggerName: r.triggerName,
+      triggerType: r.triggerType,
+    }));
   });
 
-  ipcMain.handle("graph:run:status", (_e, runId: string) => activeGraphRuns.get(runId) ?? null);
+  // List runs for a specific graph ID.
+  ipcMain.handle("graph:runs:forGraph", (_e, graphId: string) => {
+    return graphRunRegistry.list({ graphId }).map((r) => ({
+      runId: r.runId,
+      graphId: r.graphId,
+      graphName: r.graphName,
+      status: r.status === "done" ? "done" : r.status === "error" ? "error" : "running",
+      result: r.result,
+      error: r.error,
+      nodeProgress: r.nodeProgress,
+      startedAt: r.startedAt,
+      source: r.source,
+      triggerId: r.triggerId,
+      triggerName: r.triggerName,
+      triggerType: r.triggerType,
+    }));
+  });
+
+  ipcMain.handle("graph:run:status", (_e, runId: string) => {
+    const r = graphRunRegistry.getRun(runId);
+    if (!r) return null;
+    return {
+      runId: r.runId,
+      graphId: r.graphId,
+      status: r.status === "done" ? "done" : r.status === "error" ? "error" : "running",
+      result: r.result,
+      error: r.error,
+      nodeProgress: r.nodeProgress,
+      startedAt: r.startedAt,
+      source: r.source,
+      triggerId: r.triggerId,
+      triggerName: r.triggerName,
+    };
+  });
 
   ipcMain.handle("graph:run:cancel", (_e, runId: string) => {
+    // Abort via the main-managed controller (manual runs started via graph:run).
     try { graphRunControllers.get(runId)?.abort(); } catch {}
     graphRunControllers.delete(runId);
+    // Also abort via the registry — covers trigger-engine and trigger-node runs
+    // so Stop works for any run visible in the graph view, regardless of origin.
+    graphRunRegistry.abort(runId);
   });
 }
 
 // ── App lifecycle ──────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  // Always ensure ~/.solix directory tree exists before anything else.
+  // Always ensure ~/.nyteshift directory tree exists before anything else.
   try {
-    await ensureSolixDirs();
-    console.log("[SolixAI] ~/.solix dirs ready at:", join(homedir(), ".solix"));
+    await ensureNyteShiftDirs();
+    console.log("[NyteShift] ~/.nyteshift dirs ready at:", join(homedir(), ".nyteshift"));
   } catch (err) {
     // Fallback: create dirs directly without core dependency
-    console.error("[SolixAI] ensureSolixDirs from core failed, using fallback:", err);
+    console.error("[NyteShift] ensureNyteShiftDirs from core failed, using fallback:", err);
     try {
-      const base = join(homedir(), ".solix");
+      const base = join(homedir(), ".nyteshift");
       for (const sub of ["", "agents", "skills", "tools", "triggers"]) {
         await mkdir(join(base, sub), { recursive: true });
       }
-      console.log("[SolixAI] ~/.solix dirs created via fallback at:", join(homedir(), ".solix"));
+      console.log("[NyteShift] ~/.nyteshift dirs created via fallback at:", join(homedir(), ".nyteshift"));
     } catch (fallbackErr) {
-      console.error("[SolixAI] fallback dir creation also failed:", fallbackErr);
+      console.error("[NyteShift] fallback dir creation also failed:", fallbackErr);
     }
   }
   registerIpc();
@@ -1124,28 +1111,28 @@ app.whenReady().then(async () => {
 
   // Reconcile installed.json with items on disk that pre-date the index
   // tracking system.  Runs silently in the background — never blocks startup.
-  import("@solix/core").then(({ reconcileInstalledItems }) => {
+  import("@nyteshift/core").then(({ reconcileInstalledItems }) => {
     reconcileInstalledItems().catch((err) =>
-      console.warn("[SolixAI] installed-index reconciliation failed:", err),
+      console.warn("[NyteShift] installed-index reconciliation failed:", err),
     );
   }).catch(() => {});
 
   // Auto-start Discord bridges that have enabled: true saved in their config.
   // Deferred via setTimeout so it never blocks window creation or IPC registration.
   setTimeout(() => {
-    import("@solix/core").then(async ({ readGlobalDiscordConfig, startGlobalBridge, listAgents: _listAgents, readBridgeConfig, startBridge }) => {
+    import("@nyteshift/core").then(async ({ readGlobalDiscordConfig, startGlobalBridge, listAgents: _listAgents, readBridgeConfig, startBridge }) => {
       // Global bridge
       try {
         const globalCfg = await readGlobalDiscordConfig();
         if (globalCfg?.enabled && globalCfg?.botToken) {
           startGlobalBridge().then(() => {
-            console.log("[SolixAI] global Discord bridge auto-started");
+            console.log("[NyteShift] global Discord bridge auto-started");
           }).catch((err: Error) => {
-            console.warn("[SolixAI] global Discord bridge auto-start failed:", err.message);
+            console.warn("[NyteShift] global Discord bridge auto-start failed:", err.message);
           });
         }
       } catch (err) {
-        console.warn("[SolixAI] global Discord bridge config read failed:", (err as Error).message);
+        console.warn("[NyteShift] global Discord bridge config read failed:", (err as Error).message);
       }
 
       // Per-agent bridges — fire each one independently so a slow/failing
@@ -1156,17 +1143,17 @@ app.whenReady().then(async () => {
           readBridgeConfig(agentName).then((cfg) => {
             if (cfg?.enabled && cfg?.botToken) {
               startBridge(agentName).then(() => {
-                console.log(`[SolixAI] Discord bridge auto-started for agent "${agentName}"`);
+                console.log(`[NyteShift] Discord bridge auto-started for agent "${agentName}"`);
               }).catch((err: Error) => {
-                console.warn(`[SolixAI] Discord bridge auto-start failed for "${agentName}":`, err.message);
+                console.warn(`[NyteShift] Discord bridge auto-start failed for "${agentName}":`, err.message);
               });
             }
           }).catch((err: Error) => {
-            console.warn(`[SolixAI] Discord bridge config read failed for "${agentName}":`, err.message);
+            console.warn(`[NyteShift] Discord bridge config read failed for "${agentName}":`, err.message);
           });
         }
       } catch (err) {
-        console.warn("[SolixAI] per-agent Discord bridge auto-start failed:", (err as Error).message);
+        console.warn("[NyteShift] per-agent Discord bridge auto-start failed:", (err as Error).message);
       }
     }).catch(() => {});
   }, 0);
@@ -1184,12 +1171,12 @@ app.whenReady().then(async () => {
       try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
     });
     triggerEngine.start().then(() => {
-      console.log("[SolixAI] trigger engine started");
+      console.log("[NyteShift] trigger engine started");
     }).catch((err) => {
-      console.error("[SolixAI] trigger engine start failed:", err);
+      console.error("[NyteShift] trigger engine start failed:", err);
     });
   } catch (err) {
-    console.error("[SolixAI] trigger engine setup failed:", err);
+    console.error("[NyteShift] trigger engine setup failed:", err);
   }
 
   app.on("activate", () => {

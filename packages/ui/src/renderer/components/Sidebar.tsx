@@ -46,7 +46,7 @@ export function Sidebar(): React.JSX.Element {
     <>
       <nav style={navStyle}>
         <div style={{ padding: "0 1.2rem 1rem", fontWeight: 700, fontSize: "1.2rem" }}>
-          SolixAI
+          NyteShift
         </div>
         {links.map((l) => (
           <NavLink

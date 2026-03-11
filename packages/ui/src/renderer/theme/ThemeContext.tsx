@@ -47,7 +47,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const cfg = await window.solixApi?.readConfig();
+        const cfg = await window.nyteShiftApi?.readConfig();
         if (cfg?.themeId && typeof cfg.themeId === "string") {
           setThemeId(cfg.themeId);
         }
@@ -67,8 +67,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (!loaded) return;
     (async () => {
       try {
-        const cfg = (await window.solixApi?.readConfig()) ?? {};
-        await window.solixApi?.writeConfig({
+        const cfg = (await window.nyteShiftApi?.readConfig()) ?? {};
+        await window.nyteShiftApi?.writeConfig({
           ...cfg,
           themeId,
           customThemes,
@@ -98,7 +98,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const el = document.documentElement;
     for (const [key, value] of Object.entries(palette)) {
-      el.style.setProperty(`--solix-${key}`, value);
+      el.style.setProperty(`--nyteshift-${key}`, value);
     }
   }, [palette]);
 

@@ -37,14 +37,14 @@ export function SkillList(): React.JSX.Element {
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!window.solixApi) return;
-    window.solixApi.listSkills().then(setSkills).catch(console.error);
-    window.solixApi.listAgents().then(setAgents).catch(console.error);
+    if (!window.nyteShiftApi) return;
+    window.nyteShiftApi.listSkills().then(setSkills).catch(console.error);
+    window.nyteShiftApi.listAgents().then(setAgents).catch(console.error);
     loadInstalledIndex();
   }, []);
 
   const loadInstalledIndex = async () => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     try {
       const idx = await a.marketplaceInstalled();
@@ -63,7 +63,7 @@ export function SkillList(): React.JSX.Element {
   };
 
   const handleUpdateSkill = async (s: SkillInfo) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     const key = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
     setUpdatingItems((prev) => new Set([...prev, key]));
@@ -72,7 +72,7 @@ export function SkillList(): React.JSX.Element {
       const res = await a.marketplaceUpdate({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name });
       flash(res?.message ?? (res?.updated ? "Updated" : "Already up to date"));
       await loadInstalledIndex();
-      window.solixApi!.listSkills().then(setSkills).catch(console.error);
+      window.nyteShiftApi!.listSkills().then(setSkills).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -81,7 +81,7 @@ export function SkillList(): React.JSX.Element {
   };
 
   const handleUninstallSkill = async (s: SkillInfo) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     const key = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
     if (!confirm(`Uninstall skill ${s.frontmatter.name}? This will remove the on-disk skill.`)) return;
@@ -90,7 +90,7 @@ export function SkillList(): React.JSX.Element {
       const res = await a.marketplaceUninstall({ category: "skills", contributor: s.frontmatter.contributor, name: s.frontmatter.name });
       flash(res?.message ?? "Uninstalled");
       await loadInstalledIndex();
-      window.solixApi!.listSkills().then(setSkills).catch(console.error);
+      window.nyteShiftApi!.listSkills().then(setSkills).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -99,7 +99,7 @@ export function SkillList(): React.JSX.Element {
   };
 
   const handleAutoToggleSkill = async (s: SkillInfo, en: boolean) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     const key = `${s.frontmatter.contributor}/${s.frontmatter.name}`;
     // optimistic UI update — upsert entry so checkbox reacts immediately even
@@ -152,7 +152,7 @@ export function SkillList(): React.JSX.Element {
   const flash = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
   const handleUpdateAllSkills = async (contributor?: string) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     setUpdatingAll(true);
     try {
@@ -168,7 +168,7 @@ export function SkillList(): React.JSX.Element {
       }
       flash(updated > 0 ? `Updated ${updated} skill${updated !== 1 ? "s" : ""}` : "All skills up to date");
       await loadInstalledIndex();
-      window.solixApi!.listSkills().then(setSkills).catch(console.error);
+      window.nyteShiftApi!.listSkills().then(setSkills).catch(console.error);
     } catch (e: any) {
       flash(`Error: ${e.message}`);
     } finally {
@@ -177,7 +177,7 @@ export function SkillList(): React.JSX.Element {
   };
 
   const handleGlobalAutoToggle = async (en: boolean) => {
-    const a = (window as any).solixApi;
+    const a = (window as any).nyteShiftApi;
     if (!a) return;
     await a.marketplaceSetGlobalAutoUpdate(en);
     setGlobalAutoUpdate(en);
@@ -228,7 +228,7 @@ export function SkillList(): React.JSX.Element {
         <h1 style={{ margin: "0 0 8px", fontSize: "1.6rem", fontWeight: 700, letterSpacing: "-0.02em" }}>Skills</h1>
         <div style={{ textAlign: "center", padding: "4rem 1rem", color: c.muted, background: c.surface, borderRadius: 14, border: `1px solid ${c.border}` }}>
           <p style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: 6 }}>No skills installed</p>
-          <p style={{ fontSize: "0.88rem" }}>Sync from the <strong style={{ color: c.accent }}>Marketplace</strong> or add skill files to <code style={{ color: c.subtext }}>~/.solix/skills</code>.</p>
+          <p style={{ fontSize: "0.88rem" }}>Sync from the <strong style={{ color: c.accent }}>Marketplace</strong> or add skill files to <code style={{ color: c.subtext }}>~/.nyteshift/skills</code>.</p>
         </div>
       </div>
     );

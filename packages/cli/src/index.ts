@@ -8,8 +8,8 @@ import { registerUiCommands } from "./commands/ui.js";
 const program = new Command();
 
 program
-  .name("solix")
-  .description("SolixAI — agentic platform CLI")
+  .name("nyteshift")
+  .description("NyteShift — agentic platform CLI")
   .version("0.1.0");
 
 registerAgentCommands(program);

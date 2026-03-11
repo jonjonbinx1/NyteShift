@@ -177,19 +177,19 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!window.solixApi) return;
-    window.solixApi.listProviders().then((ps) => setProviders(ps.map((p) => p.id))).catch(console.error);
-    window.solixApi.listSkills().then(setSkills).catch(console.error);
-    window.solixApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
+    if (!window.nyteShiftApi) return;
+    window.nyteShiftApi.listProviders().then((ps) => setProviders(ps.map((p) => p.id))).catch(console.error);
+    window.nyteShiftApi.listSkills().then(setSkills).catch(console.error);
+    window.nyteShiftApi.listTools().then((ts: any) => setTools(ts)).catch(console.error);
   }, []);
 
   // Fetch models whenever the selected provider changes
   useEffect(() => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     setModels([]);
     if (!provider) return;
     setModelsLoading(true);
-    window.solixApi
+    window.nyteShiftApi
       .listProviderModels(provider)
       .then((ms) => setModels(ms))
       .catch(() => setModels([]))
@@ -206,12 +206,12 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
   const handleSubmit = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) { setError("Agent name is required."); return; }
-    if (!window.solixApi) { setError("API unavailable."); return; }
+    if (!window.nyteShiftApi) { setError("API unavailable."); return; }
     setBusy(true);
     setError("");
     try {
       // 1. Create the agent directory + default config
-      await window.solixApi.createAgent(trimmedName);
+      await window.nyteShiftApi.createAgent(trimmedName);
 
       // 2. Persist extended config
       const cfg: Record<string, unknown> = { name: trimmedName };
@@ -221,11 +221,11 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
       if (maxTokens !== "")           cfg.maxTokens   = parseInt(maxTokens, 10);
       if (selectedSkills.length > 0)  cfg.skills      = selectedSkills;
       if (selectedTools.length > 0)   cfg.tools       = selectedTools;
-      await window.solixApi.writeAgentConfig(trimmedName, cfg);
+      await window.nyteShiftApi.writeAgentConfig(trimmedName, cfg);
 
       // 3. Persist soul.md if the user typed anything
       if (soul.trim()) {
-        await window.solixApi.writeSoul(trimmedName, soul);
+        await window.nyteShiftApi.writeSoul(trimmedName, soul);
       }
 
       onCreated();

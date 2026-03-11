@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { SolixConfig, AgentConfig } from "../../types/index.js";
+import type { NyteShiftConfig, AgentConfig } from "../../types/index.js";
 import {
   globalConfigPath,
   agentConfigPath,
@@ -12,13 +12,13 @@ import {
 
 // ── Security overrides (hard-coded guardrails) ─────────────────────────
 
-const SECURITY_OVERRIDES: Partial<SolixConfig> = {
+const SECURITY_OVERRIDES: Partial<NyteShiftConfig> = {
   // Example: cap temperature to 2.0 max
 };
 
 // ── Defaults ───────────────────────────────────────────────────────────
 
-const GLOBAL_DEFAULTS: SolixConfig = {
+const GLOBAL_DEFAULTS: NyteShiftConfig = {
   defaultProvider: "openai",
   defaultModel: "gpt-4o",
   temperature: 0.7,
@@ -34,18 +34,18 @@ const GLOBAL_DEFAULTS: SolixConfig = {
  * Precedence (highest wins):
  *   security overrides > agent config > user config > global defaults
  */
-export async function resolveConfig(agentName?: string): Promise<SolixConfig> {
-  let userConfig: SolixConfig = {};
+export async function resolveConfig(agentName?: string): Promise<NyteShiftConfig> {
+  let userConfig: NyteShiftConfig = {};
   const gPath = globalConfigPath();
   if (await pathExists(gPath)) {
-    userConfig = await readJsonFile<SolixConfig>(gPath);
+    userConfig = await readJsonFile<NyteShiftConfig>(gPath);
   }
 
-  let agentCfg: Partial<SolixConfig> = {};
+  let agentCfg: Partial<NyteShiftConfig> = {};
   if (agentName) {
     const aPath = agentConfigPath(agentName);
     if (await pathExists(aPath)) {
-      agentCfg = await readJsonFile<Partial<SolixConfig>>(aPath);
+      agentCfg = await readJsonFile<Partial<NyteShiftConfig>>(aPath);
     }
   }
 
@@ -58,14 +58,14 @@ export async function resolveConfig(agentName?: string): Promise<SolixConfig> {
 }
 
 /** Read user-level global config. */
-export async function readGlobalConfig(): Promise<SolixConfig> {
+export async function readGlobalConfig(): Promise<NyteShiftConfig> {
   const p = globalConfigPath();
   if (!(await pathExists(p))) return { ...GLOBAL_DEFAULTS };
-  return readJsonFile<SolixConfig>(p);
+  return readJsonFile<NyteShiftConfig>(p);
 }
 
 /** Write user-level global config. */
-export async function writeGlobalConfig(config: SolixConfig): Promise<void> {
+export async function writeGlobalConfig(config: NyteShiftConfig): Promise<void> {
   await writeJsonFile(globalConfigPath(), config);
 }
 

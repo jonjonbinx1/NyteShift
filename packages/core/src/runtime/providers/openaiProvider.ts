@@ -1,5 +1,5 @@
 import type {
-  SolixProvider,
+  NyteShiftProvider,
   ModelInfo,
   ProviderCallParams,
   ProviderCallResult,
@@ -15,7 +15,7 @@ import { resolveConfig } from "../config/configResolver.js";
 const log  = (...a: unknown[]) => console.log("[provider:openai]",  ...a);
 const logE = (...a: unknown[]) => console.error("[provider:openai]", ...a);
 
-export function createOpenAIProvider(): SolixProvider {
+export function createOpenAIProvider(): NyteShiftProvider {
   return {
     id: "openai",
 

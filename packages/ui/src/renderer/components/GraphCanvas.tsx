@@ -17,9 +17,11 @@ export const NODE_TYPE_STYLES: Record<string, { icon: string; label: string; col
   output:    { icon: "⏹",  label: "Output",    color: "#89b4fa", textColor: "#1e1e2e", description: "Graph exit point — captures final result." },
   llm:       { icon: "🧠", label: "LLM Call",  color: "#cba6f7", textColor: "#1e1e2e", description: "Single LLM call with a prompt template." },
   agent:     { icon: "🤖", label: "Agent",     color: "#fab387", textColor: "#1e1e2e", description: "Full ReAct agent with tools and skills." },
+  trigger:   { icon: "🔁", label: "Trigger",   color: "#ffd166", textColor: "#1e1e2e", description: "Invoke another graph or agent (sync or async)." },
   tool:      { icon: "🔧", label: "Tool",      color: "#94e2d5", textColor: "#1e1e2e", description: "Direct tool invocation." },
   condition: { icon: "⋔",  label: "Condition", color: "#f9e2af", textColor: "#1e1e2e", description: "Route to different branches based on conditions." },
   operation: { icon: "⚙",  label: "Operation", color: "#89dceb", textColor: "#1e1e2e", description: "Mutate a variable (vars.name) — used to drive loops." },
+  catch:     { icon: "🪤", label: "Catch",     color: "#f38ba8", textColor: "#1e1e2e", description: "Fires when a loop exits due to max iterations, error, or abort." },
 };
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────
@@ -186,7 +188,7 @@ export function GraphCanvas(props: Props): React.JSX.Element {
   // Load saved zoom/pan (if any)
   useEffect(() => {
     try {
-      const raw = localStorage.getItem("solix:graph:zoom");
+      const raw = localStorage.getItem("nyteshift:graph:zoom");
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed?.pan && typeof parsed?.scale === "number") {
@@ -200,7 +202,7 @@ export function GraphCanvas(props: Props): React.JSX.Element {
   useEffect(() => {
     if (saveZoomDebounceRef.current) window.clearTimeout(saveZoomDebounceRef.current);
     saveZoomDebounceRef.current = window.setTimeout(() => {
-      try { localStorage.setItem("solix:graph:zoom", JSON.stringify({ pan, scale })); } catch (e) { }
+      try { localStorage.setItem("nyteshift:graph:zoom", JSON.stringify({ pan, scale })); } catch (e) { }
     }, 250) as unknown as number;
     return () => { if (saveZoomDebounceRef.current) window.clearTimeout(saveZoomDebounceRef.current); };
   }, [pan, scale]);

@@ -89,7 +89,7 @@ export async function fetchRepoTree(
   const res = await fetch(url, {
     headers: {
       Accept: "application/vnd.github.v3+json",
-      "User-Agent": "SolixAI-Marketplace-Client/1.0",
+      "User-Agent": "NyteShift-Marketplace-Client/1.0",
     },
   });
 
@@ -161,7 +161,7 @@ export async function downloadItemFiles(
       console.log(`[Marketplace:remote] downloading ${rawUrl}`);
 
       const fileRes = await fetch(rawUrl, {
-        headers: { "User-Agent": "SolixAI-Marketplace-Client/1.0" },
+        headers: { "User-Agent": "NyteShift-Marketplace-Client/1.0" },
       });
       if (!fileRes.ok) {
         throw new Error(`Failed to download "${entry.path}": HTTP ${fileRes.status}`);
@@ -187,7 +187,7 @@ export async function downloadItemToTemp(
   itemPath: string,
   allEntries: GitTreeEntry[],
 ): Promise<string> {
-  const tmp = join(tmpdir(), `solix-mp-${randomBytes(8).toString("hex")}`);
+  const tmp = join(tmpdir(), `nyteshift-mp-${randomBytes(8).toString("hex")}`);
   await downloadItemFiles(owner, repo, branch, itemPath, tmp, allEntries);
   return tmp;
 }
@@ -204,7 +204,7 @@ export async function fetchRawFile(
 ): Promise<string> {
   const url = `${rawContentBase(owner, repo, branch)}/${path}`;
   const res = await fetch(url, {
-    headers: { "User-Agent": "SolixAI-Marketplace-Client/1.0" },
+    headers: { "User-Agent": "NyteShift-Marketplace-Client/1.0" },
   });
   if (!res.ok) throw new Error(`Failed to fetch "${path}": HTTP ${res.status}`);
   return res.text();

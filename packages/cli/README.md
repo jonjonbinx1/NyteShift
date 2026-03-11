@@ -1,6 +1,6 @@
-# @solix/cli
+# @nyteshift/cli
 
-Command-line interface for SolixAI.
+Command-line interface for NyteShift.
 
 ## Installation
 
@@ -9,7 +9,7 @@ npm install
 npm run build
 ```
 
-After building, the `solix` binary is available at `packages/cli/bin/solix`.
+After building, the `nyteshift` binary is available at `packages/cli/bin/nyteshift`.
 
 ## Commands
 
@@ -17,45 +17,45 @@ After building, the `solix` binary is available at `packages/cli/bin/solix`.
 
 ```bash
 # Create a new agent
-solix agent create <name>
+nyteshift agent create <name>
 
 # List all agents
-solix agent list
+nyteshift agent list
 
 # Run an autonomous task
-solix agent run <name> "<task>"
+nyteshift agent run <name> "<task>"
 
 # Delete an agent
-solix agent delete <name>
+nyteshift agent delete <name>
 ```
 
 ### Configuration
 
 ```bash
 # Show global config
-solix config show
+nyteshift config show
 ```
 
 ### Marketplace
 
 ```bash
-# Sync marketplace content into ~/.solix
-solix marketplace sync
+# Sync marketplace content into ~/.nyteshift
+nyteshift marketplace sync
 ```
 
 ### Triggers
 
 ```bash
 # List available triggers
-solix triggers list
+nyteshift triggers list
 
 # Manually fire a trigger
-solix triggers run <name>
+nyteshift triggers run <name>
 ```
 
 ## Options
 
-`solix agent run` supports:
+`nyteshift agent run` supports:
 
 | Flag | Description |
 |------|-------------|

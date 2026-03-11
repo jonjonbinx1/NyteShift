@@ -45,7 +45,7 @@ Push-Location packages\cli
 npm install -g . --prefix $userNpm
 Pop-Location
 
-Write-Host "`nThe 'solix' command is now available globally."
-Write-Host "Bootstrap complete. You can run 'solix agent list' or start the UI with 'npm run dev:ui'."
+Write-Host "`nThe 'nyteshift' command is now available globally."
+Write-Host "Bootstrap complete. You can run 'nyteshift agent list' or start the UI with 'npm run dev:ui'."
 
 Pop-Location

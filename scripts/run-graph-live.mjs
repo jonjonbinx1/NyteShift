@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { runGraph, whenUserProvidersLoaded } from '../packages/core/dist/index.js';
 
-process.env.SOLIX_DEBUG_PROVIDER_RAW = '1';
+process.env.NYTESHIFT_DEBUG_PROVIDER_RAW = '1';
 
 const GRAPH_ID = 'graph-1773080377747';
 const OP2_ID = 'operation-mmjo085a';
@@ -18,7 +18,7 @@ function prettyOut(o) {
   try { return JSON.stringify(o); } catch { return String(o); }
 }
 
-console.log(`Running graph ${GRAPH_ID} with SOLIX_DEBUG_PROVIDER_RAW=${process.env.SOLIX_DEBUG_PROVIDER_RAW}`);
+console.log(`Running graph ${GRAPH_ID} with NYTESHIFT_DEBUG_PROVIDER_RAW=${process.env.NYTESHIFT_DEBUG_PROVIDER_RAW}`);
 // Wait until any user-provided providers (e.g. local-inference) finish loading
 console.log('Waiting for user providers to register (whenUserProvidersLoaded)...');
 await whenUserProvidersLoaded();

@@ -23,11 +23,11 @@ export function Home(): React.JSX.Element {
   const [stats, setStats] = useState<Stats>({ agents: 0, triggers: 0, hasProvider: false, defaultProvider: null });
 
   useEffect(() => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     Promise.all([
-      window.solixApi.listAgents().catch(() => [] as string[]),
-      window.solixApi.triggersListAll().catch(() => [] as any[]),
-      window.solixApi.readConfig().catch(() => ({} as any)),
+      window.nyteShiftApi.listAgents().catch(() => [] as string[]),
+      window.nyteShiftApi.triggersListAll().catch(() => [] as any[]),
+      window.nyteShiftApi.readConfig().catch(() => ({} as any)),
     ]).then(([agents, triggers, cfg]) => {
       setStats({
         agents: (agents as string[]).length,
@@ -64,7 +64,7 @@ export function Home(): React.JSX.Element {
       }}>
         <div>
           <h1 style={{ margin: 0, fontSize: "1.8rem", fontWeight: 800, color: C.text }}>
-            Welcome to SolixAI
+            Welcome to NyteShift
           </h1>
           <p style={{ margin: "0.4rem 0 0", color: C.subtext0, fontSize: "1rem" }}>
             Your local AI agent platform — build, schedule, and automate.
@@ -138,7 +138,7 @@ export function Home(): React.JSX.Element {
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, color: C.text, marginBottom: 2 }}>Need help getting started?</div>
           <div style={{ fontSize: "0.85rem", color: C.subtext0 }}>
-            Use the <strong style={{ color: C.mauve }}>Solix Assistant</strong> chat bubble in the bottom-right corner — just describe
+            Use the <strong style={{ color: C.mauve }}>NyteShift Assistant</strong> chat bubble in the bottom-right corner — just describe
             what you want and it will help you set up agents, triggers, and more.
           </div>
         </div>

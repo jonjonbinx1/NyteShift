@@ -1,5 +1,5 @@
 /**
- * Agent Plan Manager — SolixAI
+ * Agent Plan Manager — NyteShift
  *
  * Implements structured, disk-backed checkpointing for long-running agent
  * tasks, following Anthropic's guidance on context management for agentic
@@ -34,7 +34,7 @@
  *     having to re-execute expensive tool calls.
  *
  * Storage layout:
- *   ~/.solix/agents/<agentName>/plans/<planId>.json
+ *   ~/.nyteshift/agents/<agentName>/plans/<planId>.json
  *
  * Plan file shape: {@link PlanEntry}
  */

@@ -5,25 +5,25 @@ import type { ThemePalette } from "../theme/themes.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type SolixAction =
-  | { solix_action: "create_agent";        name: string; soul?: string; description?: string; provider?: string; model?: string }
-  | { solix_action: "create_trigger";      name: string; agentName: string; type: "cron" | "once" | "webhook"; schedule?: string; runAt?: number; taskTemplate: string; webhookPath?: string }
-  | { solix_action: "navigate";            path: string; label?: string }
-  | { solix_action: "update_agent_config"; name: string; settings: Record<string, unknown> };
+type NyteShiftAction =
+  | { nyteshift_action: "create_agent";        name: string; soul?: string; description?: string; provider?: string; model?: string }
+  | { nyteshift_action: "create_trigger";      name: string; agentName: string; type: "cron" | "once" | "webhook"; schedule?: string; runAt?: number; taskTemplate: string; webhookPath?: string }
+  | { nyteshift_action: "navigate";            path: string; label?: string }
+  | { nyteshift_action: "update_agent_config"; name: string; settings: Record<string, unknown> };
 
 interface ChatMsg {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   ts: number;
-  actions?: SolixAction[];
+  actions?: NyteShiftAction[];
   actionStates?: Record<string, "pending" | "running" | "done" | "error">;
   actionErrors?: Record<string, string>;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const HELPER_SOUL = `You are Solix, the built-in setup assistant for the SolixAI platform.
+const HELPER_SOUL = `You are the NyteShift built-in setup assistant for the NyteShift platform.
 Your job is to help users set up and configure agents, triggers, providers, and other settings through friendly conversation.
 
 IMPORTANT: When you determine that an action needs to be taken, you MUST embed a JSON code block in your response. The UI will detect these blocks and show confirmation buttons to the user before executing anything. Never claim you "can't" create things — always offer the JSON action block.
@@ -33,7 +33,7 @@ IMPORTANT: When you determine that an action needs to be taken, you MUST embed a
 1. Create an Agent
 \`\`\`json
 {
-  "solix_action": "create_agent",
+  "nyteshift_action": "create_agent",
   "name": "my-agent-name",
   "soul": "You are a helpful assistant specialised in...",
   "description": "Short human-readable description"
@@ -44,7 +44,7 @@ Rules: name must be lowercase with hyphens only, no spaces.
 2. Create a Cron/Schedule Trigger
 \`\`\`json
 {
-  "solix_action": "create_trigger",
+  "nyteshift_action": "create_trigger",
   "name": "my-trigger",
   "agentName": "my-agent-name",
   "type": "cron",
@@ -57,7 +57,7 @@ Common schedules: every day 9am="0 9 * * *", weekdays="0 9 * * 1-5", hourly="0 *
 3. Navigate to a Page
 \`\`\`json
 {
-  "solix_action": "navigate",
+  "nyteshift_action": "navigate",
   "path": "/marketplace",
   "label": "Marketplace"
 }
@@ -67,7 +67,7 @@ Valid paths: /agents, /triggers, /skills, /tools, /providers, /marketplace, /log
 4. Update Agent Config
 \`\`\`json
 {
-  "solix_action": "update_agent_config",
+  "nyteshift_action": "update_agent_config",
   "name": "my-agent-name",
   "settings": { "provider": "openai", "model": "gpt-4o", "maxSteps": 15 }
 }
@@ -84,15 +84,15 @@ Valid paths: /agents, /triggers, /skills, /tools, /providers, /marketplace, /log
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function parseActions(content: string): SolixAction[] {
-  const actions: SolixAction[] = [];
+function parseActions(content: string): NyteShiftAction[] {
+  const actions: NyteShiftAction[] = [];
   const re = /```json\s*([\s\S]*?)```/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) {
     try {
       const parsed = JSON.parse(m[1]);
-      if (parsed && typeof parsed.solix_action === "string") {
-        actions.push(parsed as SolixAction);
+      if (parsed && typeof parsed.nyteshift_action === "string") {
+        actions.push(parsed as NyteShiftAction);
       }
     } catch {}
   }
@@ -102,7 +102,7 @@ function parseActions(content: string): SolixAction[] {
 /** Strip action JSON blocks from content so they don't render as raw text. */
 function stripActionBlocks(content: string): string {
   return content
-    .replace(/```json\s*\{[\s\S]*?"solix_action"[\s\S]*?\}```/g, "")
+    .replace(/```json\s*\{[\s\S]*?"nyteshift_action"[\s\S]*?\}```/g, "")
     .trim();
 }
 
@@ -132,8 +132,8 @@ export function HelperChat(): React.JSX.Element | null {
 
   // ── Check provider on mount ──────────────────────────────────────────────
   useEffect(() => {
-    if (!window.solixApi) return;
-    window.solixApi.readConfig().then((cfg: any) => {
+    if (!window.nyteShiftApi) return;
+    window.nyteShiftApi.readConfig().then((cfg: any) => {
       setHasProvider(!!cfg?.defaultProvider);
     }).catch(() => {});
   }, []);
@@ -156,14 +156,14 @@ export function HelperChat(): React.JSX.Element | null {
       setMessages([{
         id: crypto.randomUUID(),
         role: "assistant",
-        content: "Hi! I'm Solix, your built-in assistant \uD83D\uDC4B\n\nTell me what you'd like to set up \u2014 for example:\n- *\"Create an email assistant that summarises my inbox every morning\"*\n- *\"Set up an agent to monitor my server logs\"*\n- *\"Help me create a weekly report trigger\"*\n\nWhat would you like to do?",
+        content: "Hi! I'm your NyteShift built-in assistant \uD83D\uDC4B\n\nTell me what you'd like to set up \u2014 for example:\n- *\"Create an email assistant that summarises my inbox every morning\"*\n- *\"Set up an agent to monitor my server logs\"*\n- *\"Help me create a weekly report trigger\"*\n\nWhat would you like to do?",
         ts: Date.now(),
       }]);
     }
 
     // refresh provider info for header
-    if (window.solixApi) {
-      window.solixApi.readConfig().then((cfg: any) => {
+    if (window.nyteShiftApi) {
+      window.nyteShiftApi.readConfig().then((cfg: any) => {
         setCurrentProvider(cfg.defaultProvider || null);
         setCurrentModel(cfg.defaultModel || null);
       }).catch(() => {});
@@ -188,7 +188,7 @@ export function HelperChat(): React.JSX.Element | null {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-      const cfg: any = await window.solixApi!.readConfig().catch(() => ({}));
+      const cfg: any = await window.nyteShiftApi!.readConfig().catch(() => ({}));
       console.log("[HelperChat] readConfig ->", cfg);
 
       // Only pass provider/model if explicitly set (avoid overriding defaults in handler)
@@ -201,7 +201,7 @@ export function HelperChat(): React.JSX.Element | null {
       if (cfg?.defaultProvider) chatOpts.provider = cfg.defaultProvider;
       if (cfg?.defaultModel) chatOpts.model = cfg.defaultModel;
 
-      const res = await window.solixApi!.chat(chatOpts);
+      const res = await window.nyteShiftApi!.chat(chatOpts);
 
       const raw = res.output || "(no output)";
       const actions = parseActions(raw);
@@ -228,7 +228,7 @@ export function HelperChat(): React.JSX.Element | null {
   };
 
   // ── Execute an action ─────────────────────────────────────────────────────
-  const executeAction = async (msgId: string, actionIndex: number, action: SolixAction) => {
+  const executeAction = async (msgId: string, actionIndex: number, action: NyteShiftAction) => {
     const setState = (s: "running" | "done" | "error", err?: string) =>
       setMessages((prev) => prev.map((m) => {
         if (m.id !== msgId) return m;
@@ -241,15 +241,15 @@ export function HelperChat(): React.JSX.Element | null {
 
     setState("running");
     try {
-      switch (action.solix_action) {
+      switch (action.nyteshift_action) {
         case "create_agent": {
-          await window.solixApi!.createAgent(action.name);
+          await window.nyteShiftApi!.createAgent(action.name);
           if (action.soul) {
-            await window.solixApi!.writeSoul(action.name, action.soul);
+            await window.nyteShiftApi!.writeSoul(action.name, action.soul);
           }
           if (action.provider || action.model) {
-            const existing = await window.solixApi!.getAgentConfig(action.name).catch(() => ({}));
-            await window.solixApi!.writeAgentConfig(action.name, {
+            const existing = await window.nyteShiftApi!.getAgentConfig(action.name).catch(() => ({}));
+            await window.nyteShiftApi!.writeAgentConfig(action.name, {
               ...existing,
               ...(action.provider ? { provider: action.provider } : {}),
               ...(action.model    ? { model: action.model }       : {}),
@@ -258,7 +258,7 @@ export function HelperChat(): React.JSX.Element | null {
           break;
         }
         case "create_trigger": {
-          await window.solixApi!.triggersCreate({
+          await window.nyteShiftApi!.triggersCreate({
             name:         action.name,
             agentName:    action.agentName,
             type:         action.type as any,
@@ -277,8 +277,8 @@ export function HelperChat(): React.JSX.Element | null {
           return;
         }
         case "update_agent_config": {
-          const existing = await window.solixApi!.getAgentConfig(action.name).catch(() => ({}));
-          await window.solixApi!.writeAgentConfig(action.name, { ...existing, ...action.settings });
+          const existing = await window.nyteShiftApi!.getAgentConfig(action.name).catch(() => ({}));
+          await window.nyteShiftApi!.writeAgentConfig(action.name, { ...existing, ...action.settings });
           break;
         }
       }
@@ -337,17 +337,17 @@ export function HelperChat(): React.JSX.Element | null {
     flexDirection: "column",
     overflow: "hidden",
     zIndex: 1000,
-    animation: "solixSlideUp 0.2s ease-out",
+    animation: "nyteShiftSlideUp 0.2s ease-out",
   };
 
   return (
     <>
       <style>{`
-        @keyframes solixSlideUp {
+        @keyframes nyteShiftSlideUp {
           from { opacity: 0; transform: translateY(16px); }
           to   { opacity: 1; transform: translateY(0); }
         }
-        @keyframes solixDot {
+        @keyframes nyteShiftDot {
           0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
           40%           { transform: scale(1);   opacity: 1; }
         }
@@ -357,7 +357,7 @@ export function HelperChat(): React.JSX.Element | null {
       <button
         style={bubbleStyle}
         onClick={() => (open ? setOpen(false) : handleOpen())}
-        title="Solix Assistant"
+        title="NyteShift Assistant"
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLElement).style.transform = "scale(1.08)";
           (e.currentTarget as HTMLElement).style.boxShadow = `0 6px 24px ${C.mauve}99`;
@@ -383,8 +383,8 @@ export function HelperChat(): React.JSX.Element | null {
           }}>
             <span style={{ fontSize: "1.3rem" }}>🤖</span>
             <div>
-              <div style={{ fontWeight: 700, fontSize: "0.95rem", color: C.text }}>Solix Assistant</div>
-              <div style={{ fontSize: "0.75rem", color: C.subtext0 }}>Your SolixAI setup helper</div>
+              <div style={{ fontWeight: 700, fontSize: "0.95rem", color: C.text }}>NyteShift Assistant</div>
+              <div style={{ fontSize: "0.75rem", color: C.subtext0 }}>Your NyteShift setup helper</div>
               {/* show active provider/model for debugging */}
               {hasProvider && currentProvider && (
                 <div style={{ fontSize: "0.6rem", color: C.overlay0, marginTop: 2 }}>
@@ -407,7 +407,7 @@ export function HelperChat(): React.JSX.Element | null {
                 No AI Provider Configured
               </div>
               <div style={{ fontSize: "0.85rem", color: C.subtext0, lineHeight: 1.5 }}>
-                The Solix Assistant needs an AI provider (OpenAI, Anthropic, or OpenRouter) to work.
+                The NyteShift Assistant needs an AI provider (OpenAI, Anthropic, or OpenRouter) to work.
                 Set one up and come back!
               </div>
               <button
@@ -444,7 +444,7 @@ export function HelperChat(): React.JSX.Element | null {
                       <span key={i} style={{
                         width: 7, height: 7, borderRadius: "50%",
                         background: C.mauve, display: "inline-block",
-                        animation: `solixDot 1.2s ease-in-out ${i * 0.2}s infinite`,
+                        animation: `nyteShiftDot 1.2s ease-in-out ${i * 0.2}s infinite`,
                       }} />
                     ))}
                   </div>
@@ -508,7 +508,7 @@ export function HelperChat(): React.JSX.Element | null {
 interface MessageBubbleProps {
   msg: ChatMsg;
   palette: ThemePalette;
-  onExecute: (msgId: string, idx: number, action: SolixAction) => void;
+  onExecute: (msgId: string, idx: number, action: NyteShiftAction) => void;
   onNavigate: (path: string) => void;
 }
 
@@ -565,7 +565,7 @@ function MessageBubble({ msg, palette: C, onExecute }: MessageBubbleProps): Reac
 // ── Action card ────────────────────────────────────────────────────────────
 
 interface ActionCardProps {
-  action: SolixAction;
+  action: NyteShiftAction;
   state: "pending" | "running" | "done" | "error";
   error?: string;
   palette: ThemePalette;
@@ -589,7 +589,7 @@ function ActionCard({ action, state, error, palette: C, onRun }: ActionCardProps
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span style={{ fontSize: "0.8rem", fontWeight: 700, color: stateColor }}>
-          {actionLabel[action.solix_action] ?? action.solix_action}
+          {actionLabel[action.nyteshift_action] ?? action.nyteshift_action}
         </span>
         <span style={{ fontSize: "0.75rem", color: C.subtext0 }}>
           {state === "done" ? "Done" : state === "error" ? "Failed" : state === "running" ? "Running…" : "Ready"}
@@ -628,7 +628,7 @@ function ActionCard({ action, state, error, palette: C, onRun }: ActionCardProps
 
 // ── Compact action summary ─────────────────────────────────────────────────
 
-function ActionSummary({ action, palette: C }: { action: SolixAction; palette: ThemePalette }): React.JSX.Element {
+function ActionSummary({ action, palette: C }: { action: NyteShiftAction; palette: ThemePalette }): React.JSX.Element {
   const row = (k: string, v: unknown) => v == null ? null : (
     <div key={k} style={{ display: "flex", gap: 6, fontSize: "0.78rem" }}>
       <span style={{ color: C.subtext0, minWidth: 80 }}>{k}</span>
@@ -636,7 +636,7 @@ function ActionSummary({ action, palette: C }: { action: SolixAction; palette: T
     </div>
   );
 
-  switch (action.solix_action) {
+  switch (action.nyteshift_action) {
     case "create_agent":
       return <>
         {row("Name",  action.name)}
@@ -694,8 +694,8 @@ function SimpleMarkdown({ text, linkColor, boldColor }: { text: string; linkColo
 
 // ── Confirmation message builder ───────────────────────────────────────────
 
-function buildConfirmMessage(action: SolixAction): string {
-  switch (action.solix_action) {
+function buildConfirmMessage(action: NyteShiftAction): string {
+  switch (action.nyteshift_action) {
     case "create_agent":
       return `✅ Agent **${action.name}** created successfully! You can find it under Agents. Want me to create a trigger for it or configure anything else?`;
     case "create_trigger":

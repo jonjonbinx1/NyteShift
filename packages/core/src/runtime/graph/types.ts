@@ -63,6 +63,17 @@ export interface ErrorPolicy {
 
 // ── Operation Action ──────────────────────────────────────────────────
 
+// ── Catch Node ───────────────────────────────────────────────────────
+
+/**
+ * Conditions that can trigger a `catch` node to fire after a loop exits.
+ *
+ * - maxIterations — the loop hit `graph.maxIterations` without a condition exit
+ * - error         — a node inside the loop halted with an unhandled error
+ * - abort         — the run was cancelled via an AbortSignal
+ */
+export type CatchTrigger = "maxIterations" | "error" | "abort";
+
 /**
  * A single mutation performed by an `operation` node against the
  * mutable `vars` store in the execution context.
@@ -98,6 +109,7 @@ export interface OperationAction {
  *   tool      — direct tool invocation
  *   condition — routing node (exclusive branch selection)
  *   operation — mutates a mutable variable in `vars` (enables loop feedback)
+ *   trigger   — invoke another graph or agent, sync or async
  */
 export interface GraphNode {
   /** Unique identifier within the graph. */
@@ -105,7 +117,7 @@ export interface GraphNode {
   /** Human-readable name. */
   name: string;
   /** Determines execution behaviour. */
-  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation";
+  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation" | "catch" | "trigger";
 
   // ── LLM node ─────────────────────────────────────────────────────────
   /** Provider ID override (e.g. "openai", "anthropic"). */
@@ -169,6 +181,56 @@ export interface GraphNode {
    */
   operationAction?: OperationAction;
 
+  // ── Catch node ───────────────────────────────────────────────────────
+  /**
+   * One or more loop-exit conditions that cause this node to fire.
+   * Required when `type` is "catch".
+   *
+   * The node fires inline after any loop SCC exits for a matching reason.
+   * Its output is `{ exitReason: string, vars: Record<string,unknown> }`
+   * so downstream nodes can inspect why the loop stopped.
+   *
+   * Outgoing edges from a catch node propagate normally, allowing
+   * users to wire cleanup / notification subgraphs.
+   */
+  catchTriggers?: CatchTrigger[];
+
+  // ── Trigger node ─────────────────────────────────────────────────────
+  /**
+   * Whether this trigger node targets another graph or an agent.
+   * Required when `type` is "trigger".
+   */
+  targetType?: "graph" | "agent";
+  /**
+   * Graph ID (when targetType is "graph") or agent name
+   * (when targetType is "agent") to invoke.
+   * Required when `type` is "trigger".
+   */
+  targetId?: string;
+  /**
+   * When true (default) the graph runner awaits the child run to finish
+   * before continuing.  When false the child is fired in background and
+   * this node resolves immediately with `{ isAsync: true, runId }`.
+   *
+   * Using async=false is STRONGLY recommended for recursive invocations
+   * to avoid unbounded stack growth.  The validator will warn when a
+   * trigger node targets the parent graph without either async=true or
+   * a condition guard.
+   */
+  awaitResult?: boolean;
+  /**
+   * Input variables forwarded to the child run.
+   * Values may contain `{{ref}}` template strings resolved against the
+   * current execution context before the child is invoked.
+   */
+  triggerInput?: Record<string, unknown>;
+  /**
+   * Milliseconds to wait before treating a sync trigger run as timed out
+   * and throwing an error (subject to the node errorPolicy).
+   * Unlimited by default.
+   */
+  timeoutMs?: number;
+
   // ── Common ───────────────────────────────────────────────────────────
   /**
    * Key used to store this node's output in the execution context.
@@ -208,7 +270,7 @@ export interface GraphEdge {
 /**
  * Complete, serialisable graph blueprint.
  *
- * Stored as JSON in ~/.solix/graphs/<id>.json.
+ * Stored as JSON in ~/.nyteshift/graphs/<id>.json.
  */
 export interface GraphDefinition {
   /** Unique graph identifier (kebab-case). */
@@ -261,6 +323,8 @@ export interface GraphDefinition {
 export interface NodeOutput {
   nodeId: string;
   nodeName: string;
+  /** Optional node type (llm, agent, tool, condition, etc.) — added for UI iconization */
+  nodeType?: GraphNode["type"];
   /** Processed output value (string for LLM, any for tools). */
   output: unknown;
   /** Raw LLM text before JSON parsing (LLM / agent nodes). */
@@ -277,6 +341,14 @@ export interface NodeOutput {
     agentSteps?: number;
     /** Loop iteration index (1-based) — only set for nodes inside a loop SCC. */
     iteration?: number;
+    /** Trigger node: "graph" or "agent" (trigger nodes only). */
+    triggerType?: "graph" | "agent";
+    /** Trigger node: the graph ID or agent name that was invoked. */
+    targetId?: string;
+    /** Trigger node: final status of the child graph run. */
+    childStatus?: string;
+    /** Trigger node: traceId of the child graph run. */
+    childTraceId?: string;
   };
   status: "success" | "error" | "skipped";
   error?: string;
@@ -305,6 +377,17 @@ export interface GraphExecutionContext {
   startedAt: number;
   /** Cooperative cancellation signal. */
   signal?: AbortSignal;
+  /**
+   * @internal
+   * Current trigger-invocation nesting depth (propagated from GraphRunOptions).
+   */
+  _triggerDepth?: number;
+  /**
+   * @internal
+   * Set by the runner immediately before executing catch nodes so they can
+   * surface the exit reason in their output.  Not referenced by user templates.
+   */
+  _loopExitReason?: string;
 }
 
 /**
@@ -316,13 +399,22 @@ export interface GraphRunOptions {
   /** Abort signal for cooperative cancellation. */
   signal?: AbortSignal;
   /** Callback fired before a node begins executing (for live progress tracking). */
-  onNodeStart?: (nodeId: string, nodeName: string) => void;
+  onNodeStart?: (nodeId: string, nodeName: string, nodeType?: GraphNode["type"]) => void;
   /** Callback fired after each node completes (for progress tracking). */
   onNodeComplete?: (output: NodeOutput) => void;
   /** Override default provider for all nodes. */
   provider?: string;
   /** Override default model for all nodes. */
   model?: string;
+  /**
+   * @internal
+   * Current trigger-invocation nesting depth.  Incremented each time a
+   * trigger node spawns a child run so the depth-guard can reject
+   * unintended infinite recursion.
+   *
+   * Depth 0 = top-level run.  Default max is 8.
+   */
+  _triggerDepth?: number;
 }
 
 /**

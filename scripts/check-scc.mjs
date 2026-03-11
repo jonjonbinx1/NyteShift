@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { tarjanSCC } from '../packages/core/dist/runtime/graph/graphValidator.js';
 
-const graph = JSON.parse(readFileSync('C:/Users/johnb/.solix/graphs/graph-1773080377747.json','utf8'));
+const graph = JSON.parse(readFileSync('C:/Users/johnb/.nyteshift/graphs/graph-1773080377747.json','utf8'));
 
 const adj = new Map();
 for (const n of graph.nodes) adj.set(n.id, []);

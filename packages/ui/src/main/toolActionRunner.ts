@@ -13,7 +13,7 @@
 process.on("message", async (msg: { qualifiedName: string; key: string }) => {
   const { qualifiedName, key } = msg ?? {};
   try {
-    const { getTool } = await import("@solix/core");
+    const { getTool } = await import("@nyteshift/core");
     const tool = await getTool(qualifiedName);
 
     if (!tool) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap the SolixAI workspace for a fresh clone.
+# Bootstrap the NyteShift workspace for a fresh clone.
 # Uses npm workspaces — no pnpm required.
 
 set -e
@@ -25,5 +25,5 @@ npm install -g .
 cd ../..
 
 echo ""
-echo "The 'solix' command is now available globally."
-echo "Bootstrap complete. Try 'solix agent list' or open the Electron UI via 'npm run dev:ui'."
+echo "The 'nyteshift' command is now available globally."
+echo "Bootstrap complete. Try 'nyteshift agent list' or open the Electron UI via 'npm run dev:ui'."

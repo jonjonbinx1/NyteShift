@@ -1,6 +1,6 @@
-# @solix/core
+# @nyteshift/core
 
-The SolixAI core runtime — skills, tools, providers, pipelines, config, and control.
+The NyteShift core runtime — skills, tools, providers, pipelines, config, and control.
 
 ## Public API
 
@@ -44,15 +44,15 @@ import {
 
   // Control
   AgentController,
-} from "@solix/core";
+} from "@nyteshift/core";
 ```
 
 ## Runtime Components
 
 | Module | Description |
 |--------|-------------|
-| `SkillLoader` | Scans `~/.solix/skills`, parses YAML frontmatter |
-| `ToolLoader` | Scans `~/.solix/tools`, dynamically imports ESM modules |
+| `SkillLoader` | Scans `~/.nyteshift/skills`, parses YAML frontmatter |
+| `ToolLoader` | Scans `~/.nyteshift/tools`, dynamically imports ESM modules |
 | `ProviderRouter` | Manages built-in + user providers; exposes `whenUserProvidersLoaded()` |
 | `ConfigResolver` | Merges global → user → agent configs with security overrides |
 | `SoulInjector` | Loads `soul.md` and injects it as a system prompt |
@@ -117,8 +117,8 @@ Agents can delegate sub-tasks to other agents following Anthropic's
 
 | Tool | Description |
 |------|-------------|
-| `solix/sub_agent_run` | Spawn a named agent with a self-contained task |
-| `solix/sub_agent_list` | List available agents and their configurations |
+| `nyteshift/sub_agent_run` | Spawn a named agent with a self-contained task |
+| `nyteshift/sub_agent_list` | List available agents and their configurations |
 
 **How it works:**
 
@@ -167,7 +167,7 @@ Three providers ship built-in:
 | `anthropic` | Anthropic Messages API | `ANTHROPIC_API_KEY` |
 | `openrouter` | OpenRouter (OpenAI-compatible) | `OPENROUTER_API_KEY` |
 
-Configure via `~/.solix/config.json`:
+Configure via `~/.nyteshift/config.json`:
 
 ```json
 {
@@ -185,11 +185,11 @@ Configure via `~/.solix/config.json`:
 
 ### Custom / User Providers
 
-Drop a `.js` file (or a directory with `provider.js`) into `~/.solix/providers/`.
-It must export an object conforming to `SolixProvider`:
+Drop a `.js` file (or a directory with `provider.js`) into `~/.nyteshift/providers/`.
+It must export an object conforming to `NyteShiftProvider`:
 
 ```js
-// ~/.solix/providers/my-provider.js
+// ~/.nyteshift/providers/my-provider.js
 module.exports = {
   id: "my-provider",
   async listModels() {
@@ -210,7 +210,7 @@ IPC event fires when they are ready. In Node code await `whenUserProvidersLoaded
 ## Logging
 
 All modules emit structured logs with namespaced prefixes visible in the Electron
-DevTools console and the terminal where `solix ui launch` is running.
+DevTools console and the terminal where `nyteshift ui launch` is running.
 
 | Prefix | Source |
 |--------|--------|

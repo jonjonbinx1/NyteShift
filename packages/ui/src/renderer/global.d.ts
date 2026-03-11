@@ -162,6 +162,12 @@ export interface TriggerDefinitionInfo {
   provider?: string;
   model?: string;
   maxSteps?: number;
+  /** Optional: whether this trigger targets an agent or a graph */
+  targetType?: string;
+  /** Optional: graph id when targetType === 'graph' */
+  targetId?: string;
+  /** Optional structured input for graph targets */
+  triggerInput?: Record<string, unknown>;
   // Discord-specific fields
   discordBotToken?: string;
   discordGuildId?: string;
@@ -185,7 +191,7 @@ export interface TriggerRunInfo {
   completedAt?: number;
 }
 
-export interface SolixApi {
+export interface NyteShiftApi {
   listAgents(): Promise<string[]>;
   createAgent(name: string): Promise<{ name: string }>;
   deleteAgent(name: string): Promise<void>;
@@ -274,6 +280,9 @@ export interface SolixApi {
     provider?: string;
     model?: string;
     maxSteps?: number;
+    targetType?: string;
+    targetId?: string;
+    triggerInput?: Record<string, unknown>;
     // Discord fields
     discordBotToken?: string;
     discordGuildId?: string;
@@ -314,7 +323,7 @@ export interface SolixApi {
   discordGlobalStop(): Promise<{ running: boolean }>;
   /** Whether the global Discord bridge is currently running. */
   discordGlobalStatus(): Promise<{ running: boolean }>;
-  /** Read the global Discord config from ~/.solix/config.json. */
+  /** Read the global Discord config from ~/.nyteshift/config.json. */
   discordGlobalConfigRead(): Promise<{
     botToken: string;
     guildId?: string;
@@ -323,7 +332,7 @@ export interface SolixApi {
     mode?: "trigger" | "bridge";
     channelAgentMap?: Record<string, string>;
   } | null>;
-  /** Write the global Discord config to ~/.solix/config.json. */
+  /** Write the global Discord config to ~/.nyteshift/config.json. */
   discordGlobalConfigWrite(config: {
     botToken: string;
     guildId?: string;
@@ -373,9 +382,11 @@ export interface SolixApi {
   /** Start a graph run — returns immediately with a runId. The run progresses asynchronously. */
   graphRun(graphOrId: string | GraphDefinitionInfo, opts?: { input?: Record<string, unknown>; provider?: string; model?: string }): Promise<{ runId: string }>;
   graphRunStatus(runId: string): Promise<GraphRunStatusInfo | null>;
-  graphRuns(): Promise<Array<{ runId: string; status: "running" | "done" | "error"; result?: GraphExecutionResultInfo; error?: string; nodeProgress: NodeOutputInfo[]; graphId?: string; startedAt?: number }>>;
+  graphRuns(): Promise<GraphRunRecordInfo[]>;
+  /** List all tracked runs for a specific graph (from any source). */
+  graphRunsForGraph(graphId: string): Promise<GraphRunRecordInfo[]>;
   graphRunCancel(runId: string): Promise<void>;
-  onGraphNodeStart(cb: (data: { runId: string; nodeId: string; nodeName: string }) => void): void;
+  onGraphNodeStart(cb: (data: { runId: string; nodeId: string; nodeName: string; nodeType?: string }) => void): void;
   onGraphNodeComplete(cb: (data: { runId: string; nodeOutput: NodeOutputInfo }) => void): void;
   onGraphRunComplete(cb: (data: { runId: string; result?: GraphExecutionResultInfo; error?: string }) => void): void;
 }
@@ -406,10 +417,16 @@ export interface OperationActionInfo {
   amount?: number;
 }
 
+/**
+ * Conditions under which a catch node fires after a loop exits.
+ * Mirrors the core CatchTrigger type.
+ */
+export type CatchTrigger = "maxIterations" | "error" | "abort";
+
 export interface GraphNodeInfo {
   id: string;
   name: string;
-  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation";
+  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation" | "catch" | "trigger";
   provider?: string;
   model?: string;
   temperature?: number;
@@ -422,9 +439,17 @@ export interface GraphNodeInfo {
   tools?: string[];
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  /** Trigger node: invoke another graph or agent */
+  targetType?: "graph" | "agent";
+  targetId?: string;
+  awaitResult?: boolean;
+  triggerInput?: Record<string, unknown> | string;
+  timeoutMs?: number;
   branches?: Array<{ label: string; condition: ConditionPredicateInfo; target: string }>;
   defaultTarget?: string;
   operationAction?: OperationActionInfo;
+  /** Triggers that cause this catch node to fire after a loop exits. */
+  catchTriggers?: CatchTrigger[];
   outputKey?: string;
   errorPolicy?: ErrorPolicyInfo;
   position?: { x: number; y: number };
@@ -457,6 +482,7 @@ export interface GraphDefinitionInfo {
 export interface NodeOutputInfo {
   nodeId: string;
   nodeName: string;
+  nodeType?: string;
   output: unknown;
   rawOutput?: string;
   metadata: {
@@ -467,6 +493,13 @@ export interface NodeOutputInfo {
     toolCalls?: Array<{ name: string; input: unknown; output: unknown }>;
     agentSteps?: number;
     iteration?: number;
+    /** Optional trigger / child-run metadata (when node is a trigger) */
+    triggerType?: string;
+    targetId?: string;
+    childStatus?: string;
+    childTraceId?: string;
+    runId?: string;
+    isAsync?: boolean;
   };
   status: "success" | "error" | "skipped";
   error?: string;
@@ -498,6 +531,26 @@ export interface GraphRunStatusInfo {
   result?: GraphExecutionResultInfo;
   error?: string;
   nodeProgress: NodeOutputInfo[];
+  source?: "manual" | "trigger" | "trigger-node";
+  triggerId?: string;
+  triggerName?: string;
+}
+
+/** Lightweight summary of a tracked graph run (from graphRunRegistry). */
+export interface GraphRunRecordInfo {
+  runId: string;
+  graphId: string;
+  graphName: string;
+  status: "running" | "done" | "error";
+  nodeProgress: NodeOutputInfo[];
+  source: "manual" | "trigger" | "trigger-node";
+  triggerId?: string;
+  triggerName?: string;
+  triggerType?: string;
+  startedAt: number;
+  completedAt?: number;
+  error?: string;
+  result?: GraphExecutionResultInfo;
 }
 
 /** Live state of a single node during or after a graph run. */
@@ -535,6 +588,6 @@ export interface NodeRunEvent {
 
 declare global {
   interface Window {
-    solixApi: SolixApi | undefined;
+    nyteShiftApi: NyteShiftApi | undefined;
   }
 }

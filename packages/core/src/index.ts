@@ -1,6 +1,6 @@
-// ── SolixAI Core — Public API ──────────────────────────────────────────
+// ── NyteShift Core — Public API ──────────────────────────────────────────
 
-// Re-export every type so consumers only need `@solix/core`.
+// Re-export every type so consumers only need `@nyteshift/core`.
 export type * from "./types/index.js";
 
 // ── Pipeline ───────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ export {
   readSkillToolConfig,
   writeSkillToolConfig,
 } from "./runtime/config/configResolver.js";
-export { ensureSolixDirs } from "./runtime/config/ensureDirs.js";
+export { ensureNyteShiftDirs } from "./runtime/config/ensureDirs.js";
 
 // ── Soul ───────────────────────────────────────────────────────────────
 export {
@@ -132,7 +132,7 @@ export type { DiscordBridgeOptions } from "./runtime/discord/discordBridge.js";
 export { AgentController } from "./runtime/control/controller.js";
 
 // ── Utils (selective) ──────────────────────────────────────────────────
-export { toKebab, solixHome } from "./utils/index.js";
+export { toKebab, nyteShiftHome } from "./utils/index.js";
 
 // ── Agent Graph ────────────────────────────────────────────────────────
 export type {
@@ -149,12 +149,16 @@ export type {
 } from "./runtime/graph/index.js";
 export {
   runGraph,
+  asyncTriggerRegistry,
   validateGraph,
   listGraphs,
   loadGraph,
   saveGraph,
   deleteGraph,
+  graphRunRegistry,
+  runGraphTracked,
 } from "./runtime/graph/index.js";
+export type { GraphRunRecord, GraphRunMeta, GraphRunSource, GraphRunStatus } from "./runtime/graph/index.js";
 
 // ── Sub-Agent Delegation ───────────────────────────────────────────────
 export { createSubAgentTools } from "./runtime/subagent/subagentTools.js";

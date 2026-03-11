@@ -145,7 +145,7 @@ function buildSystemPrompt(
 
   // ── 1. Identity & role ────────────────────────────────────────────────
   sections.push(
-    "You are an autonomous AI agent operating inside the SolixAI framework.",
+    "You are an autonomous AI agent operating inside the NyteShift framework.",
     "Your purpose is to fulfil the user's request completely, accurately and concisely.",
     "",
   );
@@ -345,7 +345,7 @@ export async function runAutonomousTask(
   log(`  config resolved — provider="${providerId}" model="${model}" temperature=${temperature} maxTokens=${maxTokens} maxSteps=${unbounded ? "∞ (unbounded)" : maxSteps}`);
 
   // ── Load skills & tools ───────────────────────────────────────────────
-  // Marketplace tools are combined with built-in tools (solix/*):
+  // Marketplace tools are combined with built-in tools (nyteshift/*):
   //   • Memory tools  — persistent key-value storage
   //   • Sub-agent tools — orchestrator-workers delegation (Anthropic pattern)
   // Both are always available without marketplace installation.

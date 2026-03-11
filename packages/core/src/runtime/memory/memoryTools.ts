@@ -1,5 +1,5 @@
 /**
- * Built-in Memory Tools — SolixAI
+ * Built-in Memory Tools — NyteShift
  *
  * Creates the four core memory tools that are available to every agent
  * without needing to install anything from the marketplace.
@@ -20,11 +20,11 @@
  *     CLI, Discord, scheduled triggers).
  *
  * Available tools:
- *   solix/memory_write   — store a key→value memory
- *   solix/memory_read    — retrieve a memory by key
- *   solix/memory_list    — list all memories (optionally by category)
- *   solix/memory_delete  — remove a memory by key
- *   solix/memory_search  — keyword search across all stored memories
+ *   nyteshift/memory_write   — store a key→value memory
+ *   nyteshift/memory_read    — retrieve a memory by key
+ *   nyteshift/memory_list    — list all memories (optionally by category)
+ *   nyteshift/memory_delete  — remove a memory by key
+ *   nyteshift/memory_search  — keyword search across all stored memories
  */
 
 import type { ToolContract } from "../../types/index.js";
@@ -50,7 +50,7 @@ export function createMemoryTools(agentName: string): ToolContract[] {
 
     // ── memory_write ──────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "memory_write",
       version: "1.0.0",
       description:
@@ -109,7 +109,7 @@ export function createMemoryTools(agentName: string): ToolContract[] {
 
     // ── memory_read ───────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "memory_read",
       version: "1.0.0",
       description:
@@ -148,7 +148,7 @@ export function createMemoryTools(agentName: string): ToolContract[] {
 
     // ── memory_list ───────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "memory_list",
       version: "1.0.0",
       description:
@@ -198,7 +198,7 @@ export function createMemoryTools(agentName: string): ToolContract[] {
 
     // ── memory_delete ─────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "memory_delete",
       version: "1.0.0",
       description:
@@ -229,7 +229,7 @@ export function createMemoryTools(agentName: string): ToolContract[] {
 
     // ── memory_search ─────────────────────────────────────────────────
     {
-      contributor: "solix",
+      contributor: "nyteshift",
       name: "memory_search",
       version: "1.0.0",
       description:

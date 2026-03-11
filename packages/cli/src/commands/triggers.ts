@@ -10,13 +10,13 @@ import {
   updateTriggerDefinition,
   getTriggerEngine,
   listAgents,
-} from "@solix/core";
-import type { TriggerEvent, TriggerType } from "@solix/core";
+} from "@nyteshift/core";
+import type { TriggerEvent, TriggerType } from "@nyteshift/core";
 
 export function registerTriggerCommands(program: Command): void {
   const triggers = program.command("triggers").description("Trigger commands — manage agent triggers (cron, webhook, manual, discord)");
 
-  // ── solix triggers list ──────────────────────────────────────────────
+  // ── nyteshift triggers list ──────────────────────────────────────────────
 
   triggers
     .command("list")
@@ -32,7 +32,7 @@ export function registerTriggerCommands(program: Command): void {
         }
 
         if (defs.length === 0) {
-          console.log(chalk.yellow("No triggers defined. Create one with: solix triggers create"));
+          console.log(chalk.yellow("No triggers defined. Create one with: nyteshift triggers create"));
           return;
         }
 
@@ -58,7 +58,7 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── solix triggers create ────────────────────────────────────────────
+  // ── nyteshift triggers create ────────────────────────────────────────────
 
   triggers
     .command("create")
@@ -150,7 +150,7 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── solix triggers delete <id> ───────────────────────────────────────
+  // ── nyteshift triggers delete <id> ───────────────────────────────────────
 
   triggers
     .command("delete <id>")
@@ -175,7 +175,7 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── solix triggers enable/disable <id> ───────────────────────────────
+  // ── nyteshift triggers enable/disable <id> ───────────────────────────────
 
   triggers
     .command("enable <id>")
@@ -221,7 +221,7 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── solix triggers fire <id> ─────────────────────────────────────────
+  // ── nyteshift triggers fire <id> ─────────────────────────────────────────
 
   triggers
     .command("fire <id>")
@@ -249,7 +249,7 @@ export function registerTriggerCommands(program: Command): void {
         if (run.status === "completed") {
           console.log(chalk.green(`✔ Trigger completed.`));
           console.log(chalk.bold("\n── Output ──────────────────────────────"));
-          console.log(run.result?.finalOutput ?? "(no output)");
+          console.log((run.result as any)?.finalOutput ?? "(no output)");
         } else {
           console.error(chalk.red(`✖ Trigger failed: ${run.error}`));
           process.exitCode = 1;
@@ -260,7 +260,7 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── solix triggers start ─────────────────────────────────────────────
+  // ── nyteshift triggers start ─────────────────────────────────────────────
 
   triggers
     .command("start")
@@ -285,7 +285,7 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── solix triggers runs ──────────────────────────────────────────────
+  // ── nyteshift triggers runs ──────────────────────────────────────────────
 
   triggers
     .command("runs")
@@ -317,11 +317,11 @@ export function registerTriggerCommands(program: Command): void {
       }
     });
 
-  // ── Legacy: solix triggers run <name> (kept for backwards compat) ────
+  // ── Legacy: nyteshift triggers run <name> (kept for backwards compat) ────
 
   triggers
     .command("run <name>")
-    .description("Manually fire a legacy trigger (from ~/.solix/triggers/)")
+    .description("Manually fire a legacy trigger (from ~/.nyteshift/triggers/)")
     .action(async (name: string) => {
       try {
         const event: TriggerEvent = {

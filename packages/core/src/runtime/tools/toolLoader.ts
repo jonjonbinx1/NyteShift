@@ -17,10 +17,10 @@ import { ensureToolDeps, clearVerified } from "./toolDeps.js";
 const moduleCache = new Map<string, { mtime: number; contract: ToolContract }>();
 
 /**
- * Scans ~/.solix/tools for tool.js modules.
+ * Scans ~/.nyteshift/tools for tool.js modules.
  *
  * Expected layout:
- *   ~/.solix/tools/<contributor>/<tool-name>/tool.js
+ *   ~/.nyteshift/tools/<contributor>/<tool-name>/tool.js
  *
  * Each module must default-export a {@link ToolContract}.
  */

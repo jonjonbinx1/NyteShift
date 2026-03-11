@@ -46,7 +46,7 @@ export function MarketplaceView(): React.JSX.Element {
   const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false);
   const [installedIndex, setInstalledIndex] = useState<any>(null);
 
-  const api = () => (window as any).solixApi;
+  const api = () => (window as any).nyteShiftApi;
 
   /* ── data loading ─────────────────────────────────────────────────── */
   const loadItems = useCallback(async () => {
@@ -365,7 +365,7 @@ export function MarketplaceView(): React.JSX.Element {
       {showSources && (
         <div style={{ flexShrink: 0, marginBottom: 18, padding: 18, background: t.surface, borderRadius: 12, border: `1px solid ${t.border}` }}>
           <h2 style={{ margin: "0 0 4px", fontSize: "1.05rem", fontWeight: 600 }}>Marketplace Sources</h2>
-          <p style={{ color: t.dim, fontSize: "0.82rem", margin: "0 0 14px" }}>Git repos containing SolixAI extensions.</p>
+          <p style={{ color: t.dim, fontSize: "0.82rem", margin: "0 0 14px" }}>Git repos containing NyteShift extensions.</p>
           {sources.map((s) => (
             <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", marginBottom: 6, background: t.card, borderRadius: 8, border: `1px solid ${t.border}` }}>
               <input type="checkbox" checked={s.enabled} onChange={(e) => handleToggleSource(s.name, e.target.checked)}
@@ -577,7 +577,7 @@ function ItemCard({ item, busy, onInstall, onUninstall, onUpdate, onAutoToggle }
             fontWeight: 700, textTransform: "capitalize", background: color, color: "#1e1e2e",
           }}>{prettyCat(item.category)}</span>
         </div>
-        {item.source !== "Official SolixAI" && (
+        {item.source !== "Official NyteShift" && (
           <span style={{ fontSize: "0.7rem", padding: "0 6px", borderRadius: 4, background: t.surface, color: t.dim, marginBottom: 6, display: "inline-block" }}>
             {item.source}
           </span>

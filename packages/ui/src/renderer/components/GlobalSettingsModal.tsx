@@ -94,9 +94,9 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
 
   // ── Load ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
 
-    window.solixApi.readConfig().then((cfg) => {
+    window.nyteShiftApi.readConfig().then((cfg) => {
       const c = (cfg || {}) as Record<string, any>;
       setConfig(c);
       setDefaultProvider(c.defaultProvider ?? "");
@@ -106,17 +106,17 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       setWebhookPort(String(c.webhookPort ?? "7433"));
     }).catch(console.error);
 
-    window.solixApi.listProviders().then((ps) => {
+    window.nyteShiftApi.listProviders().then((ps) => {
       setProviders(ps);
       if (ps.length && !editProvider) setEditProvider(ps[0].id);
     }).catch(console.error);
 
-    window.solixApi.triggersEngineStatus?.().then((s) => {
+    window.nyteShiftApi.triggersEngineStatus?.().then((s) => {
       setEngineRunning(s?.running ?? false);
     }).catch(() => {});
 
     // Load global Discord config
-    window.solixApi.discordGlobalConfigRead?.().then((cfg: any) => {
+    window.nyteShiftApi.discordGlobalConfigRead?.().then((cfg: any) => {
       if (cfg) {
         setDiscordBotToken(cfg.botToken || "");
         setDiscordGuildId(cfg.guildId || "");
@@ -136,16 +136,16 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       // changes afterwards can correctly set the dirty flag.
       discordInitialized.current = true;
     }).catch(console.error);
-    window.solixApi.discordGlobalStatus?.().then((s: any) => {
+    window.nyteShiftApi.discordGlobalStatus?.().then((s: any) => {
       setDiscordRunning(s?.running ?? false);
     }).catch(() => {});
-    window.solixApi.listAgents().then(setAgentList).catch(console.error);
+    window.nyteShiftApi.listAgents().then(setAgentList).catch(console.error);
   }, []);
 
   // Reload models when default provider changes.
   useEffect(() => {
-    if (!window.solixApi || !defaultProvider) return;
-    window.solixApi.listProviderModels(defaultProvider)
+    if (!window.nyteShiftApi || !defaultProvider) return;
+    window.nyteShiftApi.listProviderModels(defaultProvider)
       .then((m) => setModels(m || []))
       .catch(() => setModels([]));
   }, [defaultProvider]);
@@ -172,14 +172,14 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
   const { current, customThemes } = useTheme();
 
   const handleSave = async () => {
-    if (!window.solixApi) return;
+    if (!window.nyteShiftApi) return;
     setSaving(true);
     try {
       // always re-read the latest config from disk to avoid stomping
       // over changes made elsewhere (e.g. theme picker).  This ensures
       // we merge in any recent theme updates rather than using the stale
       // `config` state that was captured when the modal mounted.
-      const base = (await window.solixApi.readConfig()) || {};
+      const base = (await window.nyteShiftApi.readConfig()) || {};
       const next = { ...base } as Record<string, any>;
 
       // Only update if values are set (prevent empty string from clearing)
@@ -217,7 +217,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       }
 
       setConfig(next);
-      await window.solixApi.writeConfig(next);
+      await window.nyteShiftApi.writeConfig(next);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } finally {
@@ -250,13 +250,13 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
     setDiscordLoading(true); setDiscordError("");
     try {
       if (discordRunning) {
-        await window.solixApi?.discordGlobalStop?.();
+        await window.nyteShiftApi?.discordGlobalStop?.();
         setDiscordRunning(false);
       }
       const cfg = buildDiscordConfig();
-      await window.solixApi?.discordGlobalConfigWrite?.(cfg);
+      await window.nyteShiftApi?.discordGlobalConfigWrite?.(cfg);
       setDiscordEnabled(true);
-      await window.solixApi?.discordGlobalStart?.();
+      await window.nyteShiftApi?.discordGlobalStart?.();
       setDiscordRunning(true);
       setDiscordNeedsRestart(false);
     } catch (err) { setDiscordError((err as Error).message); }
@@ -295,7 +295,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
           }}>⚙️</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Global Settings</div>
-            <div style={{ fontSize: 11, color: C.subtext0, marginTop: 1 }}>SolixAI Configuration</div>
+            <div style={{ fontSize: 11, color: C.subtext0, marginTop: 1 }}>NyteShift Configuration</div>
           </div>
           <button
             onClick={onClose}
@@ -348,7 +348,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                 <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>API Keys & Endpoints</h3>
                 <p style={{ margin: "0 0 16px", fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
                   Configure API keys and base URLs for each provider. These are stored locally
-                  in <code style={{ color: C.mauve, fontSize: 11 }}>~/.solix/config.json</code>.
+                  in <code style={{ color: C.mauve, fontSize: 11 }}>~/.nyteshift/config.json</code>.
                 </p>
               </div>
 
@@ -442,7 +442,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                     onChange={async (e) => {
                       const newProvider = e.target.value;
                       setDefaultProvider(newProvider);
-                      await window.solixApi!.writeConfig({ ...config, defaultProvider: newProvider });
+                      await window.nyteShiftApi!.writeConfig({ ...config, defaultProvider: newProvider });
                       /* defaultModel will auto-reset via effect */
                     }}
                     style={selectStyle}
@@ -483,8 +483,8 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => {
-                      if (defaultProvider && window.solixApi) {
-                        window.solixApi.listProviderModels(defaultProvider)
+                      if (defaultProvider && window.nyteShiftApi) {
+                        window.nyteShiftApi.listProviderModels(defaultProvider)
                           .then((m) => setModels(m || []))
                           .catch(console.error);
                       }
@@ -592,7 +592,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                       onClick={async () => {
                         setEngineLoading(true);
                         try {
-                          await window.solixApi?.triggersEngineStart?.();
+                          await window.nyteShiftApi?.triggersEngineStart?.();
                           setEngineRunning(true);
                         } catch (err) { console.error(err); }
                         finally { setEngineLoading(false); }
@@ -610,7 +610,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                       onClick={async () => {
                         setEngineLoading(true);
                         try {
-                          await window.solixApi?.triggersEngineStop?.();
+                          await window.nyteShiftApi?.triggersEngineStop?.();
                           setEngineRunning(false);
                         } catch (err) { console.error(err); }
                         finally { setEngineLoading(false); }
@@ -875,9 +875,9 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                             mode: discordMode,
                             channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
                           };
-                          await window.solixApi?.discordGlobalConfigWrite?.(cfg);
+                          await window.nyteShiftApi?.discordGlobalConfigWrite?.(cfg);
                           setDiscordEnabled(true);
-                          await window.solixApi?.discordGlobalStart?.();
+                          await window.nyteShiftApi?.discordGlobalStart?.();
                           setDiscordRunning(true);
                           setDiscordNeedsRestart(false);
                         } catch (err) { setDiscordError((err as Error).message); }
@@ -907,7 +907,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                         onClick={async () => {
                           setDiscordLoading(true); setDiscordError("");
                           try {
-                            await window.solixApi?.discordGlobalStop?.();
+                            await window.nyteShiftApi?.discordGlobalStop?.();
                             setDiscordRunning(false);
                             setDiscordNeedsRestart(false);
                           } catch (err) { setDiscordError((err as Error).message); }
@@ -943,24 +943,24 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
           {activeTab === "about" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               <div>
-                <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>About SolixAI</h3>
+                <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>About NyteShift</h3>
                 <p style={{ margin: "0 0 16px", fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
-                  SolixAI is a local-first autonomous agent platform.
+                  NyteShift is a local-first autonomous agent platform.
                 </p>
               </div>
 
               <div style={sectionStyle}>
                 <InfoRow label="Version" value="0.1.0" />
-                <InfoRow label="Config Path" value="~/.solix/config.json" />
-                <InfoRow label="Agents Path" value="~/.solix/agents/" />
-                <InfoRow label="Skills Path" value="~/.solix/skills/" />
-                <InfoRow label="Tools Path" value="~/.solix/tools/" />
+                <InfoRow label="Config Path" value="~/.nyteshift/config.json" />
+                <InfoRow label="Agents Path" value="~/.nyteshift/agents/" />
+                <InfoRow label="Skills Path" value="~/.nyteshift/skills/" />
+                <InfoRow label="Tools Path" value="~/.nyteshift/tools/" />
               </div>
 
               <div style={sectionStyle}>
                 <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Raw Configuration</h4>
                 <p style={{ margin: 0, fontSize: 11, color: C.subtext0 }}>
-                  Current contents of <code style={{ color: C.mauve }}>~/.solix/config.json</code>. Edit fields above and press Save.
+                  Current contents of <code style={{ color: C.mauve }}>~/.nyteshift/config.json</code>. Edit fields above and press Save.
                 </p>
                 <pre style={{
                   background: C.surface0, borderRadius: 8,
@@ -986,7 +986,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                   onClick={async () => {
                     if (!confirm("Reset all global settings to defaults? API keys will be cleared.")) return;
                     const defaults = { defaultProvider: "openai", defaultModel: "gpt-4o", temperature: 0.7, maxTokens: 4096 };
-                    await window.solixApi?.writeConfig(defaults);
+                    await window.nyteShiftApi?.writeConfig(defaults);
                     setConfig(defaults);
                     setDefaultProvider("openai");
                     setDefaultModel("gpt-4o");

@@ -1,8 +1,8 @@
 /**
- * Chat session persistence for SolixAI agents.
+ * Chat session persistence for NyteShift agents.
  *
  * Sessions are stored as JSON files under:
- *   ~/.solix/agents/<agentName>/chats/<sessionId>.json
+ *   ~/.nyteshift/agents/<agentName>/chats/<sessionId>.json
  *
  * Each session contains the full message history, metadata, and run state.
  */
@@ -155,7 +155,7 @@ export async function deleteChatSession(
  * Soft-delete a chat session by archiving it rather than destroying it.
  *
  * The active session file is moved to:
- *   ~/.solix/agents/<agentName>/chats/archived/<sessionId>-<iso-timestamp>.json
+ *   ~/.nyteshift/agents/<agentName>/chats/archived/<sessionId>-<iso-timestamp>.json
  *
  * This preserves history for audit / recovery while giving the channel a
  * completely blank context window on the next message — following the
