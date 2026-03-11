@@ -11,17 +11,17 @@ $ret=0
 if (Test-Path "$basedir/node$exe") {
   # Support pipeline input
   if ($MyInvocation.ExpectingInput) {
-    $input | & "$basedir/node$exe"  "$basedir/node_modules/@solix/cli/bin/solix" $args
+    $input | & "$basedir/node$exe"  "$basedir/node_modules/@nyteshift/cli/bin/nyteshift" $args
   } else {
-    & "$basedir/node$exe"  "$basedir/node_modules/@solix/cli/bin/solix" $args
+    & "$basedir/node$exe"  "$basedir/node_modules/@nyteshift/cli/bin/nyteshift" $args
   }
   $ret=$LASTEXITCODE
 } else {
   # Support pipeline input
   if ($MyInvocation.ExpectingInput) {
-    $input | & "node$exe"  "$basedir/node_modules/@solix/cli/bin/solix" $args
+    $input | & "node$exe"  "$basedir/node_modules/@nyteshift/cli/bin/nyteshift" $args
   } else {
-    & "node$exe"  "$basedir/node_modules/@solix/cli/bin/solix" $args
+    & "node$exe"  "$basedir/node_modules/@nyteshift/cli/bin/nyteshift" $args
   }
   $ret=$LASTEXITCODE
 }

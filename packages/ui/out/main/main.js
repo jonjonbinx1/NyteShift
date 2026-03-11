@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
-import { listAgents, createAgent, deleteAgent, loadAgentConfig, readGlobalConfig, writeGlobalConfig, readSoul, writeSoul, listSkills, listTools, listProviders, runAutonomousTask } from "@solix/core";
+import { listAgents, createAgent, deleteAgent, loadAgentConfig, readGlobalConfig, writeGlobalConfig, readSoul, writeSoul, listSkills, listTools, listProviders, runAutonomousTask } from "@nyteshift/core";
 import __cjs_mod__ from "node:module";
 const __filename = import.meta.filename;
 const __dirname = import.meta.dirname;
@@ -10,7 +10,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: "SolixAI",
+    title: "NyteShift",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,

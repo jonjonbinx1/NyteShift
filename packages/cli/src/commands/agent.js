@@ -38,11 +38,11 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerAgentCommands = registerAgentCommands;
 var chalk_1 = require("chalk");
-var core_1 = require("@solix/core");
+var core_1 = require("@nyteshift/core");
 function registerAgentCommands(program) {
     var _this = this;
     var agent = program.command("agent").description("Manage agents");
-    // ── solix agent list ─────────────────────────────────────────────────
+    // ── nyteshift agent list ──────────────────────────────────────────────
     agent
         .command("list")
         .description("List all agents")
@@ -54,7 +54,7 @@ function registerAgentCommands(program) {
                 case 1:
                     agents = _a.sent();
                     if (agents.length === 0) {
-                        console.log(chalk_1.default.yellow("No agents found. Create one with: solix agent create <name>"));
+                        console.log(chalk_1.default.yellow("No agents found. Create one with: nyteshift agent create <name>"));
                         return [2 /*return*/];
                     }
                     console.log(chalk_1.default.bold("Agents:"));
@@ -66,7 +66,7 @@ function registerAgentCommands(program) {
             }
         });
     }); });
-    // ── solix agent create <name> ────────────────────────────────────────
+    // ── nyteshift agent create <name> ─────────────────────────────────────
     agent
         .command("create <name>")
         .description("Create a new agent")
@@ -90,7 +90,7 @@ function registerAgentCommands(program) {
             }
         });
     }); });
-    // ── solix agent delete <name> ────────────────────────────────────────
+    // ── nyteshift agent delete <name> ─────────────────────────────────────
     agent
         .command("delete <name>")
         .description("Delete an agent")
@@ -114,7 +114,7 @@ function registerAgentCommands(program) {
             }
         });
     }); });
-    // ── solix agent run <name> "<task>" ──────────────────────────────────
+    // ── nyteshift agent run <name> "<task>" ─────────────────────────────────
     agent
         .command("run <name> <task>")
         .description("Run an autonomous task with an agent")

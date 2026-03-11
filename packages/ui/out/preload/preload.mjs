@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-contextBridge.exposeInMainWorld("solixApi", {
+contextBridge.exposeInMainWorld("nyteShiftApi", {
   // Agents
   listAgents: () => ipcRenderer.invoke("agents:list"),
   createAgent: (name) => ipcRenderer.invoke("agents:create", name),
