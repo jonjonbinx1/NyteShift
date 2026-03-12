@@ -670,7 +670,7 @@ export function AgentDetail(): React.JSX.Element {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-      const res = await window.nyteShiftApi!.runAutonomous(name, taskText, {
+      await window.nyteShiftApi!.runAutonomous(name, taskText, {
         provider: selProvider || undefined,
         model: selModel || undefined,
         temperature: parseFloat(temperature) || undefined,
@@ -680,15 +680,9 @@ export function AgentDetail(): React.JSX.Element {
         sessionId,
         chatHistory: chatHistory.length > 0 ? chatHistory : undefined,
       });
-      const assistantMsg: ChatMessageInfo = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: res.finalOutput || "(no output)",
-        thinking: res.thinking || undefined,
-        ts: Date.now(),
-        steps: res.steps,
-      };
-      chatStore.addMessage(name, sessionId, assistantMsg);
+      // The final assistant message is added by ChatStore via the run:completed
+      // IPC broadcast, which the main process emits before returning the result.
+      // This is the single source of truth and prevents the message appearing twice.
     } catch (err) {
       const errorMsg: ChatMessageInfo = {
         id: crypto.randomUUID(),
