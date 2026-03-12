@@ -16,6 +16,7 @@ export const NODE_TYPE_STYLES: Record<string, { icon: string; label: string; col
   input:     { icon: "▶",  label: "Input",     color: "#a6e3a1", textColor: "#1e1e2e", description: "Graph entry point — emits input variables." },
   output:    { icon: "⏹",  label: "Output",    color: "#89b4fa", textColor: "#1e1e2e", description: "Graph exit point — captures final result." },
   llm:       { icon: "🧠", label: "LLM Call",  color: "#cba6f7", textColor: "#1e1e2e", description: "Single LLM call with a prompt template." },
+  skill:     { icon: "📜", label: "Skill",     color: "#ffd6a5", textColor: "#1e1e2e", description: "Invoke a markdown-backed skill (prompt template)." },
   agent:     { icon: "🤖", label: "Agent",     color: "#fab387", textColor: "#1e1e2e", description: "Full ReAct agent with tools and skills." },
   trigger:   { icon: "🔁", label: "Trigger",   color: "#ffd166", textColor: "#1e1e2e", description: "Invoke another graph or agent (sync or async)." },
   tool:      { icon: "🔧", label: "Tool",      color: "#94e2d5", textColor: "#1e1e2e", description: "Direct tool invocation." },
@@ -688,6 +689,7 @@ function NodeCard({ node, isSelected, runState, runTick, palette: C, onMouseDown
             {cfg.label}
             {node.agentName ? ` · ${node.agentName}` : ""}
             {node.toolName ? ` · ${node.toolName.split("/").pop()}` : ""}
+            {node.skillRef ? ` · ${node.skillRef.split("/").pop()}` : ""}
           </div>
         </div>
         {runStatus && (

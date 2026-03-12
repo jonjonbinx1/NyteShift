@@ -7,7 +7,7 @@ import type {
 } from "../../types/index.js";
 import { resolveConfig } from "../config/configResolver.js";
 import { loadAgentConfig } from "../agents/agentManager.js";
-import { injectSoul } from "../soul/soulInjector.js";
+import { readSoul } from "../soul/soulInjector.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { loadSkills } from "../skills/skillLoader.js";
 import { loadTools } from "../tools/toolLoader.js";
@@ -32,20 +32,33 @@ function extractFinalAnswer(text: string): string | null {
 }
 
 /**
- * Return the parsed JSON from the first <tool_call>…</tool_call> block, or
- * null if no block is found or the JSON is malformed.
+ * Return ALL parsed tool calls from every <tool_call>…</tool_call> block in
+ * the text.  Returns an empty array if none are found or all are malformed.
+ *
+ * Per Anthropic's agentic best practices, a single model turn may legitimately
+ * request multiple tool calls (e.g. parallel filesystem reads).  Extracting
+ * all of them ensures every call is honoured instead of silently discarding
+ * all but the first.
  */
-function extractToolCall(text: string): { name: string; input: Record<string, unknown> } | null {
-  const m = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
-  if (!m) return null;
-  try {
-    const parsed = JSON.parse(m[1].trim());
-    if (parsed && typeof parsed.name === "string") return parsed;
-    return null;
-  } catch {
-    logW("Failed to parse tool_call JSON:", m[1].trim());
-    return null;
+function extractAllToolCalls(
+  text: string,
+): Array<{ name: string; input: Record<string, unknown> }> {
+  const results: Array<{ name: string; input: Record<string, unknown> }> = [];
+  const pattern = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      if (parsed && typeof parsed.name === "string") {
+        results.push(parsed);
+      } else {
+        logW("Malformed tool_call block (missing 'name'):", m[1].trim().slice(0, 120));
+      }
+    } catch {
+      logW("Failed to parse tool_call JSON:", m[1].trim().slice(0, 120));
+    }
   }
+  return results;
 }
 
 /**
@@ -457,24 +470,27 @@ export async function runAutonomousTask(
 
   // ── Build opening conversation ────────────────────────────────────────
   // System prompt is built with the full structured protocol.
-  // Soul personality is injected *into* the system prompt (as a Persona
-  // section) rather than as a separate message — this follows Anthropic's
-  // guidance to keep all behavioural instructions in the system message.
+  // Soul personality is injected *into* the system prompt as a dedicated
+  // "# Persona" section — this follows Anthropic's guidance to consolidate
+  // all behavioural instructions in a single system message rather than
+  // prepending a second system turn (which many models and chat templates
+  // handle inconsistently, potentially dropping or misinterpreting it).
   //
   // Prior conversation history (user/assistant turns from the chat session)
   // is injected between the system prompt and the current user message so
   // the model retains full context across turns.
+  const soulSnippet = await readSoul(agentName);
+
   const historyMessages: Message[] = (options.chatHistory ?? []).map((m) => ({
     role: m.role,
     content: m.content,
   }));
 
-  let messages: Message[] = [
-    { role: "system", content: buildSystemPrompt(skillList, toolList, maxSteps, undefined, unbounded) },
+  const messages: Message[] = [
+    { role: "system", content: buildSystemPrompt(skillList, toolList, maxSteps, soulSnippet || undefined, unbounded) },
     ...historyMessages,
     { role: "user",   content: task },
   ];
-  messages = await injectSoul(agentName, messages);
 
   log(`  conversation primed — ${messages.length} message(s) (history=${historyMessages.length})`);
   log(`  system prompt length: ${messages[0]?.content?.length ?? 0} chars`);
@@ -578,142 +594,196 @@ export async function runAutonomousTask(
 
     // ── Parse structured output ───────────────────────────────────────
 
-    // 1) Check for <final_answer>
+    // Per Anthropic's agentic best-practices, tool calls ALWAYS take priority
+    // over a final answer — the correct execution order is:
+    //
+    //   1. Scan for <tool_call> blocks FIRST.  If any are present, execute ALL
+    //      of them sequentially and inject a combined <tool_result> back so the
+    //      model can reason over the outcomes before producing its final answer.
+    //
+    //   2. Only when NO tool calls are found do we check for <final_answer>.
+    //
+    // This ordering closes two critical failure modes observed in production:
+    //
+    //   a) Mixed-format turns — fine-tuned/local models frequently emit tool
+    //      call blocks followed by a premature <final_answer> in the same turn.
+    //      Checking final_answer first caused the harness to break immediately,
+    //      silently dropping every tool call and returning a fabricated success
+    //      message.  Anthropic guidance is unambiguous: honour tool calls; the
+    //      model produces its own final_answer after receiving the results.
+    //
+    //   b) Multi-tool turns — models routinely batch several reads/writes into
+    //      one turn for efficiency.  Extracting only the first call left the
+    //      model with a corrupted world-view.  All calls are now executed and
+    //      all results returned in a single, labelled tool_result message.
+
+    // 1) Check for <tool_call> blocks — unconditional priority
+    const toolCalls = extractAllToolCalls(rawOutput);
+    if (toolCalls.length > 0) {
+      if (toolCalls.length === 1) {
+        log(`  <tool_call> name="${toolCalls[0].name}" input=${JSON.stringify(toolCalls[0].input ?? {}).slice(0, 200)}`);
+        step.action = `tool-call:${toolCalls[0].name}`;
+      } else {
+        log(`  ${toolCalls.length} <tool_call> blocks detected — executing all sequentially`);
+        step.action = `tool-call:batch(${toolCalls.length}):${toolCalls.map((c) => c.name).join(",")}`;
+      }
+
+      // Warn on mixed-format violation: tool_calls + final_answer in same turn.
+      // We honour the tool calls; the model will re-evaluate after results.
+      if (extractFinalAnswer(rawOutput) !== null) {
+        logW(
+          `  mixed-format detected: ${toolCalls.length} tool_call(s) + <final_answer> in one turn — ` +
+          `honouring tool calls first per Anthropic guidance`,
+        );
+      }
+
+      // Execute every tool call sequentially, collecting all results.
+      const allResults: Array<{ name: string; output: string }> = [];
+
+      for (const toolCall of toolCalls) {
+        const toolDef = tools.find(
+          (t) => t.name === toolCall.name || `${t.contributor}/${t.name}` === toolCall.name,
+        );
+
+        let toolOutput: string;
+
+        if (!toolDef) {
+          const available = tools.length ? tools.map((t) => t.name).join(", ") : "none";
+          toolOutput = `Tool "${toolCall.name}" not found. Available tools: ${available}`;
+          logW(`  tool "${toolCall.name}" not found`);
+        } else {
+          // Input validation
+          if (toolDef.spec?.inputSchema) {
+            const validationErrors = validateToolInput(
+              toolCall.input as Record<string, unknown>,
+              toolDef.spec.inputSchema,
+            );
+            if (validationErrors.length > 0) {
+              toolOutput = [
+                `Tool "${toolDef.contributor}/${toolDef.name}" call rejected — invalid input:`,
+                ...validationErrors.map((e) => `  • ${e}`),
+                `Re-read the tool's parameter list in the system prompt and correct your call.`,
+              ].join("\n");
+              logW(`  input validation failed for "${toolCall.name}" (${validationErrors.length} error(s)):`, validationErrors);
+              allResults.push({ name: toolCall.name, output: toolOutput });
+              continue; // proceed to next tool in this batch
+            }
+          }
+
+          log(`  executing tool "${toolDef.name}"…`);
+          let rawResultCapture: unknown = null;
+          try {
+            const rawResult = await toolDef.run({ input: toolCall.input, context: {} });
+            rawResultCapture = rawResult;
+
+            const resultObj =
+              typeof rawResult === "object" && rawResult !== null
+                ? (rawResult as Record<string, unknown>)
+                : null;
+
+            if (resultObj && resultObj.ok === false) {
+              const errDetail =
+                typeof resultObj.error === "string"
+                  ? resultObj.error
+                  : JSON.stringify(rawResult, null, 2);
+              toolOutput = [
+                `Tool "${toolDef.contributor}/${toolDef.name}" returned a failure:`,
+                errDetail,
+                `You MUST handle this error.  Do NOT claim success.  Try an alternative approach or explain clearly what went wrong.`,
+              ].join("\n");
+              logW(`  tool "${toolDef.name}" returned ok=false — ${errDetail}`);
+            } else {
+              toolOutput =
+                typeof rawResult === "string"
+                  ? rawResult
+                  : JSON.stringify(rawResult, null, 2);
+              log(`  tool "${toolDef.name}" result (${toolOutput.length} chars): "${toolOutput.slice(0, 200).replace(/\n/g, "↵")}"`);
+
+              if (toolDef.spec?.verify?.length) {
+                const verifyResults: string[] = [];
+                for (const verifyName of toolDef.spec.verify) {
+                  const verifyTool = tools.find(
+                    (t) => t.name === verifyName || `${t.contributor}/${t.name}` === verifyName,
+                  );
+                  if (!verifyTool) {
+                    logW(`  verify tool "${verifyName}" not found — skipping`);
+                    continue;
+                  }
+                  try {
+                    const vResult = await verifyTool.run({ input: toolCall.input, context: {} });
+                    const vStr =
+                      typeof vResult === "string" ? vResult : JSON.stringify(vResult, null, 2);
+                    const vObj =
+                      typeof vResult === "object" && vResult !== null
+                        ? (vResult as Record<string, unknown>)
+                        : null;
+                    if (vObj && vObj.ok === false) {
+                      verifyResults.push(`⚠ Verify "${verifyName}" FAILED: ${vObj.error ?? vStr}`);
+                      logW(`  verify "${verifyName}" failed — ${vObj.error ?? vStr}`);
+                    } else {
+                      verifyResults.push(`✓ Verify "${verifyName}" passed.`);
+                      log(`  verify "${verifyName}" passed`);
+                    }
+                  } catch (vErr) {
+                    verifyResults.push(
+                      `⚠ Verify "${verifyName}" threw: ${(vErr as Error).message}`,
+                    );
+                    logW(`  verify "${verifyName}" error:`, vErr);
+                  }
+                }
+                if (verifyResults.length) {
+                  toolOutput += `\n\nVerification:\n${verifyResults.join("\n")}`;
+                }
+              }
+            }
+          } catch (toolErr) {
+            toolOutput = `Error running tool "${toolDef.name}": ${(toolErr as Error).message}`;
+            logE(`  tool execution error for "${toolDef.name}":`, toolErr);
+          }
+
+          // Capture sub-agent result for lineage tracking.
+          // When the tool is sub_agent_run the result contains a `_subAgentResult`
+          // field with the full SubAgentResult.  Note: for multi-sub-agent steps
+          // the last captured result wins on step.subAgentResult; all results are
+          // still recorded in subAgentRuns.
+          if (
+            toolDef.name === "sub_agent_run" &&
+            typeof rawResultCapture === "object" &&
+            rawResultCapture !== null
+          ) {
+            const sar = (rawResultCapture as Record<string, unknown>)
+              ._subAgentResult as SubAgentResult | undefined;
+            if (sar) {
+              step.subAgentResult = sar;
+              subAgentRuns.push(sar);
+              log(`  sub-agent result captured — agent="${sar.agentName}" steps=${sar.stepCount} elapsed=${sar.elapsedMs}ms`);
+            }
+          }
+        }
+
+        allResults.push({ name: toolCall.name, output: toolOutput });
+      }
+
+      // Inject all results as a single user turn.
+      // Single tool: plain format the model already knows.
+      // Multiple tools: label each result by name so the model can correlate
+      // inputs to outputs unambiguously.
+      const combinedResult =
+        allResults.length === 1
+          ? allResults[0].output
+          : allResults.map((r) => `[${r.name}]\n${r.output}`).join("\n\n---\n\n");
+
+      messages.push({ role: "user", content: `<tool_result>\n${combinedResult}\n</tool_result>` });
+      log(`  ${allResults.length} tool result(s) injected — continuing to step ${i + 2}`);
+      continue;
+    }
+
+    // 2) Check for <final_answer> — only reached when no tool calls were found
     const finalAnswer = extractFinalAnswer(rawOutput);
     if (finalAnswer !== null) {
       log(`  <final_answer> detected (${finalAnswer.length} chars) — run complete`);
       finalOutput = finalAnswer;
       break;
-    }
-
-    // 2) Check for <tool_call>
-    const toolCall = extractToolCall(rawOutput);
-    if (toolCall) {
-      const _toolInputPreview = JSON.stringify(toolCall.input ?? {});
-      log(`  <tool_call> name="${toolCall.name}" input=${(_toolInputPreview ?? "").slice(0, 200)}`);
-      step.action = `tool-call:${toolCall.name}`;
-
-      const toolDef = tools.find(
-        (t) => t.name === toolCall.name || `${t.contributor}/${t.name}` === toolCall.name,
-      );
-
-      let toolOutput: string;
-      if (!toolDef) {
-        const available = tools.length ? tools.map((t) => t.name).join(", ") : "none";
-        toolOutput = `Tool "${toolCall.name}" not found. Available tools: ${available}`;
-        logW(`  tool "${toolCall.name}" not found`);
-      } else {
-        // ── Input validation ─────────────────────────────────────────────
-        if (toolDef.spec?.inputSchema) {
-          const validationErrors = validateToolInput(
-            toolCall.input as Record<string, unknown>,
-            toolDef.spec.inputSchema,
-          );
-          if (validationErrors.length > 0) {
-            const validationMsg = [
-              `Tool "${toolDef.contributor}/${toolDef.name}" call rejected — invalid input:`,
-              ...validationErrors.map((e) => `  • ${e}`),
-              `Re-read the tool’s parameter list in the system prompt and correct your call.`,
-            ].join("\n");
-            logW(`  input validation failed (${validationErrors.length} error(s)):`, validationErrors);
-            messages.push({ role: "user", content: `<tool_result>\n${validationMsg}\n</tool_result>` });
-            log(`  validation error injected — continuing to step ${i + 2}`);
-            continue;
-          }
-        }
-
-        log(`  executing tool "${toolDef.name}"…`);
-        let rawResultCapture: unknown = null;
-        try {
-          const rawResult = await toolDef.run({ input: toolCall.input, context: {} });
-          rawResultCapture = rawResult;
-
-          // ── ok:false guard ─────────────────────────────────────────────
-          const resultObj =
-            typeof rawResult === "object" && rawResult !== null
-              ? (rawResult as Record<string, unknown>)
-              : null;
-
-          if (resultObj && resultObj.ok === false) {
-            const errDetail =
-              typeof resultObj.error === "string"
-                ? resultObj.error
-                : JSON.stringify(rawResult, null, 2);
-            toolOutput = [
-              `Tool "${toolDef.contributor}/${toolDef.name}" returned a failure:`,
-              errDetail,
-              `You MUST handle this error.  Do NOT claim success.  Try an alternative approach or explain clearly what went wrong.`,
-            ].join("\n");
-            logW(`  tool returned ok=false — ${errDetail}`);
-          } else {
-            toolOutput =
-              typeof rawResult === "string"
-                ? rawResult
-                : JSON.stringify(rawResult, null, 2);
-            log(`  tool result (${toolOutput.length} chars): "${toolOutput.slice(0, 200).replace(/\n/g, "↵")}"`);
-
-            // ── Post-action verify ────────────────────────────────────────
-            if (toolDef.spec?.verify?.length) {
-              const verifyResults: string[] = [];
-              for (const verifyName of toolDef.spec.verify) {
-                const verifyTool = tools.find(
-                  (t) => t.name === verifyName || `${t.contributor}/${t.name}` === verifyName,
-                );
-                if (!verifyTool) {
-                  logW(`  verify tool "${verifyName}" not found — skipping`);
-                  continue;
-                }
-                try {
-                  const vResult = await verifyTool.run({ input: toolCall.input, context: {} });
-                  const vStr =
-                    typeof vResult === "string" ? vResult : JSON.stringify(vResult, null, 2);
-                  const vObj =
-                    typeof vResult === "object" && vResult !== null
-                      ? (vResult as Record<string, unknown>)
-                      : null;
-                  if (vObj && vObj.ok === false) {
-                    verifyResults.push(`⚠ Verify "${verifyName}" FAILED: ${vObj.error ?? vStr}`);
-                    logW(`  verify "${verifyName}" failed — ${vObj.error ?? vStr}`);
-                  } else {
-                    verifyResults.push(`✓ Verify "${verifyName}" passed.`);
-                    log(`  verify "${verifyName}" passed`);
-                  }
-                } catch (vErr) {
-                  verifyResults.push(
-                    `⚠ Verify "${verifyName}" threw: ${(vErr as Error).message}`,
-                  );
-                  logW(`  verify "${verifyName}" error:`, vErr);
-                }
-              }
-              if (verifyResults.length) {
-                toolOutput += `\n\nVerification:\n${verifyResults.join("\n")}`;
-              }
-            }
-          }
-        } catch (toolErr) {
-          toolOutput = `Error running tool "${toolDef.name}": ${(toolErr as Error).message}`;
-          logE(`  tool execution error:`, toolErr);
-        }
-
-        // ── Capture sub-agent result for lineage tracking ─────────────
-        // When the tool is sub_agent_run, the result contains a
-        // `_subAgentResult` field with the full SubAgentResult.
-        // Attach it to the current step for UI observability and
-        // record it in the run-level subAgentRuns array.
-        if (toolDef.name === "sub_agent_run" && typeof rawResultCapture === "object" && rawResultCapture !== null) {
-          const sar = (rawResultCapture as Record<string, unknown>)._subAgentResult as SubAgentResult | undefined;
-          if (sar) {
-            step.subAgentResult = sar;
-            subAgentRuns.push(sar);
-            log(`  sub-agent result captured — agent="${sar.agentName}" steps=${sar.stepCount} elapsed=${sar.elapsedMs}ms`);
-          }
-        }
-      }
-
-      // Inject tool result as the next user turn.
-      messages.push({ role: "user", content: `<tool_result>\n${toolOutput}\n</tool_result>` });
-      log(`  tool result injected — continuing to step ${i + 2}`);
-      continue;
     }
 
     // 3) No structured tags found.

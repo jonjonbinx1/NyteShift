@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "../theme/ThemeContext.js";
+import { SearchableSelect } from "./SearchableSelect.js";
 
 interface SkillInfo {
   frontmatter: { name: string; contributor: string; description: string };
@@ -272,35 +273,24 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div style={fieldStyle}>
               <label style={labelStyle}>Provider</label>
-              <select
-                style={{ ...inputStyle, appearance: "auto" }}
+              <SearchableSelect
                 value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-              >
-                <option value="">— inherit default —</option>
-                {providers.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+                onChange={(v) => setProvider(v)}
+                options={[{ value: "", label: "— inherit default —" }, ...providers.map((p) => ({ value: p, label: p }))]}
+                placeholder="— inherit default —"
+              />
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>
                 Model ID{modelsLoading && <span style={{ marginLeft: 6, fontSize: 11, color: C.overlay1, fontWeight: 400 }}>loading…</span>}
               </label>
-              <input
-                style={inputStyle}
-                list="model-options"
+              <SearchableSelect
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                onChange={(v) => setModel(v)}
+                options={models.map((m) => ({ value: m.id, label: m.id, title: m.description }))}
                 placeholder={models.length > 0 ? `${models.length} models available…` : "gpt-4o / claude-3-5-sonnet …"}
+                allowFreeInput={true}
               />
-              {models.length > 0 && (
-                <datalist id="model-options">
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.description ?? m.id}
-                    </option>
-                  ))}
-                </datalist>
-              )}
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>Temperature</label>

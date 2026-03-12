@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fork } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
   listAgents,
@@ -67,6 +68,16 @@ import {
 } from "@nyteshift/core";
 import type { ChatSession, TriggerType } from "@nyteshift/core";
 
+// On Windows, set an AppUserModelId so the taskbar and notifications
+// correctly associate with our app and its icon.
+if (process.platform === "win32") {
+  try {
+    app.setAppUserModelId("com.nyteshift.app");
+  } catch (err) {
+    console.warn("app.setAppUserModelId failed:", err);
+  }
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
@@ -77,10 +88,28 @@ function createWindow(): void {
   }
   console.log("[main] __dirname=", __dirname);
   console.log("[main] preload path=", preloadPath);
+  // Prefer a Windows `.ico` when present; fall back to the PNG for other
+  // platforms or when the .ico is not available.
+  const rendererRoot = join(__dirname, "../renderer");
+  let iconFile = join(rendererRoot, "nyteshift_logo.png");
+  if (process.platform === "win32") {
+    const icoCandidate = join(rendererRoot, "nyteshift_logo.ico");
+    try { if (existsSync(icoCandidate)) iconFile = icoCandidate; } catch {}
+  }
+
+  // Debug: log which icon file we will attempt to use (helps diagnose path
+  // and packaging issues on Windows).
+  try {
+    console.log("[main] resolved iconFile=", iconFile, "exists=", existsSync(iconFile));
+  } catch (err) {
+    console.warn("[main] icon existence check failed:", err);
+  }
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     title: "NyteShift",
+    icon: iconFile,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -140,6 +169,49 @@ function registerIpc(): void {
       },
       autoUpdate: (s as any).autoUpdate,
     }));
+  });
+  ipcMain.handle("skills:get", async (_e, qualifiedName: string) => {
+    try {
+      // Try to call a direct getSkill export if present; otherwise fall back to listSkills
+      let s: any | undefined = undefined;
+      try {
+        const core = await import("@nyteshift/core");
+        if (typeof (core as any).getSkill === "function") {
+          s = await (core as any).getSkill(qualifiedName);
+        }
+      } catch (e) {
+        // ignore — fallback below
+      }
+
+      if (!s) {
+        // Fall back to listSkills (already exported) and find the matching entry
+        try {
+          const all = await listSkills();
+          s = (all || []).find((sk: any) => `${sk.frontmatter.contributor}/${sk.frontmatter.name}` === qualifiedName);
+        } catch (e) {
+          // nothing
+        }
+      }
+
+      if (!s) return null;
+      return {
+        frontmatter: {
+          name: s.frontmatter.name,
+          contributor: s.frontmatter.contributor,
+          description: s.frontmatter.description,
+          config: s.frontmatter.config ?? undefined,
+          version: (s.frontmatter as any).version,
+          tags: (s.frontmatter as any).tags ?? undefined,
+          schema: (s.frontmatter as any).schema ?? undefined,
+        },
+        body: s.body,
+        autoUpdate: (s as any).autoUpdate,
+        hash: (s as any).hash,
+      };
+    } catch (err) {
+      console.error('[IPC] skills:get — ERROR fetching', qualifiedName, err);
+      throw err;
+    }
   });
   ipcMain.handle("tools:list", async () => {
     // `listTools` returns full contracts including the `run` function, which
@@ -227,7 +299,13 @@ function registerIpc(): void {
     runControllers.set(runId, controller);
 
     try {
-      const runOptions = { ...(opts || {}), signal: controller.signal } as any;
+      const runOptions = {
+        ...(opts || {}),
+        signal: controller.signal,
+        onStep: (step: any) => {
+          try { mainWindow?.webContents.send("run:step", { runId, agentName: name, sessionId, step }); } catch {}
+        },
+      } as any;
       const result = await runAutonomousTask(name, task, runOptions);
       activeRuns.set(runId, {
         agentName: name,
@@ -549,8 +627,7 @@ function registerIpc(): void {
       const engine = getTriggerEngine();
       if (!engine.isRunning) await engine.start();
       const run = await engine.fireManual(triggerId, payload ?? {});
-      // Notify renderer.
-      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
+      // Engine emits run events; renderer will be notified via engine listeners.
       return run;
     } catch (err) {
       console.error("[IPC] triggers:fire — ERROR:", err);

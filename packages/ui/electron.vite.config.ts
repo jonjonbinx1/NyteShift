@@ -1,5 +1,9 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   main: {
@@ -32,6 +36,9 @@ export default defineConfig({
     },
   },
   renderer: {
+    // Files in `public/` are copied verbatim (no hashing) so that
+    // nyteshift_logo.ico exists at a stable path for BrowserWindow `icon`.
+    publicDir: resolve(__dirname, "public"),
     plugins: [react()],
     build: {
       outDir: "dist/renderer",

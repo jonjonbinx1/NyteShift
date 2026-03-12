@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTheme } from "../theme/ThemeContext.js";
 
+// Import so Vite bundles the asset and returns the correct hashed path.
+import logoSrc from "../nyteshift_logo.png";
+
 interface Stats {
   agents: number;
   triggers: number;
@@ -62,13 +65,16 @@ export function Home(): React.JSX.Element {
         gap: "1rem",
         flexWrap: "wrap",
       }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: "1.8rem", fontWeight: 800, color: C.text }}>
-            Welcome to NyteShift
-          </h1>
-          <p style={{ margin: "0.4rem 0 0", color: C.subtext0, fontSize: "1rem" }}>
-            Your local AI agent platform — build, schedule, and automate.
-          </p>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <img src={logoSrc} alt="NyteShift" style={{ width: 64, height: 64, borderRadius: 10 }} />
+          <div>
+            <h1 style={{ margin: 0, fontSize: "1.8rem", fontWeight: 800, color: C.text }}>
+              Welcome to NyteShift
+            </h1>
+            <p style={{ margin: "0.4rem 0 0", color: C.subtext0, fontSize: "1rem" }}>
+              Your local AI agent platform — build, schedule, and automate.
+            </p>
+          </div>
         </div>
 
         {!stats.hasProvider && (

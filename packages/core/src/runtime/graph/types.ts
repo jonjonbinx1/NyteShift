@@ -117,7 +117,7 @@ export interface GraphNode {
   /** Human-readable name. */
   name: string;
   /** Determines execution behaviour. */
-  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation" | "catch" | "trigger";
+  type: "input" | "output" | "llm" | "agent" | "tool" | "skill" | "condition" | "operation" | "catch" | "trigger";
 
   // ── LLM node ─────────────────────────────────────────────────────────
   /** Provider ID override (e.g. "openai", "anthropic"). */
@@ -242,6 +242,14 @@ export interface GraphNode {
   errorPolicy?: ErrorPolicy;
   /** XY position for UI visual builder. */
   position?: { x: number; y: number };
+
+  // ── Skill node ────────────────────────────────────────────────────────
+  /** Qualified skill reference (e.g. "nyteshift/git"). */
+  skillRef?: string;
+  /** Input params supplied to the skill (templated/interpolated). */
+  params?: Record<string, unknown>;
+  /** Optional caching flag — when true, runtime may cache skill output per-run. */
+  cache?: boolean;
 }
 
 // ── Graph Edge ─────────────────────────────────────────────────────────
@@ -304,8 +312,23 @@ export interface GraphDefinition {
   /**
    * Maximum number of iterations any loop SCC is allowed to run.
    * Defaults to 100.  Set lower for safety or higher for deep pagination.
+   * Ignored when `unbounded` is true.
    */
   maxIterations?: number;
+  /**
+   * When true, loop SCCs run indefinitely — there is no iteration ceiling.
+   * The loop will only exit when:
+   *   - a condition node branches outside the SCC  ("condition" exit)
+   *   - a node errors with a halt policy            ("error" exit)
+   *   - the run is cancelled via AbortSignal        ("abort" exit)
+   *
+   * `maxIterations` is ignored when this is true.
+   * Catch nodes using the `"maxIterations"` trigger will never fire.
+   *
+   * ⚠ Use only when the graph has a reliable condition-based exit.
+   * Without one, the loop will run until the process is killed.
+   */
+  unbounded?: boolean;
   /** Creation timestamp (ms). */
   createdAt: number;
   /** Last-modified timestamp (ms). */

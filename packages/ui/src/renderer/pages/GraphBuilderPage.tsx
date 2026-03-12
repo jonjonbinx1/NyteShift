@@ -5,6 +5,7 @@ import type { ThemePalette } from "../theme/themes.js";
 import type { GraphDefinitionInfo, GraphNodeInfo, GraphEdgeInfo, GraphExecutionResultInfo, GraphRunRecordInfo, ToolInfo, NodeRunState, NodeRunEvent, CatchTrigger } from "../global.js";
 import { GraphCanvas, NODE_TYPE_STYLES } from "../components/GraphCanvas.js";
 import { NodeConfigPanel } from "../components/NodeConfigPanel.js";
+import type { SkillInfo } from "../components/NodeConfigPanel.js";
 import VarsEditor from "../components/VarsEditor.js";
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ export function GraphBuilderPage(): React.JSX.Element {
   const [agents, setAgents] = useState<string[]>([]);
   const [providers, setProviders] = useState<string[]>([]);
   const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
 
   // ── Load graph ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -124,6 +126,12 @@ export function GraphBuilderPage(): React.JSX.Element {
           window.nyteShiftApi?.listTools().then((ts: any) => setTools(ts as ToolInfo[])).catch(console.error);
         });
       } catch {}
+      try {
+        const ss = await window.nyteShiftApi?.listSkills() ?? [];
+        setSkills(ss as SkillInfo[]);
+      } catch {
+        setSkills([]);
+      }
     })();
   }, []);
 
@@ -314,6 +322,8 @@ export function GraphBuilderPage(): React.JSX.Element {
     const count = graph.nodes.filter(n => n.type === type).length;
     const defaults: Partial<GraphNodeInfo> = type === "llm"
       ? { promptTemplate: "{{input.query}}", temperature: 0.7 }
+      : type === "skill"
+      ? { skillRef: "", params: {} }
       : type === "agent"
       ? { promptTemplate: "{{input.task}}", maxSteps: 20 }
       : type === "trigger"
@@ -565,14 +575,34 @@ export function GraphBuilderPage(): React.JSX.Element {
         />
 
         <input
-          style={{ ...inputStyle, width: 80 }}
+          style={{ ...inputStyle, width: 90, opacity: graph.unbounded ? 0.45 : 1 }}
           type="number"
           min={1}
-          value={graph.maxIterations ?? ""}
+          disabled={graph.unbounded === true}
+          value={graph.unbounded ? "" : (graph.maxIterations ?? "")}
           onChange={e => updateGraph({ maxIterations: e.target.value ? Number(e.target.value) : undefined })}
-          placeholder="Max iter"
-          title="Maximum loop iterations (default 100)"
+          placeholder="Default: 100"
+          title={graph.unbounded ? "Disabled — graph is set to Unbounded" : "Maximum loop iterations (default: 100)"}
         />
+        <label
+          title="Allow loops to run indefinitely. Only a condition-exit, error, or AbortSignal can stop the loop. The 'Max Iterations' catch trigger will never fire."
+          style={{
+            display: "flex", alignItems: "center", gap: 4, cursor: "pointer",
+            fontSize: "0.78rem",
+            color: graph.unbounded ? C.red : C.subtext0,
+            padding: "3px 7px", borderRadius: 5, userSelect: "none",
+            background: graph.unbounded ? `${C.red}22` : "transparent",
+            border: `1px solid ${graph.unbounded ? C.red : "transparent"}`,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={graph.unbounded === true}
+            onChange={e => updateGraph({ unbounded: e.target.checked ? true : undefined })}
+            style={{ accentColor: C.red, cursor: "pointer", margin: 0 }}
+          />
+          ∞ Unbounded
+        </label>
         <button onClick={() => setVarsOpen(true)} title="Edit graph variables"
           style={{ marginLeft: 8, padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: "transparent", color: C.text, cursor: "pointer" }}>
           Vars
@@ -715,6 +745,8 @@ export function GraphBuilderPage(): React.JSX.Element {
             allNodes={graph.nodes}
             agents={agents}
             tools={tools}
+            edges={graph.edges ?? []}
+            skills={skills}
             providers={providers}
             vars={graph.initVars ?? {}}
             onChange={updateNode}

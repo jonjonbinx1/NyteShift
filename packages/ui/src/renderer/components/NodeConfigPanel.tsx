@@ -2,7 +2,15 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { ThemePalette } from "../theme/themes.js";
 import type { GraphNodeInfo, GraphEdgeInfo, GraphDefinitionInfo, ModelInfo, ToolInfo, OperationActionInfo, CatchTrigger } from "../global.js";
+
+export interface SkillInfo {
+  frontmatter: { name: string; contributor: string; description?: string; config?: any; version?: string; tags?: string[]; schema?: any };
+  body?: string;
+  autoUpdate?: boolean;
+  hash?: string;
+}
 import { SchemaForm } from "./SchemaForm.js";
+import { SearchableSelect } from "./SearchableSelect.js";
 
 const OPERATORS = [
   { value: "eq", label: "equals" },
@@ -49,6 +57,8 @@ interface Props {
   allNodes?: GraphNodeInfo[];
   agents: string[];
   tools: ToolInfo[];
+  skills: SkillInfo[];
+  edges?: GraphEdgeInfo[];
   providers: string[];
   vars?: Record<string, unknown>;
   onChange(updated: GraphNodeInfo): void;
@@ -57,7 +67,7 @@ interface Props {
   onOpenVars?(): void;
 }
 
-export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars, onChange, onDelete, onDuplicate, onOpenVars }: Props): React.JSX.Element {
+export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, providers, vars, onChange, onDelete, onDuplicate, onOpenVars }: Props): React.JSX.Element {
   const { palette: C } = useTheme();
 
   // Resizable panel state
@@ -143,7 +153,71 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
   const textareaStyle: React.CSSProperties = { ...inputStyle, resize: "vertical", minHeight: 70, fontFamily: "monospace", fontSize: "0.75rem" };
   const selectStyle: React.CSSProperties = { ...inputStyle };
 
+  // Using shared SearchableSelect component from ./SearchableSelect.js
+
+    // Simple on-the-fly interpolator for previewing skill templates in the UI.
+    const getByPath = (obj: any, path?: string) => {
+      if (!path) return obj;
+      if (obj == null) return undefined;
+      const p = path.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+      const parts = p.split('.');
+      let cur: any = obj;
+      for (const part of parts) {
+        if (cur == null) return undefined;
+        cur = cur[part];
+      }
+      return cur;
+    };
+
+    const simpleInterpolate = (template: string, ctx: { input?: any; vars?: any }) => {
+      if (!template) return "";
+      return String(template).replace(/\{\{\s*([^}]+)\s*\}\}/g, (_m, key: string) => {
+        const k = String(key).trim();
+        try {
+          if (k === "input" || k.startsWith("input.")) {
+            const sub = k.replace(/^input\.?/, '');
+            const v = getByPath(ctx.input, sub);
+            return v === undefined || v === null ? "" : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+          }
+          if (k === "vars" || k.startsWith("vars.")) {
+            const sub = k.replace(/^vars\.?/, '');
+            const v = getByPath(ctx.vars, sub);
+            return v === undefined || v === null ? "" : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+          }
+          // Leave node.output references as-is for clarity
+          if (k.includes('.output')) return `{{${k}}}`;
+          // Fallback: try input then vars
+          const v1 = getByPath(ctx.input, k);
+          if (v1 !== undefined) return typeof v1 === 'object' ? JSON.stringify(v1) : String(v1);
+          const v2 = getByPath(ctx.vars, k);
+          if (v2 !== undefined) return typeof v2 === 'object' ? JSON.stringify(v2) : String(v2);
+          return `{{${k}}}`;
+        } catch {
+          return `{{${k}}}`;
+        }
+      });
+    };
+
   const otherNodes = (allNodes ?? []).filter((n: GraphNodeInfo) => n.id !== node.id);
+  const incomingSkillNodes = (allNodes ?? []).filter(n => n.type === "skill" && (edges ?? []).some(e => e.source === n.id && e.target === node.id));
+  // Lazily fetch full skill body for preview when a skillRef is selected
+  const [skillFull, setSkillFull] = useState<any | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    if (!node.skillRef) { setSkillFull(null); return; }
+    (async () => {
+      try {
+        const api = (window as any).nyteShiftApi;
+        if (!api?.getSkill) { setSkillFull(null); return; }
+        const s = await api.getSkill(node.skillRef);
+        if (!mounted) return;
+        setSkillFull(s ?? null);
+      } catch {
+        if (mounted) setSkillFull(null);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [node.skillRef]);
   
   const [models, setModels] = useState<ModelInfo[]>([]);
 
@@ -366,19 +440,25 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           <>
             <div style={sectionStyle}>
               <label style={labelStyle}>Provider</label>
-              <select style={selectStyle} value={node.provider ?? ""} onChange={e => set("provider", e.target.value || undefined)}>
-                <option value="">Default</option>
-                {providers.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <SearchableSelect
+                value={node.provider ?? ""}
+                onChange={(v) => set("provider", v || undefined)}
+                options={[{ value: "", label: "Default" }, ...(providers || []).map(p => ({ value: p, label: p }))]}
+                placeholder="Default"
+              />
             </div>
             <div style={sectionStyle}>
               <label style={labelStyle}>Model</label>
               {models.length > 0 ? (
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <select style={selectStyle} value={node.model ?? ""} onChange={e => set("model", e.target.value || undefined)}>
-                    <option value="">Default</option>
-                    {models.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
-                  </select>
+                  <div style={{ flex: 1 }}>
+                    <SearchableSelect
+                      value={node.model ?? ""}
+                      onChange={v => set("model", v || undefined)}
+                      options={[{ value: "", label: "Default" }, ...(models || []).map(m => ({ value: m.id, label: m.id }))]}
+                      placeholder="Default"
+                    />
+                  </div>
                   <button onClick={() => refreshModels(node.provider)} style={{ ...btnSm(C) }}>Refresh</button>
                 </div>
               ) : (
@@ -408,6 +488,27 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
               <textarea style={textareaStyle} value={node.systemPrompt ?? ""} placeholder="You are…"
                 onChange={e => set("systemPrompt", e.target.value || undefined)} />
             </div>
+
+            <div style={{ ...sectionStyle, border: `1px solid ${C.surface1}`, borderRadius: 8, padding: 10 }}>
+              <label style={labelStyle}>Connected Skills</label>
+              {incomingSkillNodes.length === 0 ? (
+                <div style={{ fontSize: "0.72rem", color: C.overlay0 }}>
+                  No Skill nodes are directly connected to this LLM node. Connect a Skill node via an edge to auto-inject its output.
+                </div>
+              ) : (
+                incomingSkillNodes.map(sn => {
+                  const key = (sn as any).outputKey ?? sn.id;
+                  const display = (sn as any).skillRef ? String((sn as any).skillRef).split("/").pop() : (sn.name ?? key);
+                  return (
+                    <div key={sn.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <div style={{ fontSize: "0.9rem", color: C.text }}>{display}</div>
+                      <code style={{ marginLeft: "auto", fontSize: "0.78rem", color: C.teal }}>{`{{${key}.output}}`}</code>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
             <div style={sectionStyle}>
               <label style={labelStyle}>Prompt Template</label>
               <textarea style={{ ...textareaStyle, minHeight: 90 }}
@@ -425,10 +526,12 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
           <>
             <div style={sectionStyle}>
               <label style={labelStyle}>Agent</label>
-              <select style={selectStyle} value={node.agentName ?? ""} onChange={e => set("agentName", e.target.value || undefined)}>
-                <option value="">— select agent —</option>
-                {agents.map(a => <option key={a} value={a}>{a}</option>)}
-              </select>
+              <SearchableSelect
+                value={node.agentName ?? ""}
+                onChange={(v) => set("agentName", v || undefined)}
+                options={[{ value: "", label: "— select agent —" }, ...(agents || []).map(a => ({ value: a, label: a }))]}
+                placeholder="— select agent —"
+              />
             </div>
             <div style={sectionStyle}>
               <label style={labelStyle}>Max Steps</label>
@@ -448,19 +551,25 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
             </div>
             <div style={sectionStyle}>
               <label style={labelStyle}>Provider Override</label>
-              <select style={selectStyle} value={node.provider ?? ""} onChange={e => set("provider", e.target.value || undefined)}>
-                <option value="">Agent Default</option>
-                {providers.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <SearchableSelect
+                value={node.provider ?? ""}
+                onChange={(v) => set("provider", v || undefined)}
+                options={[{ value: "", label: "Agent Default" }, ...(providers || []).map(p => ({ value: p, label: p }))]}
+                placeholder="Agent Default"
+              />
             </div>
             <div style={sectionStyle}>
               <label style={labelStyle}>Model Override</label>
               {models.length > 0 ? (
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <select style={selectStyle} value={node.model ?? ""} onChange={e => set("model", e.target.value || undefined)}>
-                    <option value="">Agent Default</option>
-                    {models.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
-                  </select>
+                  <div style={{ flex: 1 }}>
+                    <SearchableSelect
+                      value={node.model ?? ""}
+                      onChange={v => set("model", v || undefined)}
+                      options={[{ value: "", label: "Agent Default" }, ...models.map(m => ({ value: m.id, label: m.id }))]}
+                      placeholder="Agent Default"
+                    />
+                  </div>
                   <button onClick={() => refreshModels(node.provider)} style={{ ...btnSm(C) }}>Refresh</button>
                 </div>
               ) : (
@@ -479,13 +588,15 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
               <label style={labelStyle}>Tool Name</label>
               {tools.length > 0
                 ? (
-                  <select style={selectStyle} value={node.toolName ?? ""} onChange={e => set("toolName", e.target.value || undefined)}>
-                    <option value="">— select tool —</option>
-                    {tools.map(t => {
-                      const qualified = `${t.contributor}/${t.name}`;
-                      return <option key={qualified} value={qualified}>{qualified}</option>;
-                    })}
-                  </select>
+                  <SearchableSelect
+                    value={node.toolName ?? ""}
+                    onChange={v => set("toolName", v || undefined)}
+                    options={[
+                      { value: "", label: "— select tool —" },
+                      ...tools.map(t => ({ value: `${t.contributor}/${t.name}`, label: `${t.contributor}/${t.name}` }))
+                    ]}
+                    placeholder="— select tool —"
+                  />
                 )
                 : <input style={inputStyle} value={node.toolName ?? ""} placeholder="toolset/toolName"
                   onChange={e => set("toolName", e.target.value || undefined)} />
@@ -716,6 +827,86 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, providers, vars
                   </div>
                 )
               )}
+            </div>
+          </>
+        )}
+
+        {/* ---- Skill fields ---- */}
+        {node.type === "skill" && (
+          <>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Skill</label>
+              {skills.length > 0 ? (
+                <SearchableSelect
+                  value={node.skillRef ?? ""}
+                  onChange={v => set("skillRef", v || undefined)}
+                  options={[
+                    { value: "", label: "— select skill —" },
+                    ...skills.map(s => ({ value: `${s.frontmatter.contributor}/${s.frontmatter.name}`, label: `${s.frontmatter.contributor}/${s.frontmatter.name}` }))
+                  ]}
+                  placeholder="— select skill —"
+                />
+              ) : (
+                <input style={inputStyle} value={node.skillRef ?? ""} placeholder="contributor/name"
+                  onChange={e => set("skillRef", e.target.value || undefined)} />
+              )}
+              {skills.length === 0 && (
+                <div style={{ fontSize: "0.68rem", color: C.overlay0, marginTop: 4 }}>No installed skills found. Install skills via the Marketplace.</div>
+              )}
+              {node.skillRef && (() => {
+                const skMeta = (skills as any[]).find(s => `${s.frontmatter.contributor}/${s.frontmatter.name}` === node.skillRef) as any;
+                const sk = skillFull ?? skMeta;
+                // Build config defaults if available
+                const configDefaults: Record<string, unknown> = {};
+                if (sk && Array.isArray((sk.frontmatter as any)?.config)) {
+                  for (const c of (sk.frontmatter as any).config) {
+                    if (c && typeof c.key === 'string' && c.default !== undefined) configDefaults[c.key] = c.default;
+                  }
+                }
+                const finalInputs = { ...configDefaults, ...(node.params ?? {}) };
+                const previewCtx = { input: { ...(vars ?? {}), ...finalInputs }, vars: vars ?? {} };
+                const templateBody = (skillFull && (skillFull as any).body) ? (skillFull as any).body : "";
+                const renderedPreview = templateBody ? simpleInterpolate(templateBody, previewCtx) : "";
+
+                return (
+                  <div>
+                    {sk?.frontmatter?.description ? (
+                      <div style={{ fontSize: "0.68rem", color: C.subtext0, marginTop: 4, lineHeight: 1.5 }}>{sk.frontmatter.description}</div>
+                    ) : null}
+                    <div style={{ marginTop: 8 }}>
+                      <label style={{ ...labelStyle, marginBottom: 6 }}>Rendered Preview</label>
+                      <textarea readOnly style={{ ...textareaStyle, minHeight: 120, whiteSpace: "pre-wrap" }} value={renderedPreview} />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Params (JSON)</label>
+              <textarea
+                style={{ ...textareaStyle, minHeight: 80, fontFamily: "monospace" }}
+                value={(() => { try { return JSON.stringify(node.params ?? {}, null, 2); } catch { return "{}"; } })()}
+                placeholder={'{ "goal": "{{input.task}}" }'}
+                onChange={e => {
+                  try { set("params", JSON.parse(e.target.value)); } catch { /* let user finish typing */ }
+                }}
+              />
+              <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
+                Values support <code style={{ color: C.teal }}>{"{{ref}}"}</code> interpolation. Merged with skill config defaults.
+              </div>
+              <TemplateTip C={C} nodes={otherNodes} />
+            </div>
+            <div style={sectionStyle}>
+              <label style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 6 }}>
+                <input type="checkbox" checked={!!node.cache}
+                  onChange={e => set("cache", e.target.checked ? true : undefined)} />
+                Cache output for this run
+              </label>
+            </div>
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Timeout (ms)</label>
+              <input style={inputStyle} type="number" min={0} value={node.timeoutMs ?? ""} placeholder="Optional"
+                onChange={e => set("timeoutMs", e.target.value ? Number(e.target.value) : undefined)} />
             </div>
           </>
         )}

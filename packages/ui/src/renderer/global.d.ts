@@ -78,13 +78,25 @@ export interface SubAgentResultInfo {
   error?: string;
 }
 
+// ── Pipeline Step ─────────────────────────────────────────────────────────
+
+export interface PipelineStepInfo {
+  index: number;
+  action: string;
+  input: string;
+  output: unknown;
+  thinking?: string;
+  timestamp?: number;
+  subAgentResult?: SubAgentResultInfo;
+}
+
 export interface ChatMessageInfo {
   id: string;
   role: "user" | "assistant" | "error";
   content: string;
   thinking?: string;
   ts: number;
-  steps?: Array<{ index: number; action: string; output: unknown; thinking?: string; subAgentResult?: SubAgentResultInfo }>;
+  steps?: PipelineStepInfo[];
 }
 
 export interface ChatSessionInfo {
@@ -202,6 +214,12 @@ export interface NyteShiftApi {
   readSoul(name: string): Promise<string>;
   writeSoul(name: string, content: string): Promise<void>;
   listSkills(): Promise<Array<{ frontmatter: { name: string; contributor: string; description: string; config?: ConfigFieldDefinitionInfo[] } }>>;
+  getSkill(qualifiedName: string): Promise<{
+    frontmatter: { name: string; contributor: string; description?: string; config?: ConfigFieldDefinitionInfo[]; version?: string; tags?: string[]; schema?: any };
+    body: string;
+    autoUpdate?: boolean;
+    hash?: string;
+  } | null>;
   listTools(): Promise<ToolInfo[]>;
   // Providers
   listProviders(): Promise<Array<{ id: string }>>;
@@ -225,6 +243,8 @@ export interface NyteShiftApi {
   getRunStatus(agentName: string): Promise<Array<{ runId: string; agentName: string; sessionId: string; status: string; result?: any; error?: string }>>;
   clearRun(runId: string): Promise<void>;
   onRunCompleted(cb: (data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => void): void; // result is the PipelineResult when available
+  /** Subscribe to per-step events while an agent is running. Returns an unsubscribe function. */
+  onRunStep(cb: (data: { runId: string; agentName: string; sessionId: string; step: PipelineStepInfo }) => void): () => void;
 
   // Chat Sessions
   listChatSessions(agentName: string): Promise<ChatSessionSummaryInfo[]>;
@@ -426,7 +446,7 @@ export type CatchTrigger = "maxIterations" | "error" | "abort";
 export interface GraphNodeInfo {
   id: string;
   name: string;
-  type: "input" | "output" | "llm" | "agent" | "tool" | "condition" | "operation" | "catch" | "trigger";
+  type: "input" | "output" | "llm" | "agent" | "tool" | "skill" | "condition" | "operation" | "catch" | "trigger";
   provider?: string;
   model?: string;
   temperature?: number;
@@ -448,6 +468,10 @@ export interface GraphNodeInfo {
   branches?: Array<{ label: string; condition: ConditionPredicateInfo; target: string }>;
   defaultTarget?: string;
   operationAction?: OperationActionInfo;
+  /** Skill node fields */
+  skillRef?: string;
+  params?: Record<string, unknown>;
+  cache?: boolean;
   /** Triggers that cause this catch node to fire after a loop exits. */
   catchTriggers?: CatchTrigger[];
   outputKey?: string;
@@ -475,6 +499,7 @@ export interface GraphDefinitionInfo {
   errorPolicy?: ErrorPolicyInfo;
   initVars?: Record<string, unknown>;
   maxIterations?: number;
+  unbounded?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -590,4 +615,10 @@ declare global {
   interface Window {
     nyteShiftApi: NyteShiftApi | undefined;
   }
+}
+
+// Allow importing image assets in TypeScript (handled by Vite's asset plugin)
+declare module "*.png" {
+  const src: string;
+  export default src;
 }

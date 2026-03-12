@@ -12,6 +12,11 @@
     "clean": "rimraf dist",
     "lint": "eslint src --ext .ts,.tsx"
   },
+  "files": [
+    "dist",
+    "public"
+  ],
+  "prepare": "npm run build",
   "dependencies": {
     "electron": "^34.5.8",
     "react": "^18.2.0",
