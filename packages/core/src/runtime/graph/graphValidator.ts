@@ -175,6 +175,15 @@ function validateNode(n: GraphNode): GraphValidationError[] {
       }
       break;
     }
+    case "skill":
+      if (!n.skillRef || !String(n.skillRef).trim()) {
+        errors.push({
+          nodeId: n.id,
+          field: "skillRef",
+          message: "Skill node must specify a skillRef (e.g. \"contributor/name\").",
+        });
+      }
+      break;
     case "input":
     case "output":
       break;

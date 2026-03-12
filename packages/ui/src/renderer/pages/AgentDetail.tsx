@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { useChatStore } from "../stores/ChatStore.js";
-import type { ChatMessageInfo, ChatSessionSummaryInfo, SubAgentResultInfo } from "../global.js";
+import type { ChatMessageInfo, ChatSessionSummaryInfo, SubAgentResultInfo, PipelineStepInfo } from "../global.js";
 import { AgentSettingsModal } from "../components/AgentSettingsModal.js";
 import { useTheme } from "../theme/ThemeContext.js";
+import { SearchableSelect } from "../components/SearchableSelect.js";
 
 type Model = { id: string; contextWindow?: number; maxOutputTokens?: number; description?: string };
 
@@ -489,6 +490,9 @@ export function AgentDetail(): React.JSX.Element {
   // Chat input
   const [input, setInput] = useState("");
 
+  // Live step events buffered while agent is running
+  const [liveSteps, setLiveSteps] = useState<PipelineStepInfo[]>([]);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -646,6 +650,17 @@ export function AgentDetail(): React.JSX.Element {
       textareaRef.current.style.height = "auto";
     }
     chatStore.setRunning(name, sessionId, true);
+    setLiveSteps([]);
+
+    // Subscribe to per-step events for live progress display
+    let offStep: (() => void) | undefined;
+    if (window.nyteShiftApi?.onRunStep) {
+      offStep = window.nyteShiftApi.onRunStep((data) => {
+        if (data.agentName === name && data.sessionId === sessionId) {
+          setLiveSteps((prev) => [...prev, data.step]);
+        }
+      });
+    }
 
     try {
       // Build history from prior messages in the session (exclude the user
@@ -683,6 +698,8 @@ export function AgentDetail(): React.JSX.Element {
       };
       chatStore.addMessage(name, sessionId, errorMsg);
     } finally {
+      offStep?.();
+      setLiveSteps([]);
       chatStore.setRunning(name, sessionId, false);
       chatStore.refreshSessionList(name);
       setTimeout(() => textareaRef.current?.focus(), 0);
@@ -757,33 +774,27 @@ export function AgentDetail(): React.JSX.Element {
               {/* Provider */}
               <div>
                 <FieldLabel>Provider</FieldLabel>
-                <select
+                <SearchableSelect
                   value={selProvider}
-                  onChange={(e) => setSelProvider(e.target.value)}
-                  style={fieldSelect}
-                >
-                  {providers.length === 0 && <option value="">No providers loaded</option>}
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>{p.id}</option>
-                  ))}
-                </select>
+                  onChange={(v) => setSelProvider(v)}
+                  options={(providers && providers.length > 0)
+                    ? providers.map((p) => ({ value: p.id, label: p.id }))
+                    : [{ value: "", label: "No providers loaded" }]}
+                  placeholder="Select provider"
+                />
               </div>
 
               {/* Model */}
               <div>
                 <FieldLabel>Model</FieldLabel>
-                <select
+                <SearchableSelect
                   value={selModel}
-                  onChange={(e) => setSelModel(e.target.value)}
-                  style={fieldSelect}
-                >
-                  {models.length === 0 && (
-                    <option value={selModel}>{selModel || "(no models loaded)"}</option>
-                  )}
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id} title={m.description}>{m.id}</option>
-                  ))}
-                </select>
+                  onChange={(v) => setSelModel(v)}
+                  options={(models && models.length > 0)
+                    ? models.map((m) => ({ value: m.id, label: m.id, title: m.description }))
+                    : [{ value: selModel, label: selModel || "(no models loaded)" }]}
+                  placeholder="Select model"
+                />
               </div>
 
               {/* Temperature */}
@@ -1002,7 +1013,7 @@ export function AgentDetail(): React.JSX.Element {
 
             {/* Live execution bar */}
             {running && name && sessionId && (
-              <LiveExecutionBar agentName={name} sessionId={sessionId} />
+              <LiveExecutionBar agentName={name} sessionId={sessionId} steps={liveSteps} />
             )}
             <div ref={chatEndRef} />
           </div>
@@ -1148,23 +1159,49 @@ export function AgentDetail(): React.JSX.Element {
 }
 
 // ── Live Execution Bar (shown while agent is running) ─────────────────────────
-function LiveExecutionBar({ agentName, sessionId }: { agentName: string; sessionId: string }) {
+function formatStepLabel(action: string): string {
+  if (action === "llm-call") return "Thinking…";
+  if (action.startsWith("tool-call:")) {
+    const toolName = action.slice("tool-call:".length);
+    return toolName.replace(/_/g, " ").replace(/\b./g, (c) => c.toUpperCase());
+  }
+  if (action.startsWith("reprompt:")) return "Retrying…";
+  if (action === "provider-error") return "Provider error";
+  return action;
+}
+
+function getStepIcon(action: string): string {
+  if (action === "llm-call") return "🧠";
+  if (action.startsWith("tool-call:memory")) return "🧠";
+  if (action.startsWith("tool-call:sub_agent")) return "🤖";
+  if (action.startsWith("tool-call:plan")) return "📋";
+  if (action.startsWith("tool-call:web") || action.startsWith("tool-call:http")) return "🌐";
+  if (action.startsWith("tool-call:search")) return "🔍";
+  if (action.startsWith("reprompt:")) return "🔄";
+  if (action === "provider-error") return "⚠️";
+  if (action.startsWith("tool-call:")) return "🔧";
+  return "⚙️";
+}
+
+function LiveExecutionBar({
+  agentName,
+  sessionId,
+  steps,
+}: {
+  agentName: string;
+  sessionId: string;
+  steps: PipelineStepInfo[];
+}) {
   const { palette: C } = useTheme();
-  const chatStore = useChatStore();
-  const [phase, setPhase] = useState(0);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const phases = [
-    "Analyzing request…",
-    "Planning steps…",
-    "Executing tools…",
-    "Processing results…",
-    "Refining output…",
-  ];
-  useEffect(() => {
-    const id = setInterval(() => setPhase((p) => (p + 1) % phases.length), 2000);
-    return () => clearInterval(id);
-  }, []);
+
+  const latestStep = steps.length > 0 ? steps[steps.length - 1] : null;
+  // Find the most recent step that contains thinking content
+  const latestThinking = [...steps].reverse().find((s) => s.thinking)?.thinking;
+  const currentLabel = latestStep ? formatStepLabel(latestStep.action) : "Working…";
+  const currentIcon = latestStep ? getStepIcon(latestStep.action) : "⚙️";
 
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -1179,11 +1216,8 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
         border: `1px solid ${C.surface1}`,
         overflow: "hidden",
       }}>
-        {/* Step row */}
-        <div style={{
-          padding: "8px 14px",
-          display: "flex", alignItems: "center", gap: 10,
-        }}>
+        {/* Status row */}
+        <div style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 }}>
           {/* Spinner */}
           <span style={{
             display: "inline-block", width: 12, height: 12,
@@ -1191,11 +1225,35 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
             borderRadius: "50%", flexShrink: 0,
             animation: "nyteShiftSpin 0.8s linear infinite",
           }} />
-          <span style={{ fontSize: 13, color: C.text, flex: 1, transition: "opacity 0.3s" }}>
-            {phases[phase]}
+          {/* Current action label */}
+          <span style={{ fontSize: 13, color: C.text, flex: 1 }}>
+            <span style={{ marginRight: 4 }}>{currentIcon}</span>
+            {currentLabel}
+            {steps.length > 0 && (
+              <span style={{ fontSize: 11, color: C.overlay0, marginLeft: 6 }}>
+                · step {steps.length}
+              </span>
+            )}
           </span>
-          {/* Reasoning toggle (Copilot-style) */}
-          <div style={{ display: "flex", gap: 8 }}>
+          {/* Controls */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {/* Steps list toggle */}
+            {steps.length > 0 && (
+              <button
+                onClick={() => setStepsOpen((x) => !x)}
+                style={{
+                  background: stepsOpen ? "rgba(137,180,250,0.1)" : "none",
+                  border: `1px solid ${stepsOpen ? "rgba(137,180,250,0.3)" : C.surface1}`,
+                  cursor: "pointer", color: C.blue, fontSize: 11, padding: "3px 10px",
+                  borderRadius: 20, display: "flex", alignItems: "center", gap: 5,
+                  transition: "background 0.15s, border-color 0.15s",
+                }}
+              >
+                <span style={{ fontSize: 10 }}>{stepsOpen ? "▼" : "▶"}</span>
+                <span>{steps.length} step{steps.length !== 1 ? "s" : ""}</span>
+              </button>
+            )}
+            {/* Reasoning toggle */}
             <button
               onClick={() => setThinkingOpen((x) => !x)}
               style={{
@@ -1209,6 +1267,7 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
               <span style={{ fontSize: 10 }}>{thinkingOpen ? "▼" : "▶"}</span>
               <span>Reasoning</span>
             </button>
+            {/* Cancel */}
             <button
               onClick={async () => {
                 if (!window.nyteShiftApi) return;
@@ -1218,7 +1277,6 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
                 } catch (err) {
                   console.error("Cancel request failed:", err);
                 } finally {
-                  // Let run:completed event clear running state; clear local pending flag
                   setCancelling(false);
                 }
               }}
@@ -1236,24 +1294,66 @@ function LiveExecutionBar({ agentName, sessionId }: { agentName: string; session
             </button>
           </div>
         </div>
-        {/* Inline reasoning */}
+        {/* Expanded steps list */}
+        {stepsOpen && steps.length > 0 && (
+          <div style={{
+            borderTop: `1px solid ${C.surface1}`,
+            padding: "8px 14px",
+            display: "flex", flexDirection: "column", gap: 3,
+            maxHeight: 180, overflowY: "auto",
+          }}>
+            {steps.map((step, i) => {
+              const isLast = i === steps.length - 1;
+              return (
+                <div
+                  key={step.index}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0", opacity: isLast ? 1 : 0.65 }}
+                >
+                  <span style={{ fontSize: 10, color: C.overlay0, minWidth: 18, textAlign: "right", flexShrink: 0 }}>
+                    {step.index + 1}
+                  </span>
+                  <span style={{ fontSize: 12, flexShrink: 0 }}>{getStepIcon(step.action)}</span>
+                  <span style={{ fontSize: 12, color: isLast ? C.text : C.subtext0, fontWeight: isLast ? 600 : 400, flex: 1 }}>
+                    {formatStepLabel(step.action)}
+                  </span>
+                  {step.thinking && (
+                    <span style={{ fontSize: 10, color: C.mauve, flexShrink: 0 }}>💭</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {/* Reasoning panel */}
         {thinkingOpen && (
           <div style={{
             borderTop: `1px solid ${C.surface1}`,
             padding: "8px 14px",
             display: "flex", flexDirection: "column", gap: 6,
           }}>
-            {[100, 80, 60].map((w, i) => (
-              <div key={i} style={{
-                height: 8, borderRadius: 4,
-                background: `rgba(203,166,247,0.1)`,
-                width: `${w}%`,
-                animation: `nyteShiftPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
-              }} />
-            ))}
-            <span style={{ fontSize: 11, color: C.overlay0, fontStyle: "italic" }}>
-              Thinking in progress…
-            </span>
+            {latestThinking ? (
+              <div style={{
+                fontSize: 12, color: C.subtext0, fontFamily: "monospace",
+                lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                maxHeight: 200, overflowY: "auto",
+              }}>
+                {latestThinking}
+              </div>
+            ) : (
+              <>
+                {[100, 80, 60].map((w, i) => (
+                  <div key={i} style={{
+                    height: 8, borderRadius: 4,
+                    background: "rgba(203,166,247,0.1)",
+                    width: `${w}%`,
+                    animation: `nyteShiftPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
+                  }} />
+                ))}
+                <span style={{ fontSize: 11, color: C.overlay0, fontStyle: "italic" }}>
+                  Thinking in progress…
+                </span>
+              </>
+            )}
           </div>
         )}
       </div>

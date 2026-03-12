@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
 
   // Skills & Tools
   listSkills: () => ipcRenderer.invoke("skills:list"),
+  getSkill: (qualifiedName: string) => ipcRenderer.invoke("skills:get", qualifiedName),
   listTools: () => ipcRenderer.invoke("tools:list"),
 
   // Providers
@@ -70,6 +71,11 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
   clearRun: (runId: string) => ipcRenderer.invoke("run:clear", runId),
   onRunCompleted: (cb: (data: { runId: string; agentName: string; sessionId: string; error?: string; result?: any }) => void) => {
     ipcRenderer.on("run:completed", (_e, data) => cb(data));
+  },
+  onRunStep: (cb: (data: { runId: string; agentName: string; sessionId: string; step: any }) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, data: any) => cb(data);
+    ipcRenderer.on("run:step", listener);
+    return () => ipcRenderer.removeListener("run:step", listener);
   },
 
   // Chat Sessions

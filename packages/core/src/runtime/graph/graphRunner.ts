@@ -34,6 +34,7 @@ import { runGraphTracked } from "./graphRunRegistry.js";
 import { resolveConfig } from "../config/configResolver.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { getTool } from "../tools/toolLoader.js";
+import { getSkill } from "../skills/skillLoader.js";
 
 // Lazy import to avoid circular deps (same pattern as subagentTools.ts).
 let _runAutonomousTask: typeof import("../pipeline/autonomous.js").runAutonomousTask | null = null;
@@ -416,6 +417,8 @@ async function executeNode(
       return executeOutputNode(node, context);
     case "llm":
       return executeLlmNode(node, context, globalConfig, graph, options);
+    case "skill":
+      return executeSkillNode(node, context, globalConfig, graph, options);
     case "agent":
       return executeAgentNode(node, context, globalConfig, graph, options);
     case "tool":
@@ -498,10 +501,34 @@ async function executeLlmNode(
   const temperature = node.temperature ?? 0.7;
   const maxTokens = node.maxTokens ?? 4096;
 
-  const systemPrompt = node.systemPrompt ?? "You are a helpful AI assistant.";
+  let systemPrompt = node.systemPrompt ?? "You are a helpful AI assistant.";
+
+  // Auto-inject skill node outputs via edges: any skill node with an edge to this LLM node
+  // has its output appended to the system prompt as instructions.
+  const incomingSkillNodes = graph.edges
+    .filter(e => e.target === node.id)
+    .map(e => graph.nodes.find(n => n.id === e.source))
+    .filter((n): n is GraphNode => n?.type === "skill");
+  if (incomingSkillNodes.length > 0) {
+    const skillSections: string[] = [];
+    for (const sn of incomingSkillNodes) {
+      const skillOut = context.nodeOutputs[sn.outputKey ?? sn.id];
+      if (skillOut?.status === "success" && skillOut.output != null) {
+        const text = typeof skillOut.output === "string"
+          ? skillOut.output
+          : JSON.stringify(skillOut.output, null, 2);
+        skillSections.push(text);
+      }
+    }
+    if (skillSections.length > 0) {
+      systemPrompt = `${systemPrompt}\n\n--- Skill Instructions ---\n${skillSections.join("\n\n")}`;
+    }
+  }
+
   const userPrompt = interpolateTemplate(node.promptTemplate ?? "", context);
 
   log(`    llm call — provider="${provider}" model="${model}"`);
+
 
   const result = await callProvider(provider, {
     model,
@@ -537,6 +564,63 @@ async function executeLlmNode(
         : undefined,
       elapsedMs: elapsed,
     },
+    status: "success",
+    timestamp: Date.now(),
+  };
+}
+
+// ── Skill node ─────────────────────────────────────────────────────────
+// Skill nodes are data-only: they render the skill markdown/template using
+// the current execution context and configured params, and return the
+// rendered content as the node output. They do NOT perform an LLM call.
+async function executeSkillNode(
+  node: GraphNode,
+  context: GraphExecutionContext,
+  globalConfig: import("../../types/index.js").NyteShiftConfig,
+  graph: GraphDefinition,
+  options: GraphRunOptions,
+): Promise<NodeOutput> {
+  const startTime = Date.now();
+
+  const skillRef = node.skillRef ?? "";
+  if (!String(skillRef).trim()) {
+    throw new Error(`Skill node "${node.id}" has no skillRef configured.`);
+  }
+
+  const skill = await getSkill(skillRef);
+  if (!skill) {
+    throw new Error(`Skill "${skillRef}" not found.`);
+  }
+
+  const rawParams = node.params ?? {};
+  const resolvedParams = interpolateValue(rawParams, context) as Record<string, unknown>;
+
+  // Apply config defaults from skill frontmatter
+  const configDefaults: Record<string, unknown> = {};
+  if (Array.isArray((skill.frontmatter as any)?.config)) {
+    for (const c of (skill.frontmatter as any).config) {
+      if (c && typeof c.key === "string" && c.default !== undefined) {
+        configDefaults[c.key] = c.default;
+      }
+    }
+  }
+
+  const finalInputs = { ...configDefaults, ...resolvedParams };
+  const derivedContext: GraphExecutionContext = { ...context, input: { ...(context.input ?? {}), ...finalInputs } };
+
+  // Render the skill body/template into a plain string. This is returned
+  // directly and later consumed by downstream LLM nodes (via edges).
+  const rendered = interpolateTemplate((skill.body as string) ?? "", derivedContext);
+
+  const elapsed = Date.now() - startTime;
+  log(`    skill node — "${skillRef}" rendered (${String(rendered ?? "").length} chars)`);
+
+  return {
+    nodeId: node.id,
+    nodeName: node.name,
+    output: rendered,
+    rawOutput: rendered,
+    metadata: { elapsedMs: elapsed },
     status: "success",
     timestamp: Date.now(),
   };
@@ -1127,12 +1211,18 @@ async function runLoopSCC(
   globalConfig: import("../../types/index.js").NyteShiftConfig,
   options: GraphRunOptions,
 ): Promise<{ results: NodeOutput[]; error?: string; exitTarget?: string; exitReason: LoopExitReason }> {
+  const unbounded = graph.unbounded === true;
   const maxIter = graph.maxIterations ?? 100;
   const results: NodeOutput[] = [];
   let exitTarget: string | undefined;
   let exitReason: LoopExitReason = "maxIterations";
 
-  for (let iter = 0; iter < maxIter; iter++) {
+  if (unbounded) {
+    logW(`  unbounded loop SCC — runs until a condition exits, an error occurs, or the run is cancelled.`);
+  }
+
+  let iter = 0;
+  while (unbounded || iter < maxIter) {
     if (options.signal?.aborted) {
       exitReason = "abort";
       break;
@@ -1224,10 +1314,11 @@ async function runLoopSCC(
     }
 
     if (shouldExit) break;
-    if (iter === maxIter - 1) {
+    if (!unbounded && iter === maxIter - 1) {
       log(`  loop SCC hit maxIterations (${maxIter}) — stopping`);
       // exitReason stays "maxIterations"
     }
+    iter++;
   }
 
   return { results, exitTarget, exitReason };

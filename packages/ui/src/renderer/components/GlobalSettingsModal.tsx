@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTheme } from "../theme/ThemeContext.js";
 import { ThemeSettingsTab } from "./ThemeSettingsTab.js";
+import { SearchableSelect } from "./SearchableSelect.js";
 
 interface Props {
   onClose: () => void;
@@ -437,35 +438,25 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
 
                 <div>
                   <label style={labelStyle}>Default Provider</label>
-                  <select
+                  <SearchableSelect
                     value={defaultProvider}
-                    onChange={async (e) => {
-                      const newProvider = e.target.value;
-                      setDefaultProvider(newProvider);
-                      await window.nyteShiftApi!.writeConfig({ ...config, defaultProvider: newProvider });
-                      /* defaultModel will auto-reset via effect */
+                    onChange={async (v) => {
+                      setDefaultProvider(v);
+                      await window.nyteShiftApi!.writeConfig({ ...config, defaultProvider: v });
                     }}
-                    style={selectStyle}
-                  >
-                    <option value="">— select —</option>
-                    {providers.map((p) => (
-                      <option key={p.id} value={p.id}>{p.id}</option>
-                    ))}
-                  </select>
+                    options={[{ value: "", label: "— select —" }, ...(providers || []).map((p) => ({ value: p.id, label: p.id }))]}
+                    placeholder="— select —"
+                  />
                 </div>
 
                 <div>
                   <label style={labelStyle}>Default Model</label>
-                  <select
+                  <SearchableSelect
                     value={defaultModel}
-                    onChange={(e) => setDefaultModel(e.target.value)}
-                    style={selectStyle}
-                  >
-                    <option value="">— select —</option>
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>{m.id}</option>
-                    ))}
-                  </select>
+                    onChange={(v) => setDefaultModel(v)}
+                    options={[{ value: "", label: "— select —" }, ...(models || []).map((m) => ({ value: m.id, label: m.id }))]}
+                    placeholder="— select —"
+                  />
                   {defaultModel && models.length > 0 && (() => {
                     const m = models.find((x) => x.id === defaultModel);
                     if (!m) return null;

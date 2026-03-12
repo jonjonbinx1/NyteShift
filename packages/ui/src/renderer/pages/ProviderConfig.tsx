@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useTheme } from "../theme/ThemeContext.js";
+import { SearchableSelect } from "../components/SearchableSelect.js";
 
 type ModelInfo = { id: string; contextWindow: number; maxOutputTokens: number; description?: string };
 
@@ -113,28 +114,26 @@ export function ProviderConfig(): React.JSX.Element {
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <label>
             Provider:
-            <select
-              value={selectedProvider}
-              onChange={(e) => setSelectedProvider(e.target.value)}
-              style={{ marginLeft: 8 }}
-            >
-              {providers.map((p) => (
-                <option value={p.id} key={p.id}>{p.id}</option>
-              ))}
-            </select>
+            <div style={{ marginTop: 6 }}>
+              <SearchableSelect
+                value={selectedProvider}
+                onChange={(v) => setSelectedProvider(v)}
+                options={(providers || []).map((p) => ({ value: p.id, label: p.id }))}
+                placeholder=""
+              />
+            </div>
           </label>
 
           <label>
             Model:
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              style={{ marginLeft: 8 }}
-            >
-              {models.map((m) => (
-                <option value={m.id} key={m.id}>{m.id}</option>
-              ))}
-            </select>
+            <div style={{ marginTop: 6 }}>
+              <SearchableSelect
+                value={selectedModel}
+                onChange={(v) => setSelectedModel(v)}
+                options={(models || []).map((m) => ({ value: m.id, label: m.id }))}
+                placeholder=""
+              />
+            </div>
           </label>
 
           <label>
@@ -177,15 +176,14 @@ export function ProviderConfig(): React.JSX.Element {
           <div style={{ minWidth: 300 }}>
             <label>
               Edit provider:
-              <select
-                value={selectedProvider}
-                onChange={(e) => setSelectedProvider(e.target.value)}
-                style={{ display: "block", marginTop: 8 }}
-              >
-                {providers.map((p) => (
-                  <option value={p.id} key={p.id}>{p.id}</option>
-                ))}
-              </select>
+              <div style={{ marginTop: 8 }}>
+                <SearchableSelect
+                  value={selectedProvider}
+                  onChange={(v) => setSelectedProvider(v)}
+                  options={(providers || []).map((p) => ({ value: p.id, label: p.id }))}
+                  placeholder=""
+                />
+              </div>
             </label>
 
             <div style={{ marginTop: 12 }}>
