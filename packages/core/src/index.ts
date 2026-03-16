@@ -133,6 +133,7 @@ export { AgentController } from "./runtime/control/controller.js";
 
 // ── Utils (selective) ──────────────────────────────────────────────────
 export { toKebab, nyteShiftHome } from "./utils/index.js";
+export { listPersistedGraphRuns, listPersistedTriggerRuns, saveGraphRun, saveTriggerRun, prunePersistedRuns } from "./runtime/runs/runStore.js";
 
 // ── Agent Graph ────────────────────────────────────────────────────────
 export type {

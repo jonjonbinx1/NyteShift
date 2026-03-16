@@ -726,6 +726,28 @@ async function executeToolNode(
     }
   }
 
+  // Recursively parse JSON-like strings inside nested structures so that
+  // templates inserted into JSON text (e.g. "{{vars.uids}}" -> "[1,2]")
+  // become real arrays/objects at runtime instead of remaining quoted strings.
+  const jsonLike = /^\s*(?:\{[\s\S]*\}|\[[\s\S]*\]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)\s*$/i;
+  function deepParseJsonLike(val: unknown): unknown {
+    if (typeof val === "string") {
+      if (jsonLike.test(val)) {
+        try { return JSON.parse(val); } catch { return val; }
+      }
+      return val;
+    }
+    if (Array.isArray(val)) return val.map(deepParseJsonLike);
+    if (typeof val === "object" && val !== null) {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) out[k] = deepParseJsonLike(v);
+      return out;
+    }
+    return val;
+  }
+
+  input = deepParseJsonLike(input);
+
   log(`    tool call — "${node.toolName}"`);
 
   // DEBUG: capture tool shape and the final input value (type + preview)
@@ -840,9 +862,21 @@ function executeOperationNode(
   const { op, varName, value, fromRef, amount = 1 } = action;
   const current = context.vars[varName];
 
+  // Resolve templated `value` when present so operation nodes can accept
+  // mustache templates (e.g. "{{nodeId.output.items.length}}") and preserve
+  // native types (numbers/arrays/objects) instead of plain strings.
+  let resolvedValue: unknown = value;
+  if (value !== undefined) {
+    try {
+      resolvedValue = interpolateValue(value, context);
+    } catch {
+      resolvedValue = value;
+    }
+  }
+
   switch (op) {
     case "set":
-      context.vars[varName] = value;
+      context.vars[varName] = resolvedValue;
       break;
     case "inc":
       context.vars[varName] = typeof current === "number" ? current + amount : amount;
@@ -850,15 +884,81 @@ function executeOperationNode(
     case "dec":
       context.vars[varName] = typeof current === "number" ? current - amount : -amount;
       break;
-    case "copy":
-      context.vars[varName] = fromRef ? resolveRef(fromRef, context) : undefined;
+    case "copy": {
+      if (fromRef) {
+        // Allow templated fromRef (e.g. "{{some.node.path}}") by attempting
+        // to interpolate first; if interpolation yields a non-string value,
+        // use it directly, otherwise resolve the resulting path.
+        if (typeof fromRef === "string" && fromRef.includes("{{")) {
+          const iv = interpolateValue(fromRef, context);
+          if (iv !== undefined && typeof iv !== "string") {
+            context.vars[varName] = iv;
+          } else {
+            context.vars[varName] = resolveRef(String(iv ?? fromRef), context);
+          }
+        } else {
+          context.vars[varName] = resolveRef(fromRef, context);
+        }
+      } else {
+        context.vars[varName] = undefined;
+      }
       break;
+    }
+    case "extract": {
+      // Extract supports general JSON path extraction.
+      // - `fromRef` may be a templated reference or a dot-path to any JSON value.
+      // - If `key` is omitted the resolved `fromRef` value is copied verbatim.
+      // - If `key` is present and `fromRef` resolves to an array, we map over
+      //   each element and extract the `key` path from each item (returns array).
+      // - If `key` is present and `fromRef` resolves to an object/value, we
+      //   navigate the `key` path inside that value and store the result.
+      if (!fromRef) {
+        context.vars[varName] = undefined;
+        break;
+      }
+
+      // Resolve templated fromRef first
+      let source: unknown;
+      if (typeof fromRef === "string" && fromRef.includes("{{")) {
+        const iv = interpolateValue(fromRef, context);
+        if (iv !== undefined && typeof iv !== "string") {
+          source = iv;
+        } else {
+          source = resolveRef(String(iv ?? fromRef), context);
+        }
+      } else {
+        source = resolveRef(fromRef, context);
+      }
+
+      const rawKey = (action as any).key;
+      if (!rawKey) {
+        // No key: copy the whole resolved value
+        context.vars[varName] = source;
+        break;
+      }
+
+      // Resolve templated key if present and normalise into parts
+      let resolvedKey = rawKey;
+      if (typeof rawKey === "string" && rawKey.includes("{{")) {
+        try { resolvedKey = String(interpolateValue(rawKey, context)); } catch { resolvedKey = rawKey; }
+      }
+      const parts = String(resolvedKey).replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '').split('.');
+
+      if (Array.isArray(source)) {
+        const out = (source as unknown[]).map((item) => navigatePath(item, parts));
+        context.vars[varName] = out;
+      } else {
+        const v = navigatePath(source, parts);
+        context.vars[varName] = v;
+      }
+      break;
+    }
     case "toggle":
       context.vars[varName] = !current;
       break;
     case "append": {
       const arr = Array.isArray(current) ? current : [];
-      context.vars[varName] = [...arr, value];
+      context.vars[varName] = [...arr, resolvedValue];
       break;
     }
     default:

@@ -26,6 +26,14 @@ const GLOBAL_DEFAULTS: NyteShiftConfig = {
   autoUpdate: {
     marketplace: false,
   },
+  // Run retention / persistence settings
+  runRetention: {
+    enabled: true,
+    // Default: daily at midnight
+    pruneSchedule: "daily@00:00",
+    graph: { maxAgeDays: 30, maxItems: 500 },
+    triggers: { maxAgeDays: 30, maxItems: 200 },
+  },
 };
 
 /**

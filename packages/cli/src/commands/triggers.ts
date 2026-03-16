@@ -9,6 +9,7 @@ import {
   deleteTriggerDefinition,
   updateTriggerDefinition,
   getTriggerEngine,
+  listPersistedTriggerRuns,
   listAgents,
 } from "@nyteshift/core";
 import type { TriggerEvent, TriggerType } from "@nyteshift/core";
@@ -295,7 +296,16 @@ export function registerTriggerCommands(program: Command): void {
     .action(async (opts: { agent?: string; limit: string }) => {
       try {
         const engine = getTriggerEngine();
-        const runs = engine.getRuns(opts.agent ? { agentName: opts.agent } : undefined);
+        let runs = engine.getRuns(opts.agent ? { agentName: opts.agent } : undefined);
+        // If engine has no in-memory runs (engine not started) fall back to persisted runs on disk.
+        if ((!engine.isRunning || runs.length === 0)) {
+          try {
+            const persisted = await listPersistedTriggerRuns();
+            runs = opts.agent ? persisted.filter((r) => r.agentName === opts.agent) : persisted;
+          } catch {
+            // ignore
+          }
+        }
         const limit = parseInt(opts.limit, 10);
         const shown = runs.slice(0, limit);
 

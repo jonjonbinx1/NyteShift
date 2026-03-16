@@ -173,6 +173,13 @@ function validateNode(n: GraphNode): GraphValidationError[] {
           message: "Operation node with op=\"copy\" must specify a fromRef.",
         });
       }
+      if (n.operationAction.op === "extract" && !n.operationAction.fromRef?.trim()) {
+        errors.push({
+          nodeId: n.id,
+          field: "operationAction.fromRef",
+          message: "Operation node with op=\"extract\" must specify a fromRef.",
+        });
+      }
       break;
     }
     case "skill":

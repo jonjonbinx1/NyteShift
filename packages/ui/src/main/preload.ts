@@ -216,13 +216,24 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
   graphRuns: () => ipcRenderer.invoke("graph:runs"),
   graphRunsForGraph: (graphId: string) => ipcRenderer.invoke("graph:runs:forGraph", graphId),
   graphRunCancel: (runId: string) => ipcRenderer.invoke("graph:run:cancel", runId),
-  onGraphNodeStart: (cb: (data: unknown) => void) => {
-    ipcRenderer.on("graph:nodeStart", (_e, data) => cb(data));
+  onGraphRunRegistered: (cb: (data: unknown) => void): (() => void) => {
+    const listener = (_e: any, data: unknown) => cb(data);
+    ipcRenderer.on("graph:runRegistered", listener);
+    return () => ipcRenderer.removeListener("graph:runRegistered", listener);
   },
-  onGraphNodeComplete: (cb: (data: unknown) => void) => {
-    ipcRenderer.on("graph:nodeComplete", (_e, data) => cb(data));
+  onGraphNodeStart: (cb: (data: unknown) => void): (() => void) => {
+    const listener = (_e: any, data: unknown) => cb(data);
+    ipcRenderer.on("graph:nodeStart", listener);
+    return () => ipcRenderer.removeListener("graph:nodeStart", listener);
   },
-  onGraphRunComplete: (cb: (data: unknown) => void) => {
-    ipcRenderer.on("graph:runComplete", (_e, data) => cb(data));
+  onGraphNodeComplete: (cb: (data: unknown) => void): (() => void) => {
+    const listener = (_e: any, data: unknown) => cb(data);
+    ipcRenderer.on("graph:nodeComplete", listener);
+    return () => ipcRenderer.removeListener("graph:nodeComplete", listener);
+  },
+  onGraphRunComplete: (cb: (data: unknown) => void): (() => void) => {
+    const listener = (_e: any, data: unknown) => cb(data);
+    ipcRenderer.on("graph:runComplete", listener);
+    return () => ipcRenderer.removeListener("graph:runComplete", listener);
   },
 });

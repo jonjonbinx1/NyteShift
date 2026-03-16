@@ -83,7 +83,7 @@ export function GraphRunPage(): React.JSX.Element {
       }
     })();
 
-    window.nyteShiftApi?.onGraphNodeStart?.((data: any) => {
+    const cleanupNodeStart = window.nyteShiftApi?.onGraphNodeStart?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       const nodeId: string = data.nodeId;
       const nodeName: string = data.nodeName;
@@ -92,7 +92,7 @@ export function GraphRunPage(): React.JSX.Element {
       setRunLog(prev => [...prev, { nodeId, nodeName, nodeType: data.nodeType ?? "llm", startedAt, status: "running" } as NodeRunEvent]);
     });
 
-    window.nyteShiftApi?.onGraphNodeComplete?.((data: any) => {
+    const cleanupNodeComplete = window.nyteShiftApi?.onGraphNodeComplete?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       const no = data.nodeOutput;
       const nodeId: string = no.nodeId;
@@ -146,14 +146,18 @@ export function GraphRunPage(): React.JSX.Element {
       });
     });
 
-    window.nyteShiftApi?.onGraphRunComplete?.((data: any) => {
+    const cleanupRunComplete = window.nyteShiftApi?.onGraphRunComplete?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       setRunning(false);
       if (data.result) setRunResult(data.result);
       if (data.error) setRunError(data.error);
     });
 
-    // no explicit cleanup because preload listeners are global (matches existing patterns)
+    return () => {
+      cleanupNodeStart?.();
+      cleanupNodeComplete?.();
+      cleanupRunComplete?.();
+    };
   }, [runId]);
 
   const handleCancel = async () => {

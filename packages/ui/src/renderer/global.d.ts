@@ -406,9 +406,10 @@ export interface NyteShiftApi {
   /** List all tracked runs for a specific graph (from any source). */
   graphRunsForGraph(graphId: string): Promise<GraphRunRecordInfo[]>;
   graphRunCancel(runId: string): Promise<void>;
-  onGraphNodeStart(cb: (data: { runId: string; nodeId: string; nodeName: string; nodeType?: string }) => void): void;
-  onGraphNodeComplete(cb: (data: { runId: string; nodeOutput: NodeOutputInfo }) => void): void;
-  onGraphRunComplete(cb: (data: { runId: string; result?: GraphExecutionResultInfo; error?: string }) => void): void;
+  onGraphRunRegistered(cb: (data: { runId: string; graphId: string; graphName: string; status: string; source: string; startedAt: number }) => void): () => void;
+  onGraphNodeStart(cb: (data: { runId: string; nodeId: string; nodeName: string; nodeType?: string }) => void): () => void;
+  onGraphNodeComplete(cb: (data: { runId: string; nodeOutput: NodeOutputInfo }) => void): () => void;
+  onGraphRunComplete(cb: (data: { runId: string; result?: GraphExecutionResultInfo; error?: string }) => void): () => void;
 }
 
 // ── Agent Graph Types ──────────────────────────────────────────────────
@@ -430,11 +431,21 @@ export interface ErrorPolicyInfo {
 }
 
 export interface OperationActionInfo {
-  op: "set" | "inc" | "dec" | "copy" | "toggle" | "append";
+  op: "set" | "inc" | "dec" | "copy" | "toggle" | "append" | "extract";
   varName: string;
   value?: unknown;
   fromRef?: string;
+  key?: string;
   amount?: number;
+}
+
+export interface GraphInputInfo {
+  key: string;
+  label?: string;
+  description?: string;
+  type?: "string" | "number" | "boolean" | "json";
+  default?: unknown;
+  required?: boolean;
 }
 
 /**
@@ -498,6 +509,8 @@ export interface GraphDefinitionInfo {
   defaultModel?: string;
   errorPolicy?: ErrorPolicyInfo;
   initVars?: Record<string, unknown>;
+  /** Declared input variables for this graph (editor metadata). */
+  inputs?: GraphInputInfo[];
   maxIterations?: number;
   unbounded?: boolean;
   createdAt: number;

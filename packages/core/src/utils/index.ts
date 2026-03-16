@@ -33,6 +33,11 @@ export function graphsDir(): string {
   return join(nyteShiftHome(), "graphs");
 }
 
+/** ~/.nyteshift/runs — persisted run history */
+export function runsDir(): string {
+  return join(nyteShiftHome(), "runs");
+}
+
 /** ~/.nyteshift/config.json — global user config */
 export function globalConfigPath(): string {
   return join(nyteShiftHome(), "config.json");
@@ -70,7 +75,9 @@ export function toKebab(input: string): string {
 export async function readJsonFile<T = unknown>(path: string): Promise<T> {
   const { readFile } = await import("node:fs/promises");
   const raw = await readFile(path, "utf-8");
-  return JSON.parse(raw) as T;
+  // Strip a UTF-8 BOM (EF BB BF) that some extraction tools or editors prepend;
+  // JSON.parse throws on the BOM character otherwise.
+  return JSON.parse(raw.replace(/^\uFEFF/, "")) as T;
 }
 
 export async function writeJsonFile(path: string, data: unknown): Promise<void> {

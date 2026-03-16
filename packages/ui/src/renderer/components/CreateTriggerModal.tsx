@@ -24,6 +24,7 @@ interface TriggerDefinitionInfo {
   updatedAt: number;
   targetType?: string;
   targetId?: string;
+  triggerInput?: Record<string, unknown>;
 }
 
 interface Props {
@@ -528,6 +529,8 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
   const [targetType, setTargetType] = useState<string>(editTrigger?.targetType ?? "agent");
   const [graphs, setGraphs] = useState<Array<{ id: string; name?: string }>>([]);
   const [selectedGraphId, setSelectedGraphId] = useState<string | undefined>(editTrigger?.targetId);
+  const [selectedGraph, setSelectedGraph] = useState<any | null>(null);
+  const [triggerInput, setTriggerInput] = useState<any>(editTrigger?.triggerInput ?? {});
   // Map monthly/oneoff to "cron" in the type picker so they show as "Scheduled".
   const [type, setType] = useState<TriggerType>(
     editTrigger ? (["monthly", "oneoff"].includes(editTrigger.type) ? "cron" : editTrigger.type as TriggerType) : "cron"
@@ -565,6 +568,22 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
       if (!selectedGraphId && mapped.length > 0) setSelectedGraphId(mapped[0].id);
     }).catch(() => {});
   }, []);
+
+  // Load selected graph definition so we can show its declared inputs
+  useEffect(() => {
+    let mounted = true;
+    if (!selectedGraphId) { setSelectedGraph(null); return; }
+    (async () => {
+      try {
+        const g = await window.nyteShiftApi?.graphLoad?.(selectedGraphId as string);
+        if (!mounted) return;
+        setSelectedGraph(g ?? null);
+      } catch {
+        if (mounted) setSelectedGraph(null);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [selectedGraphId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -609,6 +628,7 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
           ...scheduledFields,
           targetType,
           targetId: targetType === "graph" ? selectedGraphId : undefined,
+          triggerInput: targetType === "graph" ? triggerInput : undefined,
           webhookPath: type === "webhook" ? webhookPath.trim() : undefined,
           webhookSecret: type === "webhook" && webhookSecret.trim() ? webhookSecret.trim() : undefined,
           maxSteps: parseInt(maxSteps, 10) || 10,
@@ -626,6 +646,7 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
           ...scheduledFields,
           targetType,
           targetId: targetType === "graph" ? selectedGraphId : undefined,
+          triggerInput: targetType === "graph" ? triggerInput : undefined,
           webhookPath: type === "webhook" ? webhookPath.trim() : undefined,
           webhookSecret: type === "webhook" && webhookSecret.trim() ? webhookSecret.trim() : undefined,
           maxSteps: parseInt(maxSteps, 10) || 10,
@@ -715,6 +736,33 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
               <select value={selectedGraphId ?? ""} onChange={(e) => setSelectedGraphId(e.target.value)} style={inputStyle}>
                 {graphs.map((g) => <option key={g.id} value={g.id}>{g.name ?? g.id}</option>)}
               </select>
+              {selectedGraph && selectedGraph.inputs && selectedGraph.inputs.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <label style={labelStyle}>Trigger Input</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {selectedGraph.inputs.map((inp: any) => (
+                      <div key={inp.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <label style={{ fontSize: "0.85rem", color: c.subtext, fontWeight: 600 }}>{inp.label ?? inp.key}{inp.required ? " *" : ""}</label>
+                        {inp.type === "boolean" ? (
+                          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <input type="checkbox" checked={!!(triggerInput ?? {})[inp.key]} onChange={e => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.checked })} />
+                            <span style={{ color: c.muted }}>{inp.description ?? ""}</span>
+                          </label>
+                        ) : inp.type === "number" ? (
+                          <input type="number" value={(triggerInput ?? {})[inp.key] ?? ""} onChange={e => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value === "" ? undefined : Number(e.target.value) })} style={inputStyle} />
+                        ) : inp.type === "json" ? (
+                          <textarea style={{ ...inputStyle, minHeight: 80, fontFamily: "monospace" }} value={((triggerInput ?? {})[inp.key] ?? "") as any} onChange={e => {
+                            try { setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: JSON.parse(e.target.value) }); } catch { setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value }); }
+                          }} />
+                        ) : (
+                          <input style={inputStyle} value={(triggerInput ?? {})[inp.key] ?? ""} onChange={e => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value })} />
+                        )}
+                      </div>
+                    ))}
+                    <div style={{ fontSize: "0.82rem", color: c.muted }}>Values saved as the trigger's structured <code style={{ fontFamily: "monospace" }}>triggerInput</code>.</div>
+                  </div>
+                </div>
+              )}
             </>
           )}
 

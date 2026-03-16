@@ -32,6 +32,7 @@ import type {
   TriggerRun,
   PipelineResult,
 } from "../../types/index.js";
+import { saveTriggerRun } from "../runs/runStore.js";
 import { runAutonomousTask } from "../pipeline/autonomous.js";
 import { listAllTriggers } from "./triggerStore.js";
 import {
@@ -687,6 +688,9 @@ export class TriggerEngine extends EventEmitter {
         run.result = graphResult as any;
         run.completedAt = Date.now();
 
+        // Persist run (best-effort)
+        try { void saveTriggerRun(run).catch(() => {}); } catch {}
+
         log(`trigger "${trigger.name}" completed — graph trace="${(graphResult as any)?.traceId ?? ""}"`);
         this.emit("run:completed", run);
       } else {
@@ -704,6 +708,9 @@ export class TriggerEngine extends EventEmitter {
         run.result = result;
         run.completedAt = Date.now();
 
+        // Persist run (best-effort)
+        try { void saveTriggerRun(run).catch(() => {}); } catch {}
+
         log(`trigger "${trigger.name}" completed — output: "${result.finalOutput.slice(0, 120)}"`);
         this.emit("run:completed", run);
       }
@@ -711,6 +718,9 @@ export class TriggerEngine extends EventEmitter {
       run.status = "failed";
       run.error = (err as Error).message ?? String(err);
       run.completedAt = Date.now();
+
+      // Persist failed run (best-effort)
+      try { void saveTriggerRun(run).catch(() => {}); } catch {}
 
       logE(`trigger "${trigger.name}" failed:`, run.error);
       this.emit("run:failed", run);
@@ -765,6 +775,13 @@ export class TriggerEngine extends EventEmitter {
     if (this.runs.length > this.maxRunHistory) {
       this.runs = this.runs.slice(0, this.maxRunHistory);
     }
+  }
+
+  /** Merge persisted runs into the in-memory history (newest-first). */
+  addPersistedRuns(runs: TriggerRun[]): void {
+    if (!runs || runs.length === 0) return;
+    this.runs = [...runs, ...this.runs];
+    this.trimRunHistory();
   }
 }
 

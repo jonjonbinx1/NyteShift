@@ -337,11 +337,14 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, 
 
   const insertRefIntoRawJson = (refKey: string) => {
     if (!refKey) return;
-    let tpl: string;
-    if (refKey.startsWith("{{")) tpl = refKey;
-    else if (refKey.startsWith("vars:")) tpl = `{{vars.${refKey.slice(5)}}}`;
-    else if (refKey.startsWith("node:")) tpl = `{{${refKey.slice(5)}.output}}`;
-    else tpl = `{{${refKey}}}`;
+    let inner: string;
+    if (refKey.startsWith("{{")) inner = refKey;
+    else if (refKey.startsWith("vars:")) inner = `{{vars.${refKey.slice(5)}}}`;
+    else if (refKey.startsWith("node:")) inner = `{{${refKey.slice(5)}.output}}`;
+    else inner = `{{${refKey}}}`;
+    // Wrap in quotes so the inserted value is immediately valid JSON.
+    // The runtime resolves the template at graph execution time.
+    const tpl = `"${inner}"`;
     if (rawJsonRef.current) {
       const el = rawJsonRef.current;
       const start = el.selectionStart ?? rawToolJson.length;
@@ -948,10 +951,51 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, 
             </div>
 
             <div style={sectionStyle}>
-              <label style={labelStyle}>Trigger Input (JSON)</label>
-              <textarea style={{ ...textareaStyle, minHeight: 80 }} value={typeof node.triggerInput === "string" ? node.triggerInput : JSON.stringify(node.triggerInput ?? {}, null, 2)} onChange={e => {
-                try { set("triggerInput", JSON.parse(e.target.value) as any); } catch { set("triggerInput", e.target.value as any); }
-              }} />
+              <label style={labelStyle}>Trigger Input</label>
+              {node.targetType === "graph" && node.targetId ? (
+                (() => {
+                  const selected = graphs.find(g => g.id === node.targetId);
+                  if (selected?.inputs && selected.inputs.length > 0) {
+                    const cur: Record<string, unknown> = typeof node.triggerInput === "string" ? (() => { try { return JSON.parse(node.triggerInput as string) as Record<string, unknown>; } catch { return {}; } })() : (node.triggerInput ?? {});
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {selected.inputs.map((inp) => (
+                          <div key={inp.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            <label style={{ fontSize: "0.8rem", color: C.subtext0, fontWeight: 600 }}>{inp.label ?? inp.key}{inp.required ? " *" : ""}</label>
+                            {inp.type === "boolean" ? (
+                              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <input type="checkbox" checked={!!cur[inp.key]} onChange={e => set("triggerInput", { ...(cur ?? {}), [inp.key]: e.target.checked })} />
+                                <span style={{ color: C.overlay0 }}>{inp.description ?? ""}</span>
+                              </label>
+                            ) : inp.type === "number" ? (
+                              <input type="number" value={cur[inp.key] === undefined ? "" : String(cur[inp.key])} onChange={e => set("triggerInput", { ...(cur ?? {}), [inp.key]: e.target.value === "" ? undefined : Number(e.target.value) })} style={inputStyle} />
+                            ) : inp.type === "json" ? (
+                              <textarea style={textareaStyle} value={cur[inp.key] === undefined ? "" : (typeof cur[inp.key] === "string" ? cur[inp.key] as string : JSON.stringify(cur[inp.key]))} onChange={e => {
+                                let parsed: unknown;
+                                try { parsed = JSON.parse(e.target.value); } catch { parsed = e.target.value; }
+                                set("triggerInput", { ...(cur ?? {}), [inp.key]: parsed });
+                              }} />
+                            ) : (
+                              <input style={inputStyle} value={cur[inp.key] === undefined ? "" : String(cur[inp.key])} onChange={e => set("triggerInput", { ...(cur ?? {}), [inp.key]: e.target.value })} />
+                            )}
+                          </div>
+                        ))}
+                        <div style={{ fontSize: "0.8rem", color: C.overlay0 }}>Values will be stored as the trigger's structured `triggerInput`.</div>
+                      </div>
+                    );
+                  }
+                  // fallback: plain JSON editor when no input schema available
+                  return (
+                    <textarea style={{ ...textareaStyle, minHeight: 80 }} value={typeof node.triggerInput === "string" ? node.triggerInput : JSON.stringify(node.triggerInput ?? {}, null, 2)} onChange={e => {
+                      try { set("triggerInput", JSON.parse(e.target.value) as any); } catch { set("triggerInput", e.target.value as any); }
+                    }} />
+                  );
+                })()
+              ) : (
+                <textarea style={{ ...textareaStyle, minHeight: 80 }} value={typeof node.triggerInput === "string" ? node.triggerInput : JSON.stringify(node.triggerInput ?? {}, null, 2)} onChange={e => {
+                  try { set("triggerInput", JSON.parse(e.target.value) as any); } catch { set("triggerInput", e.target.value as any); }
+                }} />
+              )}
             </div>
 
             <div style={sectionStyle}>
@@ -982,6 +1026,7 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, 
               <option value="copy">copy — copy from a node ref</option>
               <option value="toggle">toggle — flip a boolean</option>
               <option value="append">append — push to an array</option>
+              <option value="extract">extract — extract a JSON path/value</option>
             </select>
             <label style={{ ...labelStyle, marginTop: 8 }}>Variable Name</label>
             <input style={inputStyle}
@@ -1029,6 +1074,104 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, 
                     const prev: OperationActionInfo = node.operationAction ?? { op: "copy", varName: "" };
                     set("operationAction", { ...prev, fromRef: e.target.value });
                   }} />
+              </>
+            )}
+            {node.operationAction?.op === "extract" && (
+              <>
+                {/* Source with ref-picker */}
+                <label style={{ ...labelStyle, marginTop: 8 }}>Source</label>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input style={{ ...inputStyle, flex: 1 }}
+                    value={node.operationAction?.fromRef ?? ""}
+                    placeholder="{{fetch.output.messages}}  or  fetch.output.items"
+                    onChange={e => {
+                      const prev: OperationActionInfo = node.operationAction ?? { op: "extract", varName: "" };
+                      set("operationAction", { ...prev, fromRef: e.target.value });
+                    }} />
+                  <select
+                    style={{ padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: C.mantle, color: C.text, fontSize: "0.78rem", flexShrink: 0 }}
+                    onChange={e => {
+                      const v = (e.target as HTMLSelectElement).value;
+                      if (!v) return;
+                      let tpl = "";
+                      if (v.startsWith("vars:")) tpl = `{{vars.${v.slice(5)}}}`;
+                      else if (v.startsWith("node:")) tpl = `{{${v.slice(5)}.output}}`;
+                      else tpl = `{{${v}}}`;
+                      const prev: OperationActionInfo = node.operationAction ?? { op: "extract", varName: "" };
+                      set("operationAction", { ...prev, fromRef: tpl });
+                      (e.target as HTMLSelectElement).value = "";
+                    }}
+                  >
+                    <option value="">Pick ref…</option>
+                    {Object.keys(vars ?? {}).length > 0 && (
+                      <optgroup label="Vars">
+                        {Object.keys(vars ?? {}).map(k => <option key={`vars:${k}`} value={`vars:${k}`}>{k}</option>)}
+                      </optgroup>
+                    )}
+                    {otherNodes.length > 0 && (
+                      <optgroup label="Node outputs">
+                        {otherNodes.map(n => <option key={`node:${n.outputKey ?? n.id}`} value={`node:${n.outputKey ?? n.id}`}>{n.name ?? n.id}</option>)}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+                <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 2 }}>
+                  Wrap in <code style={{ color: C.teal }}>{"{{...}}"}</code> to resolve at runtime, e.g.{" "}
+                  <code style={{ color: C.teal }}>{"{{fetch.output.messages}}"}</code>
+                </div>
+
+                {/* Path to extract */}
+                <label style={{ ...labelStyle, marginTop: 10 }}>
+                  Path to extract{" "}
+                  <span style={{ color: C.overlay0, fontWeight: 400 }}>(optional)</span>
+                </label>
+                <input style={inputStyle}
+                  value={(node.operationAction as any)?.key ?? ""}
+                  placeholder="uid  ·  author.name  ·  results[0].id  — leave blank to copy source as-is"
+                  onChange={e => {
+                    const prev: OperationActionInfo = node.operationAction ?? { op: "extract", varName: "" };
+                    set("operationAction", { ...prev, key: e.target.value });
+                  }} />
+
+                {/* Live expression preview */}
+                {(() => {
+                  const fr = node.operationAction?.fromRef ?? "";
+                  const k = (node.operationAction as any)?.key ?? "";
+                  const vn = node.operationAction?.varName || "…";
+                  if (!fr) return null;
+                  const srcLabel = fr.length > 32 ? fr.slice(0, 29) + "…" : fr;
+                  return (
+                    <div style={{
+                      marginTop: 10,
+                      padding: "8px 10px",
+                      background: C.mantle,
+                      border: `1px solid ${C.surface1}`,
+                      borderRadius: 8,
+                      fontSize: "0.72rem",
+                      color: C.subtext0,
+                      lineHeight: 1.6,
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                        <code style={{ color: C.teal, background: C.surface0, padding: "1px 5px", borderRadius: 4 }}>{srcLabel}</code>
+                        {k ? (
+                          <>
+                            <span style={{ color: C.overlay0 }}>→</span>
+                            <code style={{ color: C.yellow, background: C.surface0, padding: "1px 5px", borderRadius: 4 }}>.{k}</code>
+                          </>
+                        ) : (
+                          <span style={{ color: C.overlay0 }}>→ whole value</span>
+                        )}
+                        <span style={{ color: C.overlay0 }}>→</span>
+                        <code style={{ color: C.mauve, background: C.surface0, padding: "1px 5px", borderRadius: 4 }}>vars.{vn}</code>
+                      </div>
+                      <div style={{ marginTop: 5, color: C.overlay0 }}>
+                        {k
+                          ? `Array source: collects .${k} from every item. Object source: stores the single value at .${k}.`
+                          : `Stores the resolved source value directly in vars.${vn}.`}
+                      </div>
+                    </div>
+                  );
+                })()}
               </>
             )}
             {node.operationAction?.op === "append" && (

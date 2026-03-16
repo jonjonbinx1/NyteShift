@@ -47,6 +47,9 @@ import {
   updateTriggerDefinition,
   deleteTriggerDefinition,
   getTriggerEngine,
+  listPersistedGraphRuns,
+  listPersistedTriggerRuns,
+  prunePersistedRuns,
   // Skill / Tool Config
   readSkillToolConfig,
   writeSkillToolConfig,
@@ -79,6 +82,46 @@ if (process.platform === "win32") {
 }
 
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * True only while the renderer frame is fully loaded and able to receive IPC.
+ * Flips to false during navigation/reload (will-navigate) and back to
+ * true when the DOM is ready (dom-ready).  This prevents the "Render frame
+ * was disposed before WebFrameMain could be accessed" Electron error that
+ * occurs when background events (registry, trigger engine) fire mid-reload.
+ */
+let rendererFrameReady = false;
+
+/**
+ * Send an IPC message to the renderer only when the window, its webContents,
+ * and the render frame are all alive and ready.
+ */
+function safeSend(channel: string, ...args: unknown[]): void {
+  if (!rendererFrameReady) {
+    if (process.env.NYTESHIFT_DEBUG_IPC === "true") {
+      console.warn(`[IPC] dropping "${channel}" — rendererFrameReady=false`);
+    }
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (process.env.NYTESHIFT_DEBUG_IPC === "true") {
+      console.warn(`[IPC] dropping "${channel}" — mainWindow destroyed`);
+    }
+    return;
+  }
+  const wc = mainWindow.webContents;
+  if (!wc || wc.isDestroyed()) {
+    if (process.env.NYTESHIFT_DEBUG_IPC === "true") {
+      console.warn(`[IPC] dropping "${channel}" — webContents destroyed`);
+    }
+    return;
+  }
+  try {
+    wc.send(channel, ...args);
+  } catch (err) {
+    console.warn(`[IPC] safeSend "${channel}" failed:`, (err as Error).message);
+  }
+}
 
 function createWindow(): void {
   // prefer preload.js when available (build now outputs .js)
@@ -124,6 +167,21 @@ function createWindow(): void {
   if (process.env.ELECTRON_RENDERER_URL && process.env.NYTESHIFT_DEVTOOLS !== "false") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
+
+  // Track render-frame readiness so safeSend never fires into a disposed frame.
+  // will-navigate fires only on real document navigations/reloads (NOT on SPA
+  // client-side routing or subresource loads).  did-start-loading was the
+  // previous choice but it fires for favicon/font/image fetches too, causing
+  // rendererFrameReady to flip false mid-run and drop all live IPC events.
+  mainWindow.webContents.on("will-navigate", () => { rendererFrameReady = false; });
+  mainWindow.webContents.on("dom-ready", () => { rendererFrameReady = true; });
+  // Belt-and-suspenders: did-finish-load fires after dom-ready and ensures the
+  // flag is true even if dom-ready races with a brief sub-navigation.
+  mainWindow.webContents.on("did-finish-load", () => { rendererFrameReady = true; });
+  mainWindow.on("closed", () => {
+    rendererFrameReady = false;
+    mainWindow = null;
+  });
 
   // In dev, load Vite dev server; in prod, load the built file.
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -303,7 +361,7 @@ function registerIpc(): void {
         ...(opts || {}),
         signal: controller.signal,
         onStep: (step: any) => {
-          try { mainWindow?.webContents.send("run:step", { runId, agentName: name, sessionId, step }); } catch {}
+          safeSend("run:step", { runId, agentName: name, sessionId, step });
         },
       } as any;
       const result = await runAutonomousTask(name, task, runOptions);
@@ -317,7 +375,7 @@ function registerIpc(): void {
       // Notify renderer that a run completed (useful if user navigated away)
       // include the full result so the UI can record the output when it isn't
       // currently visible.
-      try { mainWindow?.webContents.send("run:completed", { runId, agentName: name, sessionId, result }); } catch {}
+      safeSend("run:completed", { runId, agentName: name, sessionId, result });
       return result;
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
@@ -328,7 +386,7 @@ function registerIpc(): void {
         error: msg,
         startedAt: activeRuns.get(runId)?.startedAt || Date.now(),
       });
-      try { mainWindow?.webContents.send("run:completed", { runId, agentName: name, sessionId, error: msg }); } catch {}
+      safeSend("run:completed", { runId, agentName: name, sessionId, error: msg });
       throw err;
     } finally {
       runControllers.delete(runId);
@@ -1052,14 +1110,24 @@ function registerIpc(): void {
 
   // Forward graphRunRegistry events to the renderer so live progress works
   // for ALL graph runs (manual, trigger-engine, trigger-node) uniformly.
+  graphRunRegistry.on("registered", (record: import("@nyteshift/core").GraphRunRecord) => {
+    safeSend("graph:runRegistered", {
+      runId: record.runId,
+      graphId: record.graphId,
+      graphName: record.graphName,
+      status: record.status,
+      source: record.source,
+      startedAt: record.startedAt,
+    });
+  });
   graphRunRegistry.on("node:start", (data: { runId: string; nodeId: string; nodeName: string; nodeType?: string }) => {
-    try { mainWindow?.webContents.send("graph:nodeStart", data); } catch {}
+    safeSend("graph:nodeStart", data);
   });
   graphRunRegistry.on("node:complete", (data: { runId: string; nodeOutput: unknown }) => {
-    try { mainWindow?.webContents.send("graph:nodeComplete", data); } catch {}
+    safeSend("graph:nodeComplete", data);
   });
   graphRunRegistry.on("run:complete", (data: { runId: string; result?: unknown; error?: string }) => {
-    try { mainWindow?.webContents.send("graph:runComplete", data); } catch {}
+    safeSend("graph:runComplete", data);
     graphRunControllers.delete(data.runId);
   });
 
@@ -1073,14 +1141,24 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("graph:run", async (_e, graphOrId: unknown, opts?: unknown) => {
-    const runId = `graph:${randomUUID()}`;
+    const optsObj = (opts as Record<string, unknown>) ?? {};
+    // Accept a caller-supplied runId so the renderer can set its event-filter
+    // ref BEFORE the IPC round-trip, eliminating the race condition where early
+    // node:start/node:complete events arrive before the invoke promise resolves.
+    const providedId = typeof optsObj.runId === "string" ? optsObj.runId : "";
+    const runId = /^[\w:.-]{1,200}$/.test(providedId) ? providedId : `graph:${randomUUID()}`;
+
     const controller = new AbortController();
     graphRunControllers.set(runId, controller);
-    const options = { ...((opts as Record<string, unknown>) ?? {}), signal: controller.signal };
+    // Strip runId from the options before forwarding to the graph runner.
+    const { runId: _r, ...restOpts } = optsObj;
+    const options = { ...restOpts, signal: controller.signal };
 
-    // Fire-and-forget — returns the runId immediately; progress arrives via
-    // the registry event listeners above.
-    runGraphTracked(graphOrId as any, options as any, { source: "manual" }, runId).catch(() => {});
+    // Start on the next tick so the IPC reply is sent first (belt-and-suspenders
+    // alongside the pre-generated runId approach in the renderer).
+    setImmediate(() => {
+      void runGraphTracked(graphOrId as any, options as any, { source: "manual" }, runId).catch(() => {});
+    });
 
     return { runId };
   });
@@ -1168,17 +1246,223 @@ app.whenReady().then(async () => {
       console.error("[NyteShift] fallback dir creation also failed:", fallbackErr);
     }
   }
+    // Prune persisted runs per user config and restore saved runs into memory
+    // Then schedule recurring pruning according to `runRetention.pruneSchedule`.
+    async function schedulePruneJobs(schedule?: string) {
+      // Helpers
+      function parseHHMM(s: string): { h: number; m: number } | null {
+        const m = String(s || "").match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) return null;
+        const h = parseInt(m[1], 10);
+        const mm = parseInt(m[2], 10);
+        if (isNaN(h) || isNaN(mm) || h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+        return { h, m: mm };
+      }
+
+      function parseIntervalShorthand(expr: string): number | null {
+        const re = /^(\d+)\s*(s|sec|m|min|h|hr|hour|d|day)s?$/i;
+        const m = String(expr || "").trim().match(re);
+        if (!m) return null;
+        const v = parseInt(m[1], 10);
+        const u = m[2].toLowerCase();
+        const mult: Record<string, number> = { s: 1000, sec: 1000, m: 60000, min: 60000, h: 3600000, hr: 3600000, hour: 3600000, d: 86400000, day: 86400000 };
+        return (mult[u] ?? null) ? v * mult[u] : null;
+      }
+
+      // Minimal cron parser (5-field) copied/adapted from core cronParser
+      function parseField(field: string, min: number, max: number): Set<number> {
+        const values = new Set<number>();
+        for (const part of field.split(",")) {
+          const t = part.trim();
+          if (t === "*") {
+            for (let i = min; i <= max; i++) values.add(i);
+          } else if (t.includes("/")) {
+            const [rangeStr, stepStr] = t.split("/");
+            const step = parseInt(stepStr, 10);
+            const start = rangeStr === "*" ? min : parseInt(rangeStr, 10);
+            for (let i = start; i <= max; i += step) values.add(i);
+          } else if (t.includes("-")) {
+            const [s, e] = t.split("-");
+            const si = parseInt(s, 10); const ei = parseInt(e, 10);
+            for (let i = si; i <= ei; i++) values.add(i);
+          } else {
+            const val = parseInt(t, 10);
+            values.add(val);
+          }
+        }
+        return values;
+      }
+      function parseCron(expr: string) {
+        const parts = expr.trim().split(/\s+/);
+        if (parts.length !== 5) throw new Error("Invalid cron");
+        return {
+          minute: parseField(parts[0], 0, 59),
+          hour: parseField(parts[1], 0, 23),
+          dayOfMonth: parseField(parts[2], 1, 31),
+          month: parseField(parts[3], 1, 12),
+          dayOfWeek: parseField(parts[4], 0, 6),
+        } as any;
+      }
+      function matchesCron(fields: any, d: Date) {
+        return (
+          fields.minute.has(d.getMinutes()) &&
+          fields.hour.has(d.getHours()) &&
+          fields.dayOfMonth.has(d.getDate()) &&
+          fields.month.has(d.getMonth() + 1) &&
+          fields.dayOfWeek.has(d.getDay())
+        );
+      }
+
+      let minuteAlignTimeout: NodeJS.Timeout | null = null;
+      let minuteInterval: NodeJS.Timeout | null = null;
+      let rawInterval: NodeJS.Timeout | null = null;
+
+      function clearTimers() {
+        if (minuteAlignTimeout) { clearTimeout(minuteAlignTimeout); minuteAlignTimeout = null; }
+        if (minuteInterval) { clearInterval(minuteInterval); minuteInterval = null; }
+        if (rawInterval) { clearInterval(rawInterval); rawInterval = null; }
+      }
+
+      function startMinuteTicker(checkFn: (d: Date) => Promise<void> | void) {
+        const align = 60_000 - (Date.now() % 60_000);
+        minuteAlignTimeout = setTimeout(() => {
+          // run once at the aligned minute boundary
+          void checkFn(new Date());
+          minuteInterval = setInterval(() => void checkFn(new Date()), 60_000);
+        }, align);
+      }
+
+      async function checkAndPruneForDaily(hour: number, minute: number) {
+        const now = new Date();
+        if (now.getHours() === hour && now.getMinutes() === minute) {
+          try { await prunePersistedRuns(); } catch (err) { console.warn("[NyteShift] scheduled prune failed:", (err as Error).message ?? err); }
+        }
+      }
+
+      async function checkAndPruneForWeekly(targetDow: number, hour: number, minute: number) {
+        const now = new Date();
+        if (now.getDay() === targetDow && now.getHours() === hour && now.getMinutes() === minute) {
+          try { await prunePersistedRuns(); } catch (err) { console.warn("[NyteShift] scheduled prune failed:", (err as Error).message ?? err); }
+        }
+      }
+
+      async function checkAndPruneForMonthly(dayOfMonth: number, hour: number, minute: number) {
+        const now = new Date();
+        if (now.getDate() === dayOfMonth && now.getHours() === hour && now.getMinutes() === minute) {
+          try { await prunePersistedRuns(); } catch (err) { console.warn("[NyteShift] scheduled prune failed:", (err as Error).message ?? err); }
+        }
+      }
+
+      if (!schedule) schedule = "daily@00:00";
+      const s = String(schedule).trim();
+
+      // Interval shorthand like "24h", "7d"
+      const intervalMs = parseIntervalShorthand(s);
+      if (intervalMs !== null) {
+        rawInterval = setInterval(() => { void prunePersistedRuns().catch((err) => console.warn('[NyteShift] scheduled prune failed:', (err as Error).message ?? err)); }, intervalMs);
+        console.log(`[NyteShift] scheduled run pruning every ${intervalMs}ms (interval shorthand)`);
+        return () => clearTimers();
+      }
+
+      // daily@HH:MM
+      const dailyMatch = s.match(/^daily(?:@(\d{1,2}:\d{2}))?$/i);
+      if (dailyMatch) {
+        const time = parseHHMM(dailyMatch[1] ?? "00:00") ?? { h: 0, m: 0 };
+        startMinuteTicker((d) => checkAndPruneForDaily(time.h, time.m));
+        console.log(`[NyteShift] scheduled daily pruning at ${String(time.h).padStart(2,'0')}:${String(time.m).padStart(2,'0')}`);
+        return () => clearTimers();
+      }
+
+      // weekly@DAY@HH:MM  (DAY = 0..6 or sun|mon|tue...)
+      const weeklyMatch = s.match(/^weekly@([A-Za-z0-9_-]+)(?:@(\d{1,2}:\d{2}))?$/i);
+      if (weeklyMatch) {
+        const dayRaw = weeklyMatch[1].toLowerCase();
+        const dowMap: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+        let dow = dowMap[dayRaw] ?? Number(dayRaw);
+        if (isNaN(dow) || dow < 0 || dow > 6) dow = 1; // default Monday
+        const time = parseHHMM(weeklyMatch[2] ?? "00:00") ?? { h: 0, m: 0 };
+        startMinuteTicker((d) => checkAndPruneForWeekly(dow, time.h, time.m));
+        console.log(`[NyteShift] scheduled weekly pruning on ${dow} at ${String(time.h).padStart(2,'0')}:${String(time.m).padStart(2,'0')}`);
+        return () => clearTimers();
+      }
+
+      // monthly@DAY@HH:MM  (DAY 1..31)
+      const monthlyMatch = s.match(/^monthly@(\d{1,2})(?:@(\d{1,2}:\d{2}))?$/i);
+      if (monthlyMatch) {
+        const dayNum = Math.max(1, Math.min(31, parseInt(monthlyMatch[1], 10) || 1));
+        const time = parseHHMM(monthlyMatch[2] ?? "00:00") ?? { h: 0, m: 0 };
+        startMinuteTicker((d) => checkAndPruneForMonthly(dayNum, time.h, time.m));
+        console.log(`[NyteShift] scheduled monthly pruning on day ${dayNum} at ${String(time.h).padStart(2,'0')}:${String(time.m).padStart(2,'0')}`);
+        return () => clearTimers();
+      }
+
+      // Cron expression (5 fields)
+      const cronParts = s.split(/\s+/);
+      if (cronParts.length === 5) {
+        let fields: any;
+        try { fields = parseCron(s); } catch (err) { console.warn('[NyteShift] invalid cron for pruneSchedule:', s); return () => clearTimers(); }
+        startMinuteTicker(async (d) => { if (matchesCron(fields, d)) { try { await prunePersistedRuns(); } catch (err) { console.warn('[NyteShift] scheduled prune failed:', (err as Error).message ?? err); } } });
+        console.log(`[NyteShift] scheduled pruning via cron: ${s}`);
+        return () => clearTimers();
+      }
+
+      // Fallback: daily at midnight
+      startMinuteTicker((d) => checkAndPruneForDaily(0, 0));
+      console.log('[NyteShift] scheduled pruning fallback: daily@00:00');
+      return () => clearTimers();
+    }
+
+    try {
+      const cfg = await readGlobalConfig();
+      const retention = (cfg as any).runRetention ?? {};
+      if (retention.enabled === false) {
+        console.log("[NyteShift] runRetention disabled — skipping prune and scheduling");
+      } else {
+        try {
+          await prunePersistedRuns();
+        } catch (err) {
+          console.warn("[NyteShift] prunePersistedRuns failed:", (err as Error).message ?? err);
+        }
+      }
+    } catch (err) {
+      console.warn("[NyteShift] failed to read global config for run retention:", (err as Error).message ?? err);
+    }
+
+    try {
+      const persistedGraphRuns = await listPersistedGraphRuns();
+      if (persistedGraphRuns.length) {
+        try { graphRunRegistry.restoreRuns(persistedGraphRuns as any); console.log(`[NyteShift] restored ${persistedGraphRuns.length} graph run(s)`); } catch (err) { console.warn("restore graph runs failed:", err); }
+      }
+    } catch (err) {
+      console.warn("[NyteShift] failed to read persisted graph runs:", (err as Error).message ?? err);
+    }
+
+    try {
+      const persistedTriggerRuns = await listPersistedTriggerRuns();
+      if (persistedTriggerRuns.length) {
+        try { const engine = getTriggerEngine(); engine.addPersistedRuns(persistedTriggerRuns as any); console.log(`[NyteShift] restored ${persistedTriggerRuns.length} trigger run(s)`); } catch (err) { console.warn("restore trigger runs failed:", err); }
+      }
+    } catch (err) {
+      console.warn("[NyteShift] failed to read persisted trigger runs:", (err as Error).message ?? err);
+    }
+
+    // Schedule recurring pruning according to user config
+    try {
+      const cfg = await readGlobalConfig();
+      const retention = (cfg as any).runRetention ?? {};
+      if (retention.enabled !== false) {
+        void schedulePruneJobs(retention.pruneSchedule ?? undefined);
+      }
+    } catch (err) {
+      console.warn("[NyteShift] failed to schedule run pruning:", (err as Error).message ?? err);
+    }
   registerIpc();
   createWindow();
 
   // Notify renderer when user providers finish loading so UI can refresh lists
   try {
     whenUserProvidersLoaded().then(() => {
-      try {
-        mainWindow?.webContents.send("providers:changed");
-      } catch (err) {
-        console.error("failed to send providers:changed:", err);
-      }
+      safeSend("providers:changed");
     }).catch((err) => {
       console.error("whenUserProvidersLoaded error:", err);
     });
@@ -1238,15 +1522,9 @@ app.whenReady().then(async () => {
   // Start trigger engine so cron/webhook triggers run in the background.
   try {
     const triggerEngine = getTriggerEngine();
-    triggerEngine.on("run:started", (run: any) => {
-      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
-    });
-    triggerEngine.on("run:completed", (run: any) => {
-      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
-    });
-    triggerEngine.on("run:failed", (run: any) => {
-      try { mainWindow?.webContents.send("triggers:runUpdate", run); } catch {}
-    });
+    triggerEngine.on("run:started", (run: any) => { safeSend("triggers:runUpdate", run); });
+    triggerEngine.on("run:completed", (run: any) => { safeSend("triggers:runUpdate", run); });
+    triggerEngine.on("run:failed", (run: any) => { safeSend("triggers:runUpdate", run); });
     triggerEngine.start().then(() => {
       console.log("[NyteShift] trigger engine started");
     }).catch((err) => {

@@ -87,13 +87,15 @@ export interface OperationAction {
    * toggle — vars[varName] = !vars[varName]
    * append — vars[varName].push(value)
    */
-  op: "set" | "inc" | "dec" | "copy" | "toggle" | "append";
+  op: "set" | "inc" | "dec" | "copy" | "toggle" | "append" | "extract";
   /** Name of the variable to mutate (written as `vars.<varName>` in templates). */
   varName: string;
   /** Static value for `set` and `append` (supports {{ref}} strings). */
   value?: unknown;
   /** Dot-path reference for `copy` (e.g. "fetchTool.output.hasNext"). */
   fromRef?: string;
+  /** When op="extract", the key to pluck from each array element (dot-path). */
+  key?: string;
   /** Numeric increment/decrement amount (default 1). */
   amount?: number;
 }
@@ -289,6 +291,21 @@ export interface GraphDefinition {
   description?: string;
   /** Semantic version string. */
   version: string;
+  /** Declared input variables for this graph (UI metadata). */
+  inputs?: Array<{
+    /** Input key used at runtime (e.g. "query"). */
+    key: string;
+    /** Friendly label for the UI. */
+    label?: string;
+    /** Human-friendly description shown in editors. */
+    description?: string;
+    /** Input type controlling editor widget. */
+    type?: "string" | "number" | "boolean" | "json";
+    /** Default value for the input. */
+    default?: unknown;
+    /** Whether the input is required at run time. */
+    required?: boolean;
+  }>;
   /** Ordered list of graph nodes. */
   nodes: GraphNode[];
   /** Directed edges between nodes. */

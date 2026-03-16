@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { ThemePalette } from "../theme/themes.js";
-import type { GraphDefinitionInfo, GraphNodeInfo, GraphEdgeInfo, GraphExecutionResultInfo, GraphRunRecordInfo, ToolInfo, NodeRunState, NodeRunEvent, CatchTrigger } from "../global.js";
+import type { GraphDefinitionInfo, GraphNodeInfo, GraphEdgeInfo, GraphExecutionResultInfo, GraphRunRecordInfo, ToolInfo, NodeRunState, NodeRunEvent, CatchTrigger, GraphInputInfo } from "../global.js";
 import { GraphCanvas, NODE_TYPE_STYLES } from "../components/GraphCanvas.js";
 import { NodeConfigPanel } from "../components/NodeConfigPanel.js";
 import type { SkillInfo } from "../components/NodeConfigPanel.js";
 import VarsEditor from "../components/VarsEditor.js";
+import InputVariablesEditor from "../components/InputVariablesEditor.js";
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ export function GraphBuilderPage(): React.JSX.Element {
   const [jsonText, setJsonText] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [varsOpen, setVarsOpen] = useState(false);
+  const [inputsOpen, setInputsOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"" | "saved" | "error">("");
@@ -137,7 +139,7 @@ export function GraphBuilderPage(): React.JSX.Element {
 
   // ── Register IPC listeners for run events ──────────────────────────────────
   useEffect(() => {
-    window.nyteShiftApi?.onGraphNodeStart?.((data: any) => {
+    const cleanupStart = window.nyteShiftApi?.onGraphNodeStart?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       const nodeId: string = data.nodeId;
       const nodeName: string = data.nodeName;
@@ -155,7 +157,7 @@ export function GraphBuilderPage(): React.JSX.Element {
         status: "running",
       } as NodeRunEvent]);
     });
-    window.nyteShiftApi?.onGraphNodeComplete?.((data: any) => {
+    const cleanupComplete = window.nyteShiftApi?.onGraphNodeComplete?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       const no = data.nodeOutput;
       const nodeId: string = no.nodeId;
@@ -210,23 +212,44 @@ export function GraphBuilderPage(): React.JSX.Element {
         return [...prev, newEntry];
       });
     });
-    window.nyteShiftApi?.onGraphRunComplete?.((data: any) => {
+    const cleanupRunComplete = window.nyteShiftApi?.onGraphRunComplete?.((data: any) => {
       if (data.runId !== runIdRef.current) return;
       setRunning(false);
       if (data.result) setRunResult(data.result);
       if (data.error) setRunError(data.error);
     });
+
+    return () => {
+      cleanupStart?.();
+      cleanupComplete?.();
+      cleanupRunComplete?.();
+    };
   }, []); // register once on mount
 
   // ── Restore any active runs for this graph when graph is available ─────
   useEffect(() => {
     if (isNew || !graph?.id) return;
+
+    let cancelled = false;
+    // Snapshot the ref value NOW (before any async work).  If handleRun fires
+    // while the IPC is in-flight and writes a NEW runId into the ref, we bail
+    // rather than overwriting it with a stale restored ID — that was the root
+    // cause of event-filter mismatches that left the run panel stuck on
+    // "Starting execution...".
+    const runIdSnapshot = runIdRef.current;
+    const graphId = graph.id;
+
     (async () => {
       try {
-        const runs = await window.nyteShiftApi?.graphRuns() ?? [];
-        const myRuns = (runs as any[]).filter(r => r.graphId === graph.id);
-        if (!myRuns || myRuns.length === 0) return;
-        const latest = myRuns.reduce((a, b) => ((a.startedAt ?? 0) > (b.startedAt ?? 0) ? a : b));
+        // Use the per-graph query instead of graphRuns() so we don't
+        // deserialise all 2000+ runs over IPC on every page load.
+        const runs = await window.nyteShiftApi?.graphRunsForGraph(graphId) ?? [];
+        if (cancelled) return;
+        // If handleRun already started a new run while we were waiting, skip.
+        if (runIdRef.current !== runIdSnapshot) return;
+        if (!runs || runs.length === 0) return;
+        const latest = (runs as any[]).reduce((a: any, b: any) =>
+          ((a.startedAt ?? 0) > (b.startedAt ?? 0) ? a : b));
         if (!latest) return;
 
         setRunId(latest.runId);
@@ -269,6 +292,7 @@ export function GraphBuilderPage(): React.JSX.Element {
         console.error("error restoring graph runs:", err);
       }
     })();
+    return () => { cancelled = true; };
   }, [graph?.id, isNew]);
 
   // ── Graph mutations ─────────────────────────────────────────────────────────
@@ -317,7 +341,7 @@ export function GraphBuilderPage(): React.JSX.Element {
     setGraph(g => ({ ...g, ...patch, updatedAt: Date.now() }));
   }, []);
 
-  const addNode = useCallback((type: GraphNodeInfo["type"]) => {
+  const addNode = useCallback((type: GraphNodeInfo["type"], position?: { x: number; y: number }) => {
     const id = nextId(type);
     const count = graph.nodes.filter(n => n.type === type).length;
     const defaults: Partial<GraphNodeInfo> = type === "llm"
@@ -337,9 +361,9 @@ export function GraphBuilderPage(): React.JSX.Element {
       : {};
 
     const name = `${NODE_TYPE_STYLES[type]?.label ?? type} ${count + 1}`;
-    // Place near center of viewport, staggered
-    const x = 220 + (graph.nodes.length % 3) * 240;
-    const y = 120 + Math.floor(graph.nodes.length / 3) * 150;
+    // Place at drop position when provided, otherwise near center of viewport staggered
+    const x = position?.x ?? (220 + (graph.nodes.length % 3) * 240);
+    const y = position?.y ?? (120 + Math.floor(graph.nodes.length / 3) * 150);
 
     setGraph(g => ({
       ...g,
@@ -485,6 +509,15 @@ export function GraphBuilderPage(): React.JSX.Element {
       return;
     }
 
+    // Pre-generate and register the runId BEFORE the IPC call so that
+    // node:start / node:complete events arriving via the registry listeners
+    // pass the runId filter even if they fire before the invoke promise
+    // resolves (the IPC round-trip takes longer than one main-process tick).
+    const newRunId = `graph:${crypto.randomUUID()}`;
+    runIdRef.current = newRunId;
+    setRunId(newRunId);
+    setRunOpen(true);
+
     setRunNodeStates({});
     setRunLog([]);
     setRunStartedAt(Date.now());
@@ -498,9 +531,8 @@ export function GraphBuilderPage(): React.JSX.Element {
       await window.nyteShiftApi?.graphSave(toSave);
       setGraph(toSave);
       setJsonText(JSON.stringify(toSave, null, 2));
-      const res = await window.nyteShiftApi?.graphRun(toSave.id, { input }) as { runId: string };
-      setRunId(res.runId);
-      runIdRef.current = res.runId;
+      // Pass the pre-generated runId so both ends agree on the identifier.
+      await window.nyteShiftApi?.graphRun(toSave.id, { input, runId: newRunId });
     } catch (e) {
       setRunning(false);
       setRunError((e as Error).message);
@@ -607,6 +639,10 @@ export function GraphBuilderPage(): React.JSX.Element {
           style={{ marginLeft: 8, padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: "transparent", color: C.text, cursor: "pointer" }}>
           Vars
         </button>
+        <button onClick={() => setInputsOpen(true)} title="Edit graph inputs"
+          style={{ marginLeft: 8, padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: "transparent", color: C.text, cursor: "pointer" }}>
+          Inputs
+        </button>
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 2, background: C.mantle, borderRadius: 6, padding: 2 }}>
@@ -649,6 +685,7 @@ export function GraphBuilderPage(): React.JSX.Element {
           {saving ? "Saving…" : "Save"}
         </button>
         <VarsEditor open={varsOpen} vars={graph.initVars ?? {}} onChange={(v) => updateGraph({ initVars: v })} onClose={() => setVarsOpen(false)} />
+        <InputVariablesEditor open={inputsOpen} inputs={graph.inputs ?? []} onChange={(v) => updateGraph({ inputs: v })} onClose={() => setInputsOpen(false)} />
 
         {saveStatus === "saved" && <span style={{ color: C.green, fontSize: "0.78rem" }}>✓ Saved</span>}
         {saveStatus === "error" && <span style={{ color: C.red, fontSize: "0.78rem" }}>✗ Error</span>}
@@ -695,6 +732,7 @@ export function GraphBuilderPage(): React.JSX.Element {
             onDeleteNode={deleteNode}
             onDeleteEdge={deleteEdge}
             onClearBranchTarget={clearBranchTarget}
+            onDropAddNode={(type, pos) => addNode(type, pos)}
           />
         ) : tab === "json" ? (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: C.mantle }}>
@@ -768,6 +806,7 @@ export function GraphBuilderPage(): React.JSX.Element {
           runResult={runResult}
           runError={runError}
           runInput={runInput}
+          graphInputs={graph.inputs ?? []}
           runInputError={runInputError}
           onRunInputChange={setRunInput}
           onRun={handleRun}
@@ -788,7 +827,13 @@ function NodePalette({ onAdd, C }: { onAdd(type: GraphNodeInfo["type"]): void; C
   const PaletteBtn = ([type, cfg]: [GraphNodeInfo["type"], any]) => (
     <button
       key={type}
-      onClick={() => onAdd(type)}
+      draggable={true}
+      onDragStart={(e) => {
+        try {
+          e.dataTransfer.setData("application/nyteshift-node-type", type);
+          e.dataTransfer.effectAllowed = "copy";
+        } catch (err) { /* ignore */ }
+      }}
       title={cfg.description}
       style={{
         display: "flex", alignItems: "center", gap: 8,
@@ -836,7 +881,7 @@ function formatMs(ms: number): string {
   return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
 }
 
-function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, runError, runInput, runInputError, onRunInputChange, onRun, onCancel, onClose }: {
+function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, runError, runInput, runInputError, onRunInputChange, onRun, onCancel, onClose, graphInputs }: {
   C: ThemePalette;
   running: boolean;
   runLog: NodeRunEvent[];
@@ -850,7 +895,16 @@ function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, 
   onRun(): void;
   onCancel(): void;
   onClose(): void;
+  graphInputs?: GraphInputInfo[];
 }) {
+  const [showRawInput, setShowRawInput] = useState(false);
+  const [structuredInput, setStructuredInput] = useState<Record<string, unknown>>(() => {
+    try { return runInput ? JSON.parse(runInput) : {}; } catch { return {}; }
+  });
+
+  useEffect(() => {
+    try { setStructuredInput(runInput ? JSON.parse(runInput) : {}); } catch { setStructuredInput({}); }
+  }, [runInput]);
   const [elapsed, setElapsed] = useState(0);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -910,20 +964,73 @@ function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, 
 
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* Input variables */}
-        <div style={{ width: 230, borderRight: `1px solid ${C.surface1}`, padding: 10, display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
-          <div style={{ fontSize: "0.7rem", fontWeight: 600, color: C.subtext0 }}>Input Variables (JSON)</div>
-          <textarea
-            style={{
-              flex: 1, padding: 8, background: C.mantle,
-              border: `1px solid ${runInputError ? C.red : C.surface2}`, borderRadius: 6,
-              color: C.text, fontFamily: "monospace", fontSize: "0.75rem",
-              outline: "none", resize: "none",
-            }}
-            value={runInput}
-            onChange={e => onRunInputChange(e.target.value)}
-            disabled={running}
-            placeholder={'{\n  "query": "Hello!"\n}'}
-          />
+        <div style={{ width: 300, borderRight: `1px solid ${C.surface1}`, padding: 10, display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+          <div style={{ fontSize: "0.7rem", fontWeight: 600, color: C.subtext0, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>Input Variables</span>
+            <button onClick={() => { setShowRawInput(s => !s); if (!showRawInput) onRunInputChange(JSON.stringify(structuredInput, null, 2)); }} style={{ border: "none", background: "transparent", color: C.subtext0, cursor: "pointer", fontSize: "0.75rem" }}>{showRawInput ? "Structured" : "Edit JSON"}</button>
+          </div>
+
+          {(!showRawInput && graphInputs && graphInputs.length > 0) ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", paddingRight: 6 }}>
+              {graphInputs.map((inp) => {
+                const val = Object.prototype.hasOwnProperty.call(structuredInput, inp.key) ? structuredInput[inp.key] : (inp.default !== undefined ? inp.default : "");
+                return (
+                  <div key={inp.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <label style={{ fontSize: "0.75rem", color: C.subtext0, fontWeight: 600 }}>{inp.label ?? inp.key}{inp.required ? " *" : ""}</label>
+                    {inp.type === "boolean" ? (
+                      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input type="checkbox" checked={!!val} onChange={e => {
+                          const next = { ...structuredInput, [inp.key]: e.target.checked };
+                          setStructuredInput(next);
+                          onRunInputChange(JSON.stringify(next));
+                        }} />
+                        <span style={{ color: C.overlay0 }}>{inp.description ?? ""}</span>
+                      </label>
+                    ) : inp.type === "number" ? (
+                      <input type="number" value={val === "" ? "" : String(val)} onChange={e => {
+                        const nv = e.target.value === "" ? undefined : Number(e.target.value);
+                        const next = { ...structuredInput, [inp.key]: nv };
+                        setStructuredInput(next);
+                        onRunInputChange(JSON.stringify(next));
+                      }} style={{ padding: "6px 8px" }} />
+                    ) : inp.type === "json" ? (
+                      <textarea value={val === undefined ? "" : (typeof val === "string" ? val : JSON.stringify(val))} onChange={e => {
+                        let parsed: unknown;
+                        try { parsed = JSON.parse(e.target.value); } catch { parsed = e.target.value; }
+                        const next = { ...structuredInput, [inp.key]: parsed };
+                        setStructuredInput(next);
+                        onRunInputChange(JSON.stringify(next));
+                      }} style={{ padding: "6px 8px", fontFamily: "monospace" }} />
+                    ) : (
+                      <input value={val === undefined ? "" : String(val)} onChange={e => {
+                        const next = { ...structuredInput, [inp.key]: e.target.value };
+                        setStructuredInput(next);
+                        onRunInputChange(JSON.stringify(next));
+                      }} style={{ padding: "6px 8px" }} />
+                    )}
+                    {inp.description && <div style={{ fontSize: "0.72rem", color: C.overlay0 }}>{inp.description}</div>}
+                  </div>
+                );
+              })}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => { setShowRawInput(true); onRunInputChange(JSON.stringify(structuredInput, null, 2)); }} style={{ border: "none", background: "transparent", color: C.subtext0, cursor: "pointer" }}>Edit as JSON</button>
+              </div>
+            </div>
+          ) : (
+            <textarea
+              style={{
+                flex: 1, padding: 8, background: C.mantle,
+                border: `1px solid ${runInputError ? C.red : C.surface2}`, borderRadius: 6,
+                color: C.text, fontFamily: "monospace", fontSize: "0.75rem",
+                outline: "none", resize: "none",
+              }}
+              value={runInput}
+              onChange={e => onRunInputChange(e.target.value)}
+              disabled={running}
+              placeholder={'{\n  "query": "Hello!"\n}'}
+            />
+          )}
+
           {runInputError && <div style={{ fontSize: "0.7rem", color: C.red }}>{runInputError}</div>}
         </div>
 

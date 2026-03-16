@@ -11,6 +11,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import type { NodeOutput } from "./types.js";
+import { saveGraphRun } from "../runs/runStore.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,14 @@ class GraphRunRegistryClass extends EventEmitter {
     Object.assign(r, patch);
   }
 
+  /** Restore persisted runs into the registry without emitting events. */
+  restoreRuns(records: GraphRunRecord[]): void {
+    for (const r of records) {
+      this._runs.set(r.runId, r);
+    }
+    this.trim();
+  }
+
   /**
    * Record that a node has started.
    * Appends a lightweight placeholder so callers can see in-progress nodes.
@@ -132,6 +141,10 @@ class GraphRunRegistryClass extends EventEmitter {
       error: outcome.error,
     });
     this.emit("run:complete", { runId, result: outcome.result, error: outcome.error });
+    // Persist completed run to disk (best-effort, non-blocking)
+    try {
+      void saveGraphRun(r).catch(() => {});
+    } catch {}
   }
 
   // ── Cancellation API ──────────────────────────────────────────────────────
@@ -178,11 +191,16 @@ class GraphRunRegistryClass extends EventEmitter {
 
   private trim(): void {
     if (this._runs.size <= MAX_HISTORY) return;
-    const sorted = [...this._runs.entries()].sort(
-      ([, a], [, b]) => a.startedAt - b.startedAt,
-    );
-    for (let i = 0; i < sorted.length - MAX_HISTORY; i++) {
-      this._runs.delete(sorted[i]![0]);
+    // Never evict runs that are still active — only remove completed/errored
+    // runs, oldest first.  If there are not enough finished runs to bring the
+    // registry back to MAX_HISTORY we accept a temporarily oversized map
+    // rather than silently dropping a live run.
+    const evictable = [...this._runs.entries()]
+      .filter(([, r]) => r.status !== "running")
+      .sort(([, a], [, b]) => a.startedAt - b.startedAt);
+    const excess = this._runs.size - MAX_HISTORY;
+    for (let i = 0; i < Math.min(excess, evictable.length); i++) {
+      this._runs.delete(evictable[i]![0]);
     }
   }
 }

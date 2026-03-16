@@ -22,6 +22,15 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
 
   const varOptions = Object.keys(vars ?? {});
   const isTemplateString = (v: any) => (typeof v === 'string') && v.trim().startsWith('{{') && v.trim().endsWith('}}');
+  const nodeOutputOptions = (nodes ?? []).filter((n: GraphNodeInfo) => n.type !== 'input').map((n: GraphNodeInfo) => ({ k: n.outputKey ?? n.id, label: n.name ?? n.id }));
+  const tplFromRefValue = (v: string) => v.startsWith('vars:') ? `{{vars.${v.slice(5)}}}` : v.startsWith('node:') ? `{{${v.slice(5)}.output}}` : `{{${v}}}`;
+  const RefSelect = ({ onPick, label = 'Use ref\u2026' }: { onPick: (tpl: string) => void; label?: string }) => (
+    <select style={btnStyle as any} onChange={e => { const v = e.target.value; if (v) { onPick(tplFromRefValue(v)); } (e.target as HTMLSelectElement).value = ''; }}>
+      <option value=''>{label}</option>
+      {varOptions.length > 0 && <optgroup label="Vars">{varOptions.map(v => <option key={`vars:${v}`} value={`vars:${v}`}>{`vars.${v}`}</option>)}</optgroup>}
+      {nodeOutputOptions.length > 0 && <optgroup label="Node outputs">{nodeOutputOptions.map(o => <option key={`node:${o.k}`} value={`node:${o.k}`}>{o.label}</option>)}</optgroup>}
+    </select>
+  );
 
   function ArrayEditor({ value: arrVal, itemsSchema, onChange: onArrChange }: { value: any; itemsSchema: any; onChange(v: any): void }) {
     const arr = Array.isArray(arrVal) ? arrVal : (itemsSchema?.default ?? []);
@@ -126,10 +135,7 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
               <option value=''> (none) </option>
               {propSchema.enum.map((o:any) => <option key={String(o)} value={o}>{String(o)}</option>)}
             </select>
-            <select style={btnStyle as any} onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ''; }}>
-              <option value=''>Use varâ€¦</option>
-              {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <RefSelect onPick={tpl => setProp(key, tpl)} />
           </div>
           {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
         </div>
@@ -144,15 +150,13 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
             {isTpl ? (
               <div style={{ display: 'flex', gap: 8 }}>
                 <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
-                <select onChange={e => { if (e.target.value) setProp(key, `{{vars.${e.target.value}}}`); e.target.value = ''; }} style={btnStyle as any}>
-                  <option value=''>Use varâ€¦</option>
-                  {varOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+                <RefSelect onPick={tpl => setProp(key, tpl)} />
+                <button onClick={() => setProp(key, propSchema?.default ?? '')} style={btnStyle} title="Clear template">✕</button>
               </div>
             ) : (
               <div style={{ display: 'flex', gap: 8 }}>
                 <input style={inputStyle} value={cur ?? (propSchema?.default ?? '')} onChange={e => setProp(key, e.target.value)} />
-                <button onClick={() => setProp(key, '{{}}')} style={btnStyle}>Use template</button>
+                <RefSelect onPick={tpl => setProp(key, tpl)} />
               </div>
             )}
             {desc && <div style={{ fontSize: '0.75rem', color: C.overlay0 }}>{desc}</div>}
@@ -194,9 +198,24 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
       case 'array':
         return (
           <div key={key} style={containerStyle}>
-            <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <label style={labelStyle}>{key}{required ? ' *' : ''}</label>
+              {isTpl ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <RefSelect onPick={tpl => setProp(key, tpl)} label="Change ref\u2026" />
+                  <button onClick={() => setProp(key, propSchema?.default ?? [])} style={btnStyle} title="Clear ref, edit items">Clear ref</button>
+                </div>
+              ) : (
+                <RefSelect onPick={tpl => setProp(key, tpl)} label="Bind ref\u2026" />
+              )}
+            </div>
             {isTpl ? (
-              <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
+              <div>
+                <input style={inputStyle} value={cur ?? ''} onChange={e => setProp(key, e.target.value)} />
+                <div style={{ fontSize: '0.72rem', color: C.overlay0, marginTop: 4 }}>
+                  Bound to a node ref — the runtime resolves this to the actual array at run time.
+                </div>
+              </div>
             ) : (
               <ArrayEditor value={cur ?? propSchema?.default ?? []} itemsSchema={propSchema?.items ?? {}} onChange={(v:any) => setProp(key, v)} />
             )}

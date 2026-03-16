@@ -138,6 +138,7 @@ interface Props {
   onDeleteNode(id: string): void;
   onDeleteEdge(edgeId: string): void;
   onClearBranchTarget(nodeId: string, branchIndex: number): void;
+  onDropAddNode?(type: GraphNodeInfo["type"], pos: { x: number; y: number }): void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -147,6 +148,7 @@ export function GraphCanvas(props: Props): React.JSX.Element {
     nodes, edges, selectedNodeId, selectedEdgeId, runProgress,
     onNodeSelect, onEdgeSelect, onNodeMoved, onAddEdge, onSetBranchTarget,
     onDeleteNode, onDeleteEdge, onClearBranchTarget,
+    onDropAddNode,
   } = props;
   const { palette: C } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -460,6 +462,24 @@ export function GraphCanvas(props: Props): React.JSX.Element {
     setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
   }, [zoomAt]);
 
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = "copy"; } catch (err) { /* ignore */ }
+  }, []);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const raw = e.dataTransfer.getData("application/nyteshift-node-type") || e.dataTransfer.getData("text/plain");
+    if (!raw) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const canvas = {
+      x: (e.clientX - rect.left - panRef.current.x) / (scaleRef.current || 1),
+      y: (e.clientY - rect.top - panRef.current.y) / (scaleRef.current || 1),
+    };
+    if (onDropAddNode) onDropAddNode(raw as GraphNodeInfo["type"], canvas);
+  }, [onDropAddNode]);
+
   // Keyboard shortcuts: Ctrl/Cmd + +/- and 0
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -479,6 +499,8 @@ export function GraphCanvas(props: Props): React.JSX.Element {
       tabIndex={0}
       onMouseDown={onContainerMouseDown}
       onWheel={onWheel}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       style={{
         flex: 1, position: "relative", overflow: "hidden",
         background: C.mantle, cursor: interaction?.type === "pan" ? "grabbing" : "default",
@@ -609,7 +631,7 @@ export function GraphCanvas(props: Props): React.JSX.Element {
         fontSize: "0.68rem", color: C.overlay0, pointerEvents: "none",
         lineHeight: 1.6,
       }}>
-        Drag node to move · Drag port to connect · Click to select · ⌫ Delete selected
+        Drag node to move · Drag port to connect · Drag from palette to add · Click to select · ⌫ Delete selected
       </div>
     </div>
   );

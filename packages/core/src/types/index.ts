@@ -230,6 +230,8 @@ export interface NyteShiftConfig {
    * Agents without their own config must be called by name in messages.
    */
   globalDiscord?: GlobalDiscordConfig;
+  /** Run retention and persistence settings for saved runs */
+  runRetention?: RunRetentionSettings;
   [key: string]: unknown;
 }
 
@@ -237,6 +239,21 @@ export interface ProviderSettings {
   apiKey?: string;
   baseUrl?: string;
   [key: string]: unknown;
+}
+
+export interface RunRetentionSettings {
+  enabled?: boolean;
+  /** Schedule string controlling recurring pruning. Examples:
+   *  - "daily@00:00" (default) — every day at midnight
+   *  - "weekly@mon@02:30" — every Monday at 02:30
+   *  - "monthly@1@00:00" — 1st of month at midnight
+   *  - cron expression (5 fields) — e.g. "0 0 * * *"
+   *  - interval shorthand: "24h", "7d", "60m"
+   */
+  pruneSchedule?: string;
+
+  graph?: { maxAgeDays?: number; maxItems?: number };
+  triggers?: { maxAgeDays?: number; maxItems?: number };
 }
 
 // ── Pipeline ───────────────────────────────────────────────────────────
