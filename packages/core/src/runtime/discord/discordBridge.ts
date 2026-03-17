@@ -54,6 +54,7 @@ import {
   writeJsonFile,
 } from "../../utils/index.js";
 import { readGlobalConfig, writeGlobalConfig } from "../config/configResolver.js";
+import { getSecret, setSecret, SECRET_KEYS } from "../config/secretStore.js";
 import { listAgents } from "../agents/agentManager.js";
 
 // ── Logging ────────────────────────────────────────────────────────────
@@ -671,13 +672,28 @@ export function isBridgeRunning(agentName: string): boolean {
 /** Read the global Discord config from the user's top-level config. */
 export async function readGlobalDiscordConfig(): Promise<GlobalDiscordConfig | null> {
   const cfg = await readGlobalConfig();
-  return (cfg as any).globalDiscord ?? null;
+  const discord: GlobalDiscordConfig | null = (cfg as any).globalDiscord ?? null;
+  if (!discord) return null;
+
+  // Inject the bot token from the secret store (it is not in config.json).
+  const storedToken = await getSecret(SECRET_KEYS.DISCORD_BOT_TOKEN);
+  return {
+    ...discord,
+    botToken: storedToken ?? discord.botToken ?? "",
+  };
 }
 
 /** Write the global Discord config into the user's top-level config. */
 export async function writeGlobalDiscordConfig(discord: GlobalDiscordConfig): Promise<void> {
+  // Persist the bot token in the secret store, never in config.json.
+  if (discord.botToken && discord.botToken.trim()) {
+    await setSecret(SECRET_KEYS.DISCORD_BOT_TOKEN, discord.botToken.trim());
+  }
+
+  // Write settings (without token) to the shared config file.
+  const { botToken: _token, ...discordWithoutToken } = discord;
   const cfg = await readGlobalConfig();
-  (cfg as any).globalDiscord = discord;
+  (cfg as any).globalDiscord = discordWithoutToken;
   await writeGlobalConfig(cfg as any);
 }
 

@@ -5,6 +5,7 @@ import type {
   ProviderCallResult,
 } from "../../types/index.js";
 import { resolveConfig } from "../config/configResolver.js";
+import { getSecret, SECRET_KEYS } from "../config/secretStore.js";
 
 /**
  * OpenAI provider implementation.
@@ -32,7 +33,8 @@ export function createOpenAIProvider(): NyteShiftProvider {
     async call(params: ProviderCallParams): Promise<ProviderCallResult> {
       const config = await resolveConfig();
       const apiKey =
-        config.providers?.openai?.apiKey ?? process.env.OPENAI_API_KEY ?? "";
+        (await getSecret(SECRET_KEYS.OPENAI_API_KEY)) ??
+        process.env.OPENAI_API_KEY ?? "";
       const baseUrl =
         (config.providers?.openai?.baseUrl as string | undefined) ??
         "https://api.openai.com/v1";

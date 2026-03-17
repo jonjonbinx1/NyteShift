@@ -5,6 +5,7 @@ import type {
   ProviderCallResult,
 } from "../../types/index.js";
 import { resolveConfig } from "../config/configResolver.js";
+import { getSecret, SECRET_KEYS } from "../config/secretStore.js";
 
 /**
  * OpenRouter provider implementation.
@@ -25,7 +26,8 @@ export function createOpenRouterProvider(): NyteShiftProvider {
     async listModels(): Promise<ModelInfo[]> {
       const config = await resolveConfig();
       const apiKey =
-        config.providers?.openrouter?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+        (await getSecret(SECRET_KEYS.OPENROUTER_API_KEY)) ??
+        process.env.OPENROUTER_API_KEY ?? "";
       const baseUrl =
         (config.providers?.openrouter?.baseUrl as string | undefined) ??
         "https://openrouter.ai/api/v1";
@@ -69,7 +71,8 @@ export function createOpenRouterProvider(): NyteShiftProvider {
     async call(params: ProviderCallParams): Promise<ProviderCallResult> {
       const config = await resolveConfig();
       const apiKey =
-        config.providers?.openrouter?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+        (await getSecret(SECRET_KEYS.OPENROUTER_API_KEY)) ??
+        process.env.OPENROUTER_API_KEY ?? "";
       const baseUrl =
         (config.providers?.openrouter?.baseUrl as string | undefined) ??
         "https://openrouter.ai/api/v1";

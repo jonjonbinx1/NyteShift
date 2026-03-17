@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerConfigCommands } from "./commands/config.js";
 import { registerMarketplaceCommands } from "./commands/marketplace.js";
+import { registerSecretCommands } from "./commands/secret.js";
 import { registerTriggerCommands } from "./commands/triggers.js";
 import { registerUiCommands } from "./commands/ui.js";
 
@@ -15,6 +16,7 @@ program
 registerAgentCommands(program);
 registerConfigCommands(program);
 registerMarketplaceCommands(program);
+registerSecretCommands(program);
 registerTriggerCommands(program);
 registerUiCommands(program);
 

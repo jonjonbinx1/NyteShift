@@ -8,12 +8,14 @@ export function ProviderConfig(): React.JSX.Element {
   const { palette: C } = useTheme();
   const [providers, setProviders] = useState<Array<{ id: string }>>([]);
   const [config, setConfig] = useState<Record<string, any>>({});
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [temperature, setTemperature] = useState<string>("");
   const [maxTokens, setMaxTokens] = useState<string>("");
+  const [showApiKey, setShowApiKey] = useState(false);
 
   useEffect(() => {
     if (!window.nyteShiftApi) return;
@@ -22,6 +24,15 @@ export function ProviderConfig(): React.JSX.Element {
       .then((ps) => {
         setProviders(ps);
         if (ps.length && !selectedProvider) setSelectedProvider(ps[0].id);
+        // Load API keys from the secret store
+        Promise.all(
+          ps.map(async (p) => {
+            const key = await window.nyteShiftApi!.secretGet?.(`provider:${p.id}:apiKey`).catch(() => undefined);
+            return [p.id, key ?? ""] as const;
+          })
+        ).then((entries) => {
+          setApiKeys(Object.fromEntries(entries.filter(([, v]) => v !== "")));
+        }).catch(() => {});
       })
       .catch(console.error);
     window.nyteShiftApi.readConfig().then((cfg) => {
@@ -69,7 +80,15 @@ export function ProviderConfig(): React.JSX.Element {
   };
 
   const handleSave = async () => {
-    // ensure we persist temperature/maxTokens values into global config
+    // Save the API key for the current provider to the secret store.
+    if (selectedProvider) {
+      const keyToSave = (apiKeys[selectedProvider] ?? "").trim();
+      if (keyToSave) {
+        await window.nyteShiftApi!.secretSet?.(`provider:${selectedProvider}:apiKey`, keyToSave);
+      }
+    }
+    // Write non-secret settings (base URLs, defaults) to config.
+    // apiKey fields are stripped by writeGlobalConfig as a safety net.
     const next = { ...(config || {}) };
     const parsedTemp = temperature === "" ? undefined : parseFloat(temperature);
     const parsedMax = maxTokens === "" ? undefined : parseInt(maxTokens, 10);
@@ -189,12 +208,21 @@ export function ProviderConfig(): React.JSX.Element {
             <div style={{ marginTop: 12 }}>
               <div style={{ marginBottom: 8 }}>
                 <label>API Key</label>
-                <input
-                  type="text"
-                  value={(config.providers?.[selectedProvider]?.apiKey) ?? ""}
-                  onChange={(e) => updateProviderSetting(selectedProvider, "apiKey", e.target.value)}
-                  style={{ display: "block", width: "100%", marginTop: 4 }}
-                />
+                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                  <input
+                    type={showApiKey ? "text" : "password"}
+                    value={apiKeys[selectedProvider] ?? ""}
+                    onChange={(e) => setApiKeys(prev => ({ ...prev, [selectedProvider]: e.target.value }))}
+                    style={{ display: "block", width: "100%", flex: 1 }}
+                    placeholder="sk-…"
+                  />
+                  <button type="button" onClick={() => setShowApiKey(v => !v)} style={{ whiteSpace: "nowrap", padding: "4px 8px" }}>
+                    {showApiKey ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
+                  🔒 Stored encrypted — never in plain-text config
+                </div>
               </div>
 
               <div>

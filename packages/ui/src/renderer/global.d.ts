@@ -375,6 +375,15 @@ export interface NyteShiftApi {
   skillToolConfigRead(kind: "skill" | "tool", qualifiedName: string, agentName?: string): Promise<Record<string, unknown>>;
   /** Write config values at global or agent scope. */
   skillToolConfigWrite(kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string): Promise<void>;
+  // ── Secret Store ─────────────────────────────────────────────────
+  /** Retrieve a stored secret by name (undefined if not found). */
+  secretGet(name: string): Promise<string | undefined>;
+  /** Store or overwrite a secret (never written to config.json). */
+  secretSet(name: string, value: string): Promise<void>;
+  /** Delete a stored secret. */
+  secretDelete(name: string): Promise<void>;
+  /** List all stored secret names (never the values). */
+  secretList(): Promise<string[]>;
   // ── Memory ───────────────────────────────────────────────
   /**
    * Store or update a persistent memory for an agent.

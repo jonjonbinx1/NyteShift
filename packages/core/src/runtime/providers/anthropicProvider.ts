@@ -5,6 +5,7 @@ import type {
   ProviderCallResult,
 } from "../../types/index.js";
 import { resolveConfig } from "../config/configResolver.js";
+import { getSecret, SECRET_KEYS } from "../config/secretStore.js";
 
 /**
  * Anthropic provider implementation.
@@ -31,7 +32,8 @@ export function createAnthropicProvider(): NyteShiftProvider {
     async call(params: ProviderCallParams): Promise<ProviderCallResult> {
       const config = await resolveConfig();
       const apiKey =
-        config.providers?.anthropic?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "";
+        (await getSecret(SECRET_KEYS.ANTHROPIC_API_KEY)) ??
+        process.env.ANTHROPIC_API_KEY ?? "";
       const baseUrl =
         (config.providers?.anthropic?.baseUrl as string | undefined) ??
         "https://api.anthropic.com";

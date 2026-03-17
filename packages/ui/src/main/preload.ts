@@ -191,6 +191,15 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
     ipcRenderer.invoke("skillToolConfig:read", kind, qualifiedName, agentName),
   skillToolConfigWrite: (kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string) =>
     ipcRenderer.invoke("skillToolConfig:write", kind, qualifiedName, values, agentName),
+  // ── Secret Store ───────────────────────────────────────────────────
+  secretGet: (name: string): Promise<string | undefined> =>
+    ipcRenderer.invoke("secret:get", name),
+  secretSet: (name: string, value: string): Promise<void> =>
+    ipcRenderer.invoke("secret:set", name, value),
+  secretDelete: (name: string): Promise<void> =>
+    ipcRenderer.invoke("secret:delete", name),
+  secretList: (): Promise<string[]> =>
+    ipcRenderer.invoke("secret:list"),
   // ── Memory ─────────────────────────────────────────────────
   memoryWrite: (agentName: string, key: string, value: string, category?: string, note?: string) =>
     ipcRenderer.invoke("memory:write", agentName, key, value, category, note),

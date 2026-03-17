@@ -66,6 +66,7 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
 
   // Provider editing
   const [editProvider, setEditProvider] = useState("");
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
 
   // Engine
@@ -110,6 +111,15 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
     window.nyteShiftApi.listProviders().then((ps) => {
       setProviders(ps);
       if (ps.length && !editProvider) setEditProvider(ps[0].id);
+      // Load API keys from the secret store (never from config.json)
+      Promise.all(
+        ps.map(async (p) => {
+          const key = await window.nyteShiftApi!.secretGet?.(`provider:${p.id}:apiKey`).catch(() => undefined);
+          return [p.id, key ?? ""] as const;
+        })
+      ).then((entries) => {
+        setApiKeys(Object.fromEntries(entries.filter(([, v]) => v !== "")));
+      }).catch(() => {});
     }).catch(console.error);
 
     window.nyteShiftApi.triggersEngineStatus?.().then((s) => {
@@ -197,24 +207,51 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       next.themeId = current.id;
       next.customThemes = customThemes;
 
-      // Persist global Discord config inline so it survives a plain "Save".
+      // ── Secrets: never write API keys or tokens to config.json ─────
+      // Save current provider's API key to the secret store.
+      if (editProvider) {
+        const keyToSave = (apiKeys[editProvider] ?? "").trim();
+        if (keyToSave) {
+          await window.nyteShiftApi.secretSet?.(`provider:${editProvider}:apiKey`, keyToSave);
+        }
+        // Save base URL (non-secret) for the current provider.
+        const baseUrl = (config?.providers?.[editProvider]?.baseUrl as string | undefined) ?? "";
+        if (baseUrl) {
+          next.providers = { ...(next.providers || {}) };
+          next.providers[editProvider] = { ...(next.providers[editProvider] || {}) };
+          next.providers[editProvider].baseUrl = baseUrl;
+        }
+      }
+
+      // Save Discord bot token to the secret store (writeGlobalDiscordConfig
+      // also handles this, but persisting here ensures it is saved even when
+      // the user clicks the general Save button without restarting the bridge).
       if (discordBotToken.trim()) {
+        await window.nyteShiftApi.secretSet?.("discord:global:botToken", discordBotToken.trim());
+      }
+
+      // Persist global Discord non-secret settings into config.
+      {
         const builtMap: Record<string, string> = {};
         for (const row of channelAgentRows) {
           if (row.channelId.trim() && row.agentName.trim()) {
             builtMap[row.channelId.trim()] = row.agentName.trim();
           }
         }
-        next.globalDiscord = {
-          botToken: discordBotToken.trim(),
-          guildId: discordGuildId.trim() || undefined,
-          channelIds: discordChannelIds.trim()
-            ? discordChannelIds.split(",").map((s: string) => s.trim()).filter(Boolean)
-            : undefined,
-          enabled: discordEnabled,
-          mode: discordMode,
-          channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
-        };
+        // Only set globalDiscord if there's meaningful discord config to save.
+        if (discordBotToken.trim() || discordGuildId.trim() || discordChannelIds.trim()) {
+          next.globalDiscord = {
+            // botToken intentionally omitted: writeGlobalConfig strips it as a safety-net;
+            // it was already saved to the secret store above.
+            guildId: discordGuildId.trim() || undefined,
+            channelIds: discordChannelIds.trim()
+              ? discordChannelIds.split(",").map((s: string) => s.trim()).filter(Boolean)
+              : undefined,
+            enabled: discordEnabled,
+            mode: discordMode,
+            channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
+          };
+        }
       }
 
       setConfig(next);
@@ -348,8 +385,9 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
               <div>
                 <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>API Keys & Endpoints</h3>
                 <p style={{ margin: "0 0 16px", fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
-                  Configure API keys and base URLs for each provider. These are stored locally
-                  in <code style={{ color: C.mauve, fontSize: 11 }}>~/.nyteshift/config.json</code>.
+                  Configure API keys and base URLs for each provider. API keys are stored
+                  encrypted in <code style={{ color: C.mauve, fontSize: 11 }}>~/.nyteshift/secrets.json</code> using
+                  AES-256-GCM — not in plain-text config.
                 </p>
               </div>
 
@@ -391,8 +429,8 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                     <label style={labelStyle}>API Key</label>
                     <div style={{ display: "flex", gap: 6 }}>
                       <input
-                        value={getProviderSetting(editProvider, "apiKey")}
-                        onChange={(e) => updateProviderSetting(editProvider, "apiKey", e.target.value)}
+                        value={apiKeys[editProvider] ?? ""}
+                        onChange={(e) => setApiKeys(prev => ({ ...prev, [editProvider]: e.target.value }))}
                         placeholder="sk-…"
                         type={showApiKey[editProvider] ? "text" : "password"}
                         style={{ ...inputStyle, flex: 1 }}
@@ -406,6 +444,9 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
                           cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
                         }}
                       >{showApiKey[editProvider] ? "Hide" : "Show"}</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: C.subtext0, marginTop: 4 }}>
+                      🔒 Stored encrypted in <code style={{ color: C.mauve, fontSize: 11 }}>~/.nyteshift/secrets.json</code> — never in plain-text config.
                     </div>
                   </div>
 

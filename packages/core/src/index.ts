@@ -58,6 +58,19 @@ export {
 } from "./runtime/config/configResolver.js";
 export { ensureNyteShiftDirs } from "./runtime/config/ensureDirs.js";
 
+// ── Secret Store ────────────────────────────────────────────────────────
+export {
+  getSecret,
+  setSecret,
+  deleteSecret,
+  listSecretKeys,
+  migrateSecretsFromConfig,
+  stripSecretsFromConfig,
+  SECRET_KEYS,
+  secretNameFor,
+  CONFIG_SECRET_PATHS,
+} from "./runtime/config/secretStore.js";
+
 // ── Soul ───────────────────────────────────────────────────────────────
 export {
   loadSoul,

@@ -53,6 +53,11 @@ import {
   // Skill / Tool Config
   readSkillToolConfig,
   writeSkillToolConfig,
+  // Secret Store
+  getSecret,
+  setSecret,
+  deleteSecret,
+  listSecretKeys,
   // Memory
   writeMemory,
   readMemory,
@@ -1069,6 +1074,24 @@ function registerIpc(): void {
   ) => {
     console.log(`[IPC] skillToolConfig:write — ${kind} "${qualifiedName}" agent=${agentName ?? "global"}`);
     await writeSkillToolConfig(kind, qualifiedName, values, agentName);
+  });
+
+  // ── Secret Store ─────────────────────────────────────────────────────
+
+  ipcMain.handle("secret:get", async (_e, name: string) => {
+    return getSecret(name);
+  });
+
+  ipcMain.handle("secret:set", async (_e, name: string, value: string) => {
+    await setSecret(name, value);
+  });
+
+  ipcMain.handle("secret:delete", async (_e, name: string) => {
+    await deleteSecret(name);
+  });
+
+  ipcMain.handle("secret:list", async () => {
+    return listSecretKeys();
   });
 
   // ── Tool config actions (run in a forked child process so the main thread is never blocked) ──

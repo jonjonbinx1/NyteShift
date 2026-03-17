@@ -32,6 +32,7 @@ import { validateGraph, tarjanSCC } from "./graphValidator.js";
 import { loadGraph } from "./graphStore.js";
 import { runGraphTracked } from "./graphRunRegistry.js";
 import { resolveConfig } from "../config/configResolver.js";
+import { readSkillToolConfig } from "../config/configResolver.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { getTool } from "../tools/toolLoader.js";
 import { getSkill } from "../skills/skillLoader.js";
@@ -790,6 +791,23 @@ async function executeToolNode(
     } catch (_) {
       // ignore failures to import bridge module — tool will handle missing bridge
     }
+  }
+
+  // Inject resolved tool configuration (including secret-backed fields)
+  // so tools can read their settings from `context.toolConfig[...]` or
+  // `context.config.toolConfig[...]` as older tools expect.
+  try {
+    if (node.toolName) {
+      const cfg = await readSkillToolConfig("tool", node.toolName);
+      // attach both shapes to maximize compatibility
+      (toolCtx as any).toolConfig = ((toolCtx as any).toolConfig ?? {});
+      (toolCtx as any).toolConfig[node.toolName] = cfg;
+      (toolCtx as any).config = ((toolCtx as any).config ?? {});
+      (toolCtx as any).config.toolConfig = ((toolCtx as any).config.toolConfig ?? {});
+      (toolCtx as any).config.toolConfig[node.toolName] = cfg;
+    }
+  } catch (err) {
+    // be tolerant — if config resolution fails, don't block tool execution
   }
 
   const result = await tool.run({ input, context: toolCtx });
