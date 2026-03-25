@@ -17,6 +17,7 @@ import {
   writeSoul,
   listSkills,
   listTools,
+  listChannels,
   listProviders,
   listAllModels,
   whenUserProvidersLoaded,
@@ -72,7 +73,12 @@ import {
   deleteGraph,
   validateGraph,
   runGraphTracked,
+  resumePausedRun,
   graphRunRegistry,
+  // Graph marketplace
+  fetchMarketplaceGraphDef,
+  installMarketplaceGraph,
+  checkGraphDeps,
 } from "@nyteshift/core";
 import type { ChatSession, TriggerType } from "@nyteshift/core";
 
@@ -289,6 +295,18 @@ function registerIpc(): void {
       config: t.config ?? undefined,
       spec: (t as any).spec ?? undefined,
       autoUpdate: (t as any).autoUpdate,
+    }));
+  });
+
+  // Channels
+  ipcMain.handle("channels:list", async () => {
+    const channels = await listChannels();
+    return channels.map((ch) => ({
+      name: ch.name,
+      version: ch.version,
+      contributor: ch.contributor,
+      description: ch.description,
+      config: ch.config ?? undefined,
     }));
   });
 
@@ -631,6 +649,8 @@ function registerIpc(): void {
     discordChannelIds?: string[];
     discordMentionOnly?: boolean;
     discordMode?: "trigger" | "bridge";
+    discordCommand?: string;
+    discordCommandInput?: "none" | "text" | "json";
   }) => {
     console.log("[IPC] triggers:create —", params.name, "→", params.agentName);
     try {
@@ -1057,7 +1077,7 @@ function registerIpc(): void {
 
   ipcMain.handle("skillToolConfig:read", async (
     _e,
-    kind: "skill" | "tool",
+    kind: "skill" | "tool" | "channel",
     qualifiedName: string,
     agentName?: string,
   ) => {
@@ -1067,7 +1087,7 @@ function registerIpc(): void {
 
   ipcMain.handle("skillToolConfig:write", async (
     _e,
-    kind: "skill" | "tool",
+    kind: "skill" | "tool" | "channel",
     qualifiedName: string,
     values: Record<string, unknown>,
     agentName?: string,
@@ -1192,15 +1212,17 @@ function registerIpc(): void {
       runId: r.runId,
       graphId: r.graphId,
       graphName: r.graphName,
-      status: r.status === "done" ? "done" : r.status === "error" ? "error" : "running",
+      status: r.status === "done" ? "done" : r.status === "error" ? "error" : r.status === "paused" ? "paused" : "running",
       result: r.result,
       error: r.error,
       nodeProgress: r.nodeProgress,
       startedAt: r.startedAt,
+      completedAt: r.completedAt,
       source: r.source,
       triggerId: r.triggerId,
       triggerName: r.triggerName,
       triggerType: r.triggerType,
+      pausedResumeFrom: r.pausedResumeFrom,
     }));
   });
 
@@ -1210,15 +1232,17 @@ function registerIpc(): void {
       runId: r.runId,
       graphId: r.graphId,
       graphName: r.graphName,
-      status: r.status === "done" ? "done" : r.status === "error" ? "error" : "running",
+      status: r.status === "done" ? "done" : r.status === "error" ? "error" : r.status === "paused" ? "paused" : "running",
       result: r.result,
       error: r.error,
       nodeProgress: r.nodeProgress,
       startedAt: r.startedAt,
+      completedAt: r.completedAt,
       source: r.source,
       triggerId: r.triggerId,
       triggerName: r.triggerName,
       triggerType: r.triggerType,
+      pausedResumeFrom: r.pausedResumeFrom,
     }));
   });
 
@@ -1228,7 +1252,7 @@ function registerIpc(): void {
     return {
       runId: r.runId,
       graphId: r.graphId,
-      status: r.status === "done" ? "done" : r.status === "error" ? "error" : "running",
+      status: r.status === "done" ? "done" : r.status === "error" ? "error" : r.status === "paused" ? "paused" : "running",
       result: r.result,
       error: r.error,
       nodeProgress: r.nodeProgress,
@@ -1247,6 +1271,64 @@ function registerIpc(): void {
     // so Stop works for any run visible in the graph view, regardless of origin.
     graphRunRegistry.abort(runId);
   });
+
+  ipcMain.handle("graph:run:stop", (_e, runId: string) => {
+    // Graceful stop: request the runner exit the current loop at its next safe
+    // boundary so matching catch nodes (trigger="abort") still fire.
+    graphRunRegistry.requestStop(runId);
+  });
+
+  ipcMain.handle("graph:run:resume", async (_e, runId: string) => {
+    const controller = new AbortController();
+    setImmediate(() => {
+      void resumePausedRun(runId, { signal: controller.signal }).then(({ runId: newId }) => {
+        graphRunControllers.set(newId, controller);
+      }).catch(() => {});
+    });
+    // Derive the new runId synchronously so the renderer gets it back immediately.
+    // The actual execution starts on the next tick (setImmediate above).
+    // We generate the same ID that resumePausedRun will use via the registry.
+    // Since we can't predict the UUID, we return the paused run ID and let the
+    // renderer listen for graph:runRegistered to pick up the new child run.
+    return { runId };
+  });
+
+  // ── Graph Marketplace Helpers ──────────────────────────────────────────────
+
+  /**
+   * Fetch the graph.json for a marketplace graph item and return its parsed
+   * GraphDefinition so the UI can inspect dependencies before installing.
+   */
+  ipcMain.handle(
+    "marketplace:fetchGraphDef",
+    async (_e, item: { remotePath: string; source?: string }) => {
+      return fetchMarketplaceGraphDef(item);
+    },
+  );
+
+  /**
+   * Check whether all tool / skill / agent dependencies of a graph are
+   * currently installed.  Returns a GraphDepsResult object.
+   */
+  ipcMain.handle("graph:checkDeps", async (_e, graph: unknown) => {
+    return checkGraphDeps(graph as any);
+  });
+
+  /**
+   * Install a graph downloaded from the marketplace by saving it into the
+   * normal graph store.  Also registers the item in installed.json so update
+   * tracking works just like for skills and tools.
+   */
+  ipcMain.handle(
+    "marketplace:installGraph",
+    async (
+      _e,
+      graph: unknown,
+      item: { category: string; contributor: string; name: string; remotePath?: string; source?: string },
+    ) => {
+      return installMarketplaceGraph(graph as any, item);
+    },
+  );
 }
 
 // ── App lifecycle ──────────────────────────────────────────────────────

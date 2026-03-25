@@ -16,7 +16,7 @@ import { saveGraphRun } from "../runs/runStore.js";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type GraphRunSource = "manual" | "trigger" | "trigger-node";
-export type GraphRunStatus = "running" | "done" | "error";
+export type GraphRunStatus = "running" | "done" | "error" | "paused";
 
 export interface GraphRunRecord {
   /** Stable identifier for this specific run. */
@@ -47,6 +47,12 @@ export interface GraphRunRecord {
   error?: string;
   /** Serialisable result from the graph execution. */
   result?: unknown;
+  /** Saved execution context when status is "paused" (manual resume). */
+  pausedContext?: { vars: Record<string, unknown>; nodeOutputs: Record<string, unknown> };
+  /** Node ID to resume from when status is "paused". */
+  pausedResumeFrom?: string;
+  /** Run ID of the original paused run this run was resumed from. */
+  resumedFromRunId?: string;
 }
 
 // ── Registry class ─────────────────────────────────────────────────────────
@@ -146,6 +152,58 @@ class GraphRunRegistryClass extends EventEmitter {
       void saveGraphRun(r).catch(() => {});
     } catch {}
   }
+  /** Mark a run as paused (waiting for manual resume). Persists state to disk. */
+  pause(
+    runId: string,
+    pausedContext: { vars: Record<string, unknown>; nodeOutputs: Record<string, unknown> },
+    pausedResumeFrom?: string,
+  ): void {
+    const r = this._runs.get(runId);
+    if (!r) return;
+    Object.assign(r, {
+      status: "paused" as GraphRunStatus,
+      completedAt: Date.now(),
+      pausedContext,
+      pausedResumeFrom,
+    });
+    this.emit("run:complete", { runId, result: r.result });
+    try { void saveGraphRun(r).catch(() => {}); } catch {}
+  }
+  // ── Soft-stop API ─────────────────────────────────────────────────────────
+
+  private _softStops = new Map<string, { requested: boolean; kind?: "manualStop" }>();
+  /** Runs that were hard-aborted via `abort(runId)` (manual cancel). */
+  private _manualHardAborts = new Set<string>();
+
+  /**
+   * Request a graceful stop for a run.
+   *
+   * Unlike `abort()`, this does NOT fire the AbortSignal immediately.
+   * Instead the runner detects the flag at loop boundaries and exits the
+   * current loop with exitReason "abort" so matching catch nodes still run.
+   */
+  requestStop(runId: string): void {
+    const flag = this._softStops.get(runId);
+    if (flag) { flag.requested = true; flag.kind = "manualStop"; return; }
+    // If the flag hasn't been registered yet (race), create and mark it now.
+    this._softStops.set(runId, { requested: true, kind: "manualStop" });
+  }
+
+  /** @internal Allocate a fresh flag for a run before it starts. */
+  allocateSoftStop(runId: string): { requested: boolean; kind?: "manualStop" } {
+    // Preserve any existing flag so a previous `requestStop` call made
+    // before allocation (race) isn't overwritten and lost.
+    const existing = this._softStops.get(runId) as { requested: boolean; kind?: "manualStop" } | undefined;
+    if (existing) return existing;
+    const flag = { requested: false } as { requested: boolean; kind?: "manualStop" };
+    this._softStops.set(runId, flag);
+    return flag;
+  }
+
+  /** @internal Clean up soft-stop flag when a run ends. */
+  removeSoftStop(runId: string): void {
+    this._softStops.delete(runId);
+  }
 
   // ── Cancellation API ──────────────────────────────────────────────────────
 
@@ -157,6 +215,7 @@ class GraphRunRegistryClass extends EventEmitter {
   /** Remove a stored controller (called when run ends). */
   removeController(runId: string): void {
     this._controllers.delete(runId);
+    this._manualHardAborts.delete(runId);
   }
 
   /**
@@ -166,8 +225,13 @@ class GraphRunRegistryClass extends EventEmitter {
    * parent graph that is synchronously awaiting it.
    */
   abort(runId: string): void {
-    try { this._controllers.get(runId)?.abort(); } catch {}
+    try { this._manualHardAborts.add(runId); this._controllers.get(runId)?.abort(); } catch {}
     this._controllers.delete(runId);
+  }
+
+  /** Return true when the run was hard-aborted via `abort(runId)` */
+  wasHardAborted(runId: string): boolean {
+    return this._manualHardAborts.has(runId);
   }
 
   // ── Read API ──────────────────────────────────────────────────────────────
@@ -196,7 +260,7 @@ class GraphRunRegistryClass extends EventEmitter {
     // registry back to MAX_HISTORY we accept a temporarily oversized map
     // rather than silently dropping a live run.
     const evictable = [...this._runs.entries()]
-      .filter(([, r]) => r.status !== "running")
+      .filter(([, r]) => r.status !== "running" && r.status !== "paused")
       .sort(([, a], [, b]) => a.startedAt - b.startedAt);
     const excess = this._runs.size - MAX_HISTORY;
     for (let i = 0; i < Math.min(excess, evictable.length); i++) {
@@ -280,11 +344,15 @@ export async function runGraphTracked(
   const userOnNodeStart = options.onNodeStart;
   const userOnNodeComplete = options.onNodeComplete;
 
+  const softStop = graphRunRegistry.allocateSoftStop(runId);
+
   const trackedOpts: import("./types.js").GraphRunOptions = {
     ...options,
     // Replace any caller-provided signal with the chained internal one so
     // both parent-signal aborts and registry.abort(runId) propagate correctly.
     signal: internalController.signal,
+    _softStop: softStop,
+    _runId: runId,
     onNodeStart: (nodeId, nodeName, nodeType) => {
       graphRunRegistry.nodeStarted(runId, nodeId, nodeName, nodeType);
       userOnNodeStart?.(nodeId, nodeName, nodeType);
@@ -303,6 +371,11 @@ export async function runGraphTracked(
       graphRunRegistry.complete(runId, { error: "Run aborted" });
       throw new Error("Run aborted");
     }
+    if (result.status === "paused") {
+      // Manual resume: persist context so the user can resume later.
+      graphRunRegistry.pause(runId, result.pausedContext!, result.pausedResumeFrom);
+      return { runId, result };
+    }
     graphRunRegistry.complete(runId, { result });
     return { runId, result };
   } catch (err) {
@@ -315,5 +388,43 @@ export async function runGraphTracked(
     throw err;
   } finally {
     graphRunRegistry.removeController(runId);
+    graphRunRegistry.removeSoftStop(runId);
   }
+}
+
+/**
+ * Resume a paused run from the node recorded in `run.pausedResumeFrom`.
+ *
+ * Creates a new tracked run using the saved context (vars + node outputs)
+ * so template references to previous-run node outputs resolve correctly.
+ *
+ * Returns `{ runId, result }` with the NEW run's ID.
+ */
+export async function resumePausedRun(
+  runId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ runId: string; result: import("./types.js").GraphExecutionResult }> {
+  const run = graphRunRegistry.getRun(runId);
+  if (!run) throw new Error(`Run "${runId}" not found in registry`);
+  if (run.status !== "paused") throw new Error(`Run "${runId}" is not paused (status="${run.status}")`);
+  if (!run.pausedResumeFrom) throw new Error(`Paused run "${runId}" has no resume point`);
+
+  const { loadGraph } = await import("./graphStore.js");
+  const graph = await loadGraph(run.graphId);
+  if (!graph) throw new Error(`Graph "${run.graphId}" not found`);
+
+  const newRunId = `graph:${randomUUID()}`;
+  const result = await runGraphTracked(
+    graph,
+    {
+      startFromNodeId: run.pausedResumeFrom,
+      initialContext: run.pausedContext,
+      signal: opts.signal,
+    },
+    { source: "manual" },
+    newRunId,
+  );
+  // Tag the new run with the original run ID so the UI can link them.
+  graphRunRegistry.update(newRunId, { resumedFromRunId: runId } as Partial<GraphRunRecord>);
+  return result;
 }

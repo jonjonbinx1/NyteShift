@@ -88,6 +88,15 @@ export function SkillToolConfigModal({
   }, [onClose]);
 
   // ── Helpers ──────────────────────────────────────────────────────────
+  // Decode literal backslash-u escapes (e.g. "\\u2026") for display
+  const unescapeUnicodeLiteral = (s: unknown): string => {
+    if (s === undefined || s === null) return "";
+    const str = String(s);
+    return str.replace(/\\u\{?([0-9A-Fa-f]{4,6})\}?/g, (_m, g1) => {
+      const cp = parseInt(g1, 16);
+      try { return String.fromCodePoint(cp); } catch { return String.fromCharCode(cp); }
+    });
+  };
   const setValue = (key: string, val: unknown) => {
     setValues((prev) => ({ ...prev, [key]: val }));
   };
@@ -368,7 +377,7 @@ export function SkillToolConfigModal({
               onMouseEnter={(e) => { if (canRun) (e.currentTarget as HTMLElement).style.background = "rgba(137,180,250,0.18)"; }}
               onMouseLeave={(e) => { if (canRun) (e.currentTarget as HTMLElement).style.background = "rgba(137,180,250,0.08)"; }}
             >
-              {st === "running" ? "\u23F3 Running\u2026" : (field.actionLabel ?? field.label)}
+              {st === "running" ? "\u23F3 Running\u2026" : unescapeUnicodeLiteral(field.actionLabel ?? field.label)}
             </button>
             {st === "done" && actionResults[field.key] && (
               <div style={{ fontSize: 12, color: C.green }}>\u2713 {actionResults[field.key]}</div>
@@ -487,6 +496,7 @@ export function SkillToolConfigModal({
             alignItems: "center",
             gap: 10,
             flexShrink: 0,
+            overflow: "hidden",
           }}
         >
           <span
@@ -496,45 +506,60 @@ export function SkillToolConfigModal({
               color: C.subtext0,
               textTransform: "uppercase",
               letterSpacing: "0.07em",
+              flexShrink: 0,
             }}
           >
             Scope:
           </span>
-          <button
-            onClick={() => setScope("global")}
+          {/* Scrollable buttons strip */}
+          <div
             style={{
-              padding: "5px 14px",
-              borderRadius: 7,
-              border: `1.5px solid ${scope === "global" ? C.mauve : C.surface1}`,
-              background: scope === "global" ? "rgba(203,166,247,0.12)" : C.surface0,
-              color: scope === "global" ? C.mauve : C.subtext0,
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: scope === "global" ? 700 : 400,
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              overflowX: "auto",
+              paddingBottom: 2,
+              scrollbarWidth: "thin",
             }}
           >
-            🌐 Global
-          </button>
-          {(agents ?? []).map((agent) => (
             <button
-              key={agent}
-              onClick={() => setScope(agent)}
+              onClick={() => setScope("global")}
               style={{
                 padding: "5px 14px",
                 borderRadius: 7,
-                border: `1.5px solid ${scope === agent ? C.blue : C.surface1}`,
-                background: scope === agent ? "rgba(137,180,250,0.12)" : C.surface0,
-                color: scope === agent ? C.blue : C.subtext0,
+                border: `1.5px solid ${scope === "global" ? C.mauve : C.surface1}`,
+                background: scope === "global" ? "rgba(203,166,247,0.12)" : C.surface0,
+                color: scope === "global" ? C.mauve : C.subtext0,
                 cursor: "pointer",
                 fontSize: 12,
-                fontWeight: scope === agent ? 700 : 400,
+                fontWeight: scope === "global" ? 700 : 400,
+                flexShrink: 0,
               }}
             >
-              🤖 {agent}
+              🌐 Global
             </button>
-          ))}
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: C.overlay0 }}>
+            {(agents ?? []).map((agent) => (
+              <button
+                key={agent}
+                onClick={() => setScope(agent)}
+                style={{
+                  padding: "5px 14px",
+                  borderRadius: 7,
+                  border: `1.5px solid ${scope === agent ? C.blue : C.surface1}`,
+                  background: scope === agent ? "rgba(137,180,250,0.12)" : C.surface0,
+                  color: scope === agent ? C.blue : C.subtext0,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: scope === agent ? 700 : 400,
+                  flexShrink: 0,
+                }}
+              >
+                🤖 {agent}
+              </button>
+            ))}
+          </div>
+          <span style={{ fontSize: 11, color: C.overlay0, flexShrink: 0 }}>
             {scope === "global"
               ? "Applies to all agents"
               : `Overrides global for "${scope}"`}

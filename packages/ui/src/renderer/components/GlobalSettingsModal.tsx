@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import type { ChannelInfo, ConfigFieldDefinitionInfo } from "../global.js";
 import { useTheme } from "../theme/ThemeContext.js";
 import { ThemeSettingsTab } from "./ThemeSettingsTab.js";
 import { SearchableSelect } from "./SearchableSelect.js";
@@ -10,12 +11,12 @@ interface Props {
 type ModelInfo = { id: string; contextWindow?: number; maxOutputTokens?: number; description?: string };
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
-type Tab = "providers" | "inference" | "engine" | "discord" | "themes" | "about";
+type Tab = "providers" | "inference" | "engine" | "channels" | "themes" | "about";
 const TABS: { id: Tab; icon: string; label: string }[] = [
   { id: "providers", icon: "🔑", label: "Providers" },
   { id: "inference", icon: "🧠", label: "Inference" },
   { id: "engine",    icon: "⚡", label: "Engine" },
-  { id: "discord",   icon: "💬", label: "Discord" },
+  { id: "channels",  icon: "📨", label: "Input Channels" },
   { id: "themes",    icon: "🎨", label: "Themes" },
   { id: "about",     icon: "ℹ️", label: "About" },
 ];
@@ -90,6 +91,15 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
   const markDiscordDirty = React.useCallback(() => {
     if (discordInitialized.current) setDiscordNeedsRestart(true);
   }, []);
+
+  // Input Channels
+  const [channelList, setChannelList] = useState<ChannelInfo[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<string>("");
+  const [channelValues, setChannelValues] = useState<Record<string, unknown>>({});
+  const [channelShowSecrets, setChannelShowSecrets] = useState<Record<string, boolean>>({});
+  const [channelSaving, setChannelSaving] = useState(false);
+  const [channelSaved, setChannelSaved] = useState(false);
+
   // UI state
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -151,7 +161,21 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       setDiscordRunning(s?.running ?? false);
     }).catch(() => {});
     window.nyteShiftApi.listAgents().then(setAgentList).catch(console.error);
+
+    // Load installed channel adapters
+    window.nyteShiftApi.listChannels?.().then((chs) => {
+      setChannelList(chs ?? []);
+    }).catch(() => {});
   }, []);
+
+  // Load channel config values when the selected channel changes
+  useEffect(() => {
+    if (!window.nyteShiftApi || !selectedChannel) return;
+    window.nyteShiftApi
+      .skillToolConfigRead("channel", selectedChannel)
+      .then((v) => setChannelValues(v ?? {}))
+      .catch(() => setChannelValues({}));
+  }, [selectedChannel]);
 
   // Reload models when default provider changes.
   useEffect(() => {
@@ -299,6 +323,136 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
       setDiscordNeedsRestart(false);
     } catch (err) { setDiscordError((err as Error).message); }
     finally { setDiscordLoading(false); }
+  };
+
+  // ── Render a single channel config field ────────────────────────────
+  const channelVal = (key: string, defaultVal?: unknown): any => {
+    const v = channelValues[key];
+    return v !== undefined && v !== null ? v : (defaultVal ?? "");
+  };
+  const setChannelVal = (key: string, val: unknown) => {
+    setChannelValues((prev) => ({ ...prev, [key]: val }));
+  };
+
+  const renderChannelField = (field: ConfigFieldDefinitionInfo) => {
+    const val = channelVal(field.key, field.default);
+
+    switch (field.type) {
+      case "string":
+        return (
+          <input style={inputStyle} value={String(val ?? "")}
+            onChange={(e) => setChannelVal(field.key, e.target.value)}
+            placeholder={field.placeholder ?? ""} />
+        );
+
+      case "secret":
+        return (
+          <div style={{ display: "flex", gap: 6 }}>
+            <input style={{ ...inputStyle, flex: 1 }}
+              type={channelShowSecrets[field.key] ? "text" : "password"}
+              value={String(val ?? "")}
+              onChange={(e) => setChannelVal(field.key, e.target.value)}
+              placeholder={field.placeholder ?? ""} />
+            <button type="button"
+              onClick={() => setChannelShowSecrets((p) => ({ ...p, [field.key]: !p[field.key] }))}
+              style={{
+                background: C.surface0, border: `1px solid ${C.surface1}`,
+                borderRadius: 6, padding: "6px 12px", color: C.subtext0,
+                cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+              }}
+            >{channelShowSecrets[field.key] ? "Hide" : "Show"}</button>
+          </div>
+        );
+
+      case "number":
+        return field.min !== undefined && field.max !== undefined ? (
+          <div>
+            <input type="range" min={field.min} max={field.max} step={field.step ?? 1}
+              value={Number(val ?? field.min)}
+              onChange={(e) => setChannelVal(field.key, Number(e.target.value))}
+              style={{ width: "100%", accentColor: C.mauve }} />
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.overlay0, marginTop: 3 }}>
+              <span>{field.min}</span>
+              <span style={{ color: C.mauve, fontWeight: 700 }}>{String(val ?? field.default ?? field.min)}</span>
+              <span>{field.max}</span>
+            </div>
+          </div>
+        ) : (
+          <input type="number" style={{ ...inputStyle, width: 140 }}
+            value={String(val ?? "")}
+            onChange={(e) => setChannelVal(field.key, e.target.value === "" ? "" : Number(e.target.value))}
+            min={field.min} max={field.max} step={field.step} placeholder={field.placeholder} />
+        );
+
+      case "boolean":
+        return (
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <div onClick={() => setChannelVal(field.key, !val)}
+              style={{
+                width: 40, height: 22, borderRadius: 11,
+                background: val ? C.mauve : C.surface1,
+                position: "relative", cursor: "pointer", transition: "background 0.15s",
+              }}>
+              <div style={{
+                width: 16, height: 16, borderRadius: "50%", background: C.text,
+                position: "absolute", top: 3, left: val ? 21 : 3, transition: "left 0.15s",
+              }} />
+            </div>
+            <span style={{ fontSize: 13, color: val ? C.text : C.subtext0 }}>
+              {val ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+        );
+
+      case "select":
+        return (
+          <select style={selectStyle} value={String(val ?? "")}
+            onChange={(e) => setChannelVal(field.key, e.target.value)}>
+            <option value="">— select —</option>
+            {(field.options ?? []).map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        );
+
+      case "multiselect": {
+        const selected: string[] = Array.isArray(val) ? val : [];
+        return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {(field.options ?? []).map((opt) => {
+              const isSel = selected.includes(opt);
+              return (
+                <button key={opt} type="button"
+                  onClick={() => setChannelVal(field.key, isSel ? selected.filter((s) => s !== opt) : [...selected, opt])}
+                  style={{
+                    padding: "5px 14px", borderRadius: 7,
+                    border: `1.5px solid ${isSel ? C.mauve : C.surface1}`,
+                    background: isSel ? "rgba(203,166,247,0.12)" : C.surface0,
+                    color: isSel ? C.mauve : C.subtext0,
+                    cursor: "pointer", fontSize: 12, fontWeight: isSel ? 700 : 400,
+                    transition: "border-color 0.15s, background 0.15s",
+                  }}
+                >{opt}</button>
+              );
+            })}
+          </div>
+        );
+      }
+
+      case "textarea":
+        return (
+          <textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical", fontFamily: "monospace" }}
+            value={String(val ?? "")}
+            onChange={(e) => setChannelVal(field.key, e.target.value)}
+            placeholder={field.placeholder} />
+        );
+
+      default:
+        return (
+          <input style={inputStyle} value={String(val ?? "")}
+            onChange={(e) => setChannelVal(field.key, e.target.value)} />
+        );
+    }
   };
 
   return (
@@ -676,295 +830,491 @@ export function GlobalSettingsModal({ onClose }: Props): React.JSX.Element {
             </div>
           )}
 
-          {/* ── Discord ── */}
-          {activeTab === "discord" && (
+          {/* ── Input Channels (unified — Discord built-in + marketplace adapters) ── */}
+          {activeTab === "channels" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               <div>
-                <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>Global Discord Bot</h3>
-                <p style={{ margin: "0 0 4px", fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
-                  Connect a single shared Discord bot that can route messages to <strong>any</strong> agent by name.
-                  Agents with their own per-agent Discord bot configured in their settings can be messaged directly.
-                  Agents without their own bot must be addressed by name:
-                </p>
-                <div style={{
-                  background: C.surface0, borderRadius: 8,
-                  padding: "10px 14px", fontSize: 12, color: C.subtext1,
-                  fontFamily: "monospace", lineHeight: 1.7,
-                  border: `1px solid ${C.surface1}`, marginBottom: 4,
-                }}>
-                  @AgentName do something for me<br />
-                  AgentName: summarise the latest news
-                </div>
-                <p style={{ margin: 0, fontSize: 11, color: C.overlay0, lineHeight: 1.4 }}>
-                  Name matching is case-insensitive. The prefix is stripped before the task reaches the agent.
+                <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>Input Channels</h3>
+                <p style={{ margin: 0, fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
+                  Configure messaging integrations that let users communicate with your agents.
+                  Discord is built-in; additional adapters (Slack, WhatsApp, etc.) can be installed from the Marketplace.
                 </p>
               </div>
 
-              {/* Bot token */}
+              {/* Channel selector */}
               <div style={sectionStyle}>
-                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bot Token</h4>
-                <p style={{ margin: 0, fontSize: 11, color: C.subtext0, lineHeight: 1.4 }}>
-                  Create a bot at{" "}
-                  <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer"
-                    style={{ color: C.mauve, textDecoration: "none" }}
-                  >discord.com/developers</a>.
-                  Enable <strong>Message Content Intent</strong> under Privileged Gateway Intents.
-                </p>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    value={discordBotToken}
-                    onChange={(e) => { setDiscordBotToken(e.target.value); markDiscordDirty(); }}
-                    placeholder="Paste your Discord bot token"
-                    type={showDiscordToken ? "text" : "password"}
-                    style={{ ...inputStyle, flex: 1 }}
-                  />
+                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Available Channels</h4>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {/* Built-in Discord */}
                   <button
-                    type="button" onClick={() => setShowDiscordToken(!showDiscordToken)}
+                    onClick={() => setSelectedChannel("__discord__")}
                     style={{
-                      background: C.surface0, border: `1px solid ${C.surface1}`,
-                      borderRadius: 6, padding: "6px 12px", color: C.subtext0,
-                      cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+                      padding: "8px 16px", borderRadius: 8,
+                      border: `1.5px solid ${selectedChannel === "__discord__" ? C.mauve : C.surface1}`,
+                      background: selectedChannel === "__discord__" ? "rgba(203,166,247,0.12)" : C.surface0,
+                      color: selectedChannel === "__discord__" ? C.mauve : C.subtext0,
+                      cursor: "pointer", fontSize: 13,
+                      fontWeight: selectedChannel === "__discord__" ? 700 : 400,
+                      transition: "border-color 0.15s, background 0.15s",
+                      display: "flex", alignItems: "center", gap: 6,
                     }}
-                  >{showDiscordToken ? "Hide" : "Show"}</button>
-                </div>
-              </div>
+                  >
+                    💬 Discord
+                    <span style={{
+                      fontSize: 9, padding: "1px 6px", borderRadius: 4,
+                      background: "rgba(203,166,247,0.15)", color: C.mauve,
+                      fontWeight: 700, letterSpacing: "0.04em",
+                    }}>BUILT-IN</span>
+                  </button>
 
-              {/* Filtering */}
-              <div style={sectionStyle}>
-                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Channel Filtering</h4>
-                <div>
-                  <label style={labelStyle}>Guild (Server) ID</label>
-                  <input
-                    value={discordGuildId}
-                    onChange={(e) => { setDiscordGuildId(e.target.value); markDiscordDirty(); }}
-                    placeholder="Optional — restrict to a specific server"
-                    style={inputStyle}
-                  />
-                </div>
-                <div>
-                  <label style={labelStyle}>Channel IDs</label>
-                  <input
-                    value={discordChannelIds}
-                    onChange={(e) => { setDiscordChannelIds(e.target.value); markDiscordDirty(); }}
-                    placeholder="Comma-separated — blank = all visible channels"
-                    style={inputStyle}
-                  />
-                </div>
-                <div>
-                  <label style={labelStyle}>Conversation Mode</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {(["bridge", "trigger"] as const).map((m) => (
+                  {/* Marketplace channels */}
+                  {channelList.map((ch) => {
+                    const qn = `${ch.contributor}/${ch.name}`;
+                    const isActive = selectedChannel === qn;
+                    return (
                       <button
-                        key={m}
-                        onClick={() => { setDiscordMode(m); markDiscordDirty(); }}
+                        key={qn}
+                        onClick={() => setSelectedChannel(qn)}
                         style={{
-                          flex: 1, padding: "8px 12px", borderRadius: 8,
-                          background: discordMode === m ? "rgba(203,166,247,0.15)" : C.surface0,
-                          border: discordMode === m ? `1px solid rgba(203,166,247,0.4)` : `1px solid transparent`,
-                          color: discordMode === m ? C.mauve : C.subtext0,
-                          fontWeight: discordMode === m ? 700 : 400,
-                          cursor: "pointer", fontSize: 12,
+                          padding: "8px 16px", borderRadius: 8,
+                          border: `1.5px solid ${isActive ? C.mauve : C.surface1}`,
+                          background: isActive ? "rgba(203,166,247,0.12)" : C.surface0,
+                          color: isActive ? C.mauve : C.subtext0,
+                          cursor: "pointer", fontSize: 13,
+                          fontWeight: isActive ? 700 : 400,
+                          transition: "border-color 0.15s, background 0.15s",
+                          display: "flex", alignItems: "center", gap: 6,
                         }}
                       >
-                        {m === "bridge" ? "Bridge (persistent chat)" : "Trigger (one-shot)"}
+                        {ch.name}
+                        {ch.requiresBridge && (
+                          <span style={{
+                            fontSize: 9, padding: "1px 6px", borderRadius: 4,
+                            background: "rgba(249,226,175,0.15)", color: "#f9e2af",
+                            fontWeight: 700,
+                          }}>BRIDGE</span>
+                        )}
                       </button>
-                    ))}
-                  </div>
+                    );
+                  })}
                 </div>
-              </div>
 
-              {/* Channel → Agent routing */}
-              <div style={sectionStyle}>
-                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Channel → Agent Routing</h4>
-                <p style={{ margin: 0, fontSize: 11, color: C.subtext0, lineHeight: 1.5 }}>
-                  Assign a specific agent to a Discord channel. Messages sent in that channel will go
-                  directly to the assigned agent — no name prefix required.
-                  Use the <strong>channel name</strong> (e.g. <code style={{ color: C.mauve }}>codi</code>) or its numeric ID.
-                  Channel names are matched case-insensitively.
-                </p>
-                {channelAgentRows.map((row, i) => (
-                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input
-                      value={row.channelId}
-                      onChange={(e) => {
-                        const next = [...channelAgentRows];
-                        next[i] = { ...next[i], channelId: e.target.value };
-                        setChannelAgentRows(next);
-                        markDiscordDirty();
-                      }}
-                      placeholder="Channel name or ID"
-                      style={{ ...inputStyle, flex: 1 }}
-                    />
-                    <select
-                      value={row.agentName}
-                      onChange={(e) => {
-                        const next = [...channelAgentRows];
-                        next[i] = { ...next[i], agentName: e.target.value };
-                        setChannelAgentRows(next);
-                        markDiscordDirty();
-                      }}
-                      style={{ ...selectStyle, flex: 1 }}
-                    >
-                      <option value="">— Select agent —</option>
-                      {agentList.map((a) => (
-                        <option key={a} value={a}>{a}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => { setChannelAgentRows(channelAgentRows.filter((_, j) => j !== i)); markDiscordDirty(); }}
-                      style={{
-                        background: "rgba(243,139,168,0.1)", border: `1px solid rgba(243,139,168,0.25)`,
-                        borderRadius: 6, padding: "6px 10px", color: C.red,
-                        cursor: "pointer", fontSize: 13, lineHeight: 1,
-                      }}
-                    >🗑</button>
-                  </div>
-                ))}
-                <button
-                  onClick={() => { setChannelAgentRows([...channelAgentRows, { channelId: "", agentName: "" }]); markDiscordDirty(); }}
-                  style={{
-                    alignSelf: "flex-start", background: C.surface0, border: `1px solid ${C.surface1}`,
-                    borderRadius: 7, padding: "6px 14px", color: C.subtext1,
-                    cursor: "pointer", fontSize: 12,
-                  }}
-                >+ Add channel mapping</button>
-              </div>
-
-              {/* Enable / status */}
-              <div style={sectionStyle}>
-                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bridge Status</h4>
-
-                {/* Dirty / needs-restart banner */}
-                {discordRunning && discordNeedsRestart && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    padding: "10px 14px", borderRadius: 8,
-                    background: "rgba(249,226,175,0.08)",
-                    border: "1px solid rgba(249,226,175,0.35)",
-                  }}>
-                    <span style={{ fontSize: 15 }}>⚠️</span>
-                    <span style={{ flex: 1, fontSize: 12, color: "#f9e2af", lineHeight: 1.4 }}>
-                      Settings changed — refresh the bridge to apply them.
-                    </span>
-                    <button
-                      disabled={discordLoading}
-                      onClick={handleRestartBridge}
-                      style={{
-                        padding: "5px 14px", borderRadius: 6, border: "1px solid rgba(249,226,175,0.4)",
-                        background: "rgba(249,226,175,0.12)", color: "#f9e2af",
-                        cursor: discordLoading ? "not-allowed" : "pointer",
-                        fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
-                        opacity: discordLoading ? 0.5 : 1,
-                      }}
-                    >{discordLoading ? "Restarting…" : "Refresh Now"}</button>
-                  </div>
+                {channelList.length === 0 && (
+                  <p style={{ margin: 0, fontSize: 11, color: C.overlay0, lineHeight: 1.5 }}>
+                    Install more channel adapters from the Marketplace to connect Slack, WhatsApp, Telegram, and others.
+                  </p>
                 )}
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input
-                    type="checkbox" id="gdc-enabled" checked={discordEnabled}
-                    onChange={(e) => { setDiscordEnabled(e.target.checked); markDiscordDirty(); }}
-                    style={{ accentColor: C.mauve }}
-                  />
-                  <label htmlFor="gdc-enabled" style={{ fontSize: 13, color: C.text, cursor: "pointer" }}>
-                    Enable global Discord bridge
-                  </label>
-                </div>
+              </div>
 
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  padding: "10px 14px", borderRadius: 8,
-                  background: discordRunning ? "rgba(166,227,161,0.08)" : "rgba(108,112,134,0.08)",
-                  border: `1px solid ${discordRunning ? "rgba(166,227,161,0.25)" : C.surface1}`,
-                }}>
-                  <span style={{
-                    width: 8, height: 8, borderRadius: "50%",
-                    background: discordRunning ? C.green : C.overlay0,
-                    boxShadow: discordRunning ? `0 0 6px ${C.green}` : "none",
-                  }} />
-                  <span style={{ fontSize: 13, color: discordRunning ? C.green : C.subtext0, fontWeight: 600 }}>
-                    {discordRunning ? "Connected" : "Offline"}
-                  </span>
-                  <div style={{ flex: 1 }} />
-                  {!discordRunning ? (
-                    <button
-                      disabled={discordLoading || !discordBotToken.trim()}
-                      onClick={async () => {
-                        setDiscordLoading(true); setDiscordError("");
-                        try {
-                          const builtMap: Record<string, string> = {};
-                          for (const row of channelAgentRows) {
-                            if (row.channelId.trim() && row.agentName.trim()) {
-                              builtMap[row.channelId.trim()] = row.agentName.trim();
-                            }
-                          }
-                          const cfg = {
-                            botToken: discordBotToken.trim(),
-                            guildId: discordGuildId.trim() || undefined,
-                            channelIds: discordChannelIds.trim()
-                              ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean)
-                              : undefined,
-                            enabled: true,
-                            mode: discordMode,
-                            channelAgentMap: Object.keys(builtMap).length > 0 ? builtMap : undefined,
-                          };
-                          await window.nyteShiftApi?.discordGlobalConfigWrite?.(cfg);
-                          setDiscordEnabled(true);
-                          await window.nyteShiftApi?.discordGlobalStart?.();
-                          setDiscordRunning(true);
-                          setDiscordNeedsRestart(false);
-                        } catch (err) { setDiscordError((err as Error).message); }
-                        finally { setDiscordLoading(false); }
-                      }}
-                      style={{
-                        padding: "6px 16px", borderRadius: 7, border: "none",
-                        background: C.green, color: C.crust, fontWeight: 700,
-                        cursor: discordLoading || !discordBotToken.trim() ? "not-allowed" : "pointer",
-                        fontSize: 12, opacity: discordLoading || !discordBotToken.trim() ? 0.5 : 1,
-                      }}
-                    >{discordLoading ? "Connecting…" : "Start"}</button>
-                  ) : (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button
-                        disabled={discordLoading || !discordBotToken.trim()}
-                        onClick={handleRestartBridge}
+              {/* ── Discord detail ── */}
+              {selectedChannel === "__discord__" && (
+                <>
+                  {/* Info card */}
+                  <div style={sectionStyle}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <div style={{
+                        width: 36, height: 36, borderRadius: 10,
+                        background: "rgba(88,101,242,0.15)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 18, flexShrink: 0,
+                      }}>💬</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>Discord</div>
+                        <div style={{ fontSize: 11, color: C.subtext0, marginTop: 1 }}>
+                          Built-in · Persistent bridge
+                        </div>
+                      </div>
+                      <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer"
                         style={{
-                          padding: "6px 16px", borderRadius: 7, border: "none",
-                          background: "#f9e2af", color: "#1e1e2e", fontWeight: 700,
-                          cursor: discordLoading || !discordBotToken.trim() ? "not-allowed" : "pointer",
-                          fontSize: 12, opacity: discordLoading || !discordBotToken.trim() ? 0.5 : 1,
+                          fontSize: 11, color: C.mauve, textDecoration: "none",
+                          padding: "4px 10px", borderRadius: 6,
+                          background: "rgba(203,166,247,0.08)",
+                          border: `1px solid rgba(203,166,247,0.2)`,
                         }}
-                      >{discordLoading ? "Restarting…" : "⟳ Refresh"}</button>
-                      <button
-                        disabled={discordLoading}
-                        onClick={async () => {
-                          setDiscordLoading(true); setDiscordError("");
-                          try {
-                            await window.nyteShiftApi?.discordGlobalStop?.();
-                            setDiscordRunning(false);
-                            setDiscordNeedsRestart(false);
-                          } catch (err) { setDiscordError((err as Error).message); }
-                          finally { setDiscordLoading(false); }
-                        }}
-                        style={{
-                          padding: "6px 16px", borderRadius: 7, border: "none",
-                          background: C.red, color: C.crust, fontWeight: 700,
-                          cursor: discordLoading ? "not-allowed" : "pointer",
-                          fontSize: 12, opacity: discordLoading ? 0.5 : 1,
-                        }}
-                      >{discordLoading ? "Stopping…" : "Stop"}</button>
+                      >Setup Docs ↗</a>
                     </div>
-                  )}
-                </div>
+                    <p style={{ margin: 0, fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
+                      Connect a single shared Discord bot that can route messages to <strong>any</strong> agent by name.
+                      Agents without their own bot must be addressed by name prefix (e.g. <code style={{ color: C.mauve, fontSize: 11 }}>@AgentName do something</code>).
+                    </p>
+                  </div>
 
-                {discordError && (
-                  <div style={{
-                    padding: "8px 12px", borderRadius: 8,
-                    background: "rgba(243,139,168,0.08)",
-                    border: `1px solid rgba(243,139,168,0.2)`,
-                    fontSize: 12, color: C.red, wordBreak: "break-word",
-                  }}>{discordError}</div>
-                )}
-              </div>
+                  {/* Bot token */}
+                  <div style={sectionStyle}>
+                    <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bot Token</h4>
+                    <p style={{ margin: 0, fontSize: 11, color: C.subtext0, lineHeight: 1.4 }}>
+                      Create a bot at{" "}
+                      <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer"
+                        style={{ color: C.mauve, textDecoration: "none" }}
+                      >discord.com/developers</a>.
+                      Enable <strong>Message Content Intent</strong> under Privileged Gateway Intents.
+                    </p>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        value={discordBotToken}
+                        onChange={(e) => { setDiscordBotToken(e.target.value); markDiscordDirty(); }}
+                        placeholder="Paste your Discord bot token"
+                        type={showDiscordToken ? "text" : "password"}
+                        style={{ ...inputStyle, flex: 1 }}
+                      />
+                      <button
+                        type="button" onClick={() => setShowDiscordToken(!showDiscordToken)}
+                        style={{
+                          background: C.surface0, border: `1px solid ${C.surface1}`,
+                          borderRadius: 6, padding: "6px 12px", color: C.subtext0,
+                          cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+                        }}
+                      >{showDiscordToken ? "Hide" : "Show"}</button>
+                    </div>
+                  </div>
+
+                  {/* Filtering */}
+                  <div style={sectionStyle}>
+                    <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Channel Filtering</h4>
+                    <div>
+                      <label style={labelStyle}>Guild (Server) ID</label>
+                      <input
+                        value={discordGuildId}
+                        onChange={(e) => { setDiscordGuildId(e.target.value); markDiscordDirty(); }}
+                        placeholder="Optional — restrict to a specific server"
+                        style={inputStyle}
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Channel IDs</label>
+                      <input
+                        value={discordChannelIds}
+                        onChange={(e) => { setDiscordChannelIds(e.target.value); markDiscordDirty(); }}
+                        placeholder="Comma-separated — blank = all visible channels"
+                        style={inputStyle}
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Conversation Mode</label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {(["bridge", "trigger"] as const).map((m) => (
+                          <button
+                            key={m}
+                            onClick={() => { setDiscordMode(m); markDiscordDirty(); }}
+                            style={{
+                              flex: 1, padding: "8px 12px", borderRadius: 8,
+                              background: discordMode === m ? "rgba(203,166,247,0.15)" : C.surface0,
+                              border: discordMode === m ? `1px solid rgba(203,166,247,0.4)` : `1px solid transparent`,
+                              color: discordMode === m ? C.mauve : C.subtext0,
+                              fontWeight: discordMode === m ? 700 : 400,
+                              cursor: "pointer", fontSize: 12,
+                            }}
+                          >
+                            {m === "bridge" ? "Bridge (persistent chat)" : "Trigger (one-shot)"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Channel → Agent routing */}
+                  <div style={sectionStyle}>
+                    <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Channel → Agent Routing</h4>
+                    <p style={{ margin: 0, fontSize: 11, color: C.subtext0, lineHeight: 1.5 }}>
+                      Assign a specific agent to a Discord channel. Messages sent in that channel will go
+                      directly to the assigned agent — no name prefix required.
+                    </p>
+                    {channelAgentRows.map((row, i) => (
+                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input
+                          value={row.channelId}
+                          onChange={(e) => {
+                            const next = [...channelAgentRows];
+                            next[i] = { ...next[i], channelId: e.target.value };
+                            setChannelAgentRows(next);
+                            markDiscordDirty();
+                          }}
+                          placeholder="Channel name or ID"
+                          style={{ ...inputStyle, flex: 1 }}
+                        />
+                        <select
+                          value={row.agentName}
+                          onChange={(e) => {
+                            const next = [...channelAgentRows];
+                            next[i] = { ...next[i], agentName: e.target.value };
+                            setChannelAgentRows(next);
+                            markDiscordDirty();
+                          }}
+                          style={{ ...selectStyle, flex: 1 }}
+                        >
+                          <option value="">— Select agent —</option>
+                          {agentList.map((a) => (
+                            <option key={a} value={a}>{a}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => { setChannelAgentRows(channelAgentRows.filter((_, j) => j !== i)); markDiscordDirty(); }}
+                          style={{
+                            background: "rgba(243,139,168,0.1)", border: `1px solid rgba(243,139,168,0.25)`,
+                            borderRadius: 6, padding: "6px 10px", color: C.red,
+                            cursor: "pointer", fontSize: 13, lineHeight: 1,
+                          }}
+                        >🗑</button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => { setChannelAgentRows([...channelAgentRows, { channelId: "", agentName: "" }]); markDiscordDirty(); }}
+                      style={{
+                        alignSelf: "flex-start", background: C.surface0, border: `1px solid ${C.surface1}`,
+                        borderRadius: 7, padding: "6px 14px", color: C.subtext1,
+                        cursor: "pointer", fontSize: 12,
+                      }}
+                    >+ Add channel mapping</button>
+                  </div>
+
+                  {/* Bridge status */}
+                  <div style={sectionStyle}>
+                    <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Bridge Status</h4>
+
+                    {discordRunning && discordNeedsRestart && (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "10px 14px", borderRadius: 8,
+                        background: "rgba(249,226,175,0.08)",
+                        border: "1px solid rgba(249,226,175,0.35)",
+                      }}>
+                        <span style={{ fontSize: 15 }}>⚠️</span>
+                        <span style={{ flex: 1, fontSize: 12, color: "#f9e2af", lineHeight: 1.4 }}>
+                          Settings changed — refresh the bridge to apply them.
+                        </span>
+                        <button
+                          disabled={discordLoading}
+                          onClick={handleRestartBridge}
+                          style={{
+                            padding: "5px 14px", borderRadius: 6, border: "1px solid rgba(249,226,175,0.4)",
+                            background: "rgba(249,226,175,0.12)", color: "#f9e2af",
+                            cursor: discordLoading ? "not-allowed" : "pointer",
+                            fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+                            opacity: discordLoading ? 0.5 : 1,
+                          }}
+                        >{discordLoading ? "Restarting…" : "Refresh Now"}</button>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox" id="gdc-enabled" checked={discordEnabled}
+                        onChange={(e) => { setDiscordEnabled(e.target.checked); markDiscordDirty(); }}
+                        style={{ accentColor: C.mauve }}
+                      />
+                      <label htmlFor="gdc-enabled" style={{ fontSize: 13, color: C.text, cursor: "pointer" }}>
+                        Enable global Discord bridge
+                      </label>
+                    </div>
+
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "10px 14px", borderRadius: 8,
+                      background: discordRunning ? "rgba(166,227,161,0.08)" : "rgba(108,112,134,0.08)",
+                      border: `1px solid ${discordRunning ? "rgba(166,227,161,0.25)" : C.surface1}`,
+                    }}>
+                      <span style={{
+                        width: 8, height: 8, borderRadius: "50%",
+                        background: discordRunning ? C.green : C.overlay0,
+                        boxShadow: discordRunning ? `0 0 6px ${C.green}` : "none",
+                      }} />
+                      <span style={{ fontSize: 13, color: discordRunning ? C.green : C.subtext0, fontWeight: 600 }}>
+                        {discordRunning ? "Connected" : "Offline"}
+                      </span>
+                      <div style={{ flex: 1 }} />
+                      {!discordRunning ? (
+                        <button
+                          disabled={discordLoading || !discordBotToken.trim()}
+                          onClick={async () => {
+                            setDiscordLoading(true); setDiscordError("");
+                            try {
+                              const cfg = buildDiscordConfig();
+                              await window.nyteShiftApi?.discordGlobalConfigWrite?.(cfg);
+                              setDiscordEnabled(true);
+                              await window.nyteShiftApi?.discordGlobalStart?.();
+                              setDiscordRunning(true);
+                              setDiscordNeedsRestart(false);
+                            } catch (err) { setDiscordError((err as Error).message); }
+                            finally { setDiscordLoading(false); }
+                          }}
+                          style={{
+                            padding: "6px 16px", borderRadius: 7, border: "none",
+                            background: C.green, color: C.crust, fontWeight: 700,
+                            cursor: discordLoading || !discordBotToken.trim() ? "not-allowed" : "pointer",
+                            fontSize: 12, opacity: discordLoading || !discordBotToken.trim() ? 0.5 : 1,
+                          }}
+                        >{discordLoading ? "Connecting…" : "Start"}</button>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            disabled={discordLoading || !discordBotToken.trim()}
+                            onClick={handleRestartBridge}
+                            style={{
+                              padding: "6px 16px", borderRadius: 7, border: "none",
+                              background: "#f9e2af", color: "#1e1e2e", fontWeight: 700,
+                              cursor: discordLoading || !discordBotToken.trim() ? "not-allowed" : "pointer",
+                              fontSize: 12, opacity: discordLoading || !discordBotToken.trim() ? 0.5 : 1,
+                            }}
+                          >{discordLoading ? "Restarting…" : "⟳ Refresh"}</button>
+                          <button
+                            disabled={discordLoading}
+                            onClick={async () => {
+                              setDiscordLoading(true); setDiscordError("");
+                              try {
+                                await window.nyteShiftApi?.discordGlobalStop?.();
+                                setDiscordRunning(false);
+                                setDiscordNeedsRestart(false);
+                              } catch (err) { setDiscordError((err as Error).message); }
+                              finally { setDiscordLoading(false); }
+                            }}
+                            style={{
+                              padding: "6px 16px", borderRadius: 7, border: "none",
+                              background: C.red, color: C.crust, fontWeight: 700,
+                              cursor: discordLoading ? "not-allowed" : "pointer",
+                              fontSize: 12, opacity: discordLoading ? 0.5 : 1,
+                            }}
+                          >{discordLoading ? "Stopping…" : "Stop"}</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {discordError && (
+                      <div style={{
+                        padding: "8px 12px", borderRadius: 8,
+                        background: "rgba(243,139,168,0.08)",
+                        border: `1px solid rgba(243,139,168,0.2)`,
+                        fontSize: 12, color: C.red, wordBreak: "break-word",
+                      }}>{discordError}</div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* ── Marketplace channel detail ── */}
+              {selectedChannel && selectedChannel !== "__discord__" && (() => {
+                const ch = channelList.find((c) => `${c.contributor}/${c.name}` === selectedChannel);
+                if (!ch) return null;
+                const fields: ConfigFieldDefinitionInfo[] = ch.config ?? [];
+                const mode = ch.connectionMode ?? "webhook";
+
+                return (
+                  <>
+                    {/* Channel info card */}
+                    <div style={sectionStyle}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{
+                          width: 36, height: 36, borderRadius: 10,
+                          background: "rgba(137,180,250,0.12)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 18, flexShrink: 0,
+                        }}>📨</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
+                            {ch.name}
+                            {ch.requiresBridge && (
+                              <span style={{
+                                fontSize: 9, padding: "1px 6px", borderRadius: 4,
+                                background: "rgba(249,226,175,0.15)", color: "#f9e2af",
+                                fontWeight: 700,
+                              }}>BRIDGE REQUIRED</span>
+                            )}
+                            <span style={{
+                              fontSize: 9, padding: "1px 6px", borderRadius: 4,
+                              background: mode === "persistent" ? "rgba(137,180,250,0.15)"
+                                : mode === "oauth" ? "rgba(250,179,135,0.15)"
+                                : "rgba(166,227,161,0.15)",
+                              color: mode === "persistent" ? C.blue
+                                : mode === "oauth" ? "#fab387"
+                                : C.green,
+                              fontWeight: 700, textTransform: "uppercase",
+                            }}>{mode}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: C.subtext0, marginTop: 1 }}>
+                            {ch.contributor} · v{ch.version}
+                          </div>
+                        </div>
+                        {ch.docsUrl && (
+                          <a href={ch.docsUrl} target="_blank" rel="noreferrer"
+                            style={{
+                              fontSize: 11, color: C.mauve, textDecoration: "none",
+                              padding: "4px 10px", borderRadius: 6,
+                              background: "rgba(203,166,247,0.08)",
+                              border: `1px solid rgba(203,166,247,0.2)`,
+                            }}
+                          >Setup Docs ↗</a>
+                        )}
+                      </div>
+                      {ch.description && (
+                        <p style={{ margin: 0, fontSize: 12, color: C.subtext0, lineHeight: 1.5 }}>
+                          {ch.description}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Config fields */}
+                    {fields.length === 0 ? (
+                      <div style={{
+                        ...sectionStyle,
+                        alignItems: "center", textAlign: "center", padding: "28px 24px",
+                      }}>
+                        <p style={{ margin: 0, fontSize: 13, color: C.overlay0 }}>
+                          This channel has no configurable settings.
+                        </p>
+                      </div>
+                    ) : (
+                      <div style={sectionStyle}>
+                        <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Settings</h4>
+                        {fields.map((field) => (
+                          <div key={field.key}>
+                            <label style={labelStyle}>{field.label}</label>
+                            {field.description && (
+                              <p style={{ margin: "0 0 6px", fontSize: 11, color: C.overlay0, lineHeight: 1.4 }}>
+                                {field.description}
+                              </p>
+                            )}
+                            {renderChannelField(field)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Save button for marketplace channel config */}
+                    {fields.length > 0 && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        {channelSaved && (
+                          <span style={{ fontSize: 12, color: C.green }}>✓ Channel settings saved</span>
+                        )}
+                        <div style={{ flex: 1 }} />
+                        <button
+                          disabled={channelSaving}
+                          onClick={async () => {
+                            if (!window.nyteShiftApi) return;
+                            setChannelSaving(true);
+                            try {
+                              await window.nyteShiftApi.skillToolConfigWrite(
+                                "channel", selectedChannel, channelValues,
+                              );
+                              setChannelSaved(true);
+                              setTimeout(() => setChannelSaved(false), 2500);
+                            } catch (err) {
+                              console.error("Failed to save channel config:", err);
+                            } finally {
+                              setChannelSaving(false);
+                            }
+                          }}
+                          style={{
+                            padding: "8px 24px", borderRadius: 8, border: "none",
+                            background: C.mauve, color: C.crust, fontWeight: 700,
+                            cursor: channelSaving ? "not-allowed" : "pointer", fontSize: 13,
+                            opacity: channelSaving ? 0.7 : 1, transition: "opacity 0.15s",
+                          }}
+                        >
+                          {channelSaving ? "Saving…" : "Save Channel Settings"}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 

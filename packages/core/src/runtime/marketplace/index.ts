@@ -42,6 +42,8 @@ export {
   installMarketplaceItem,
   uninstallMarketplaceItem,
   extractDescriptionFromDir,
+  fetchMarketplaceGraphDef,
+  installMarketplaceGraph,
 } from "./marketplaceBrowser.js";
 
 // Installed-item metadata / auto-update helpers

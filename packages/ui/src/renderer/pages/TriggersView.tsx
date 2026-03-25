@@ -10,9 +10,11 @@ function typeIcon(type: TriggerType): string {
     case "cron": return "📅";
     case "webhook": return "🔗";
     case "discord": return "💬";
+    case "channel": return "📨";
     case "manual": return "▶";
     case "oneoff": return "⏱";
     case "monthly": return "🗓";
+    default: return "❓";
   }
 }
 
@@ -21,9 +23,11 @@ function typeLabel(type: TriggerType): string {
     case "cron": return "Scheduled";
     case "webhook": return "Webhook";
     case "discord": return "Discord";
+    case "channel": return "Channel";
     case "manual": return "Manual";
     case "oneoff": return "One-off";
     case "monthly": return "Monthly";
+    default: return type;
   }
 }
 
@@ -61,6 +65,7 @@ export function TriggersView(): React.JSX.Element {
   const [triggers, setTriggers] = useState<TriggerDefinitionInfo[]>([]);
   const [runs, setRuns] = useState<TriggerRunInfo[]>([]);
   const [agents, setAgents] = useState<string[]>([]);
+  const [graphs, setGraphs] = useState<Array<{ id: string; name: string }>>([]);
   const [engineRunning, setEngineRunning] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editTrigger, setEditTrigger] = useState<TriggerDefinitionInfo | null>(null);
@@ -71,16 +76,18 @@ export function TriggersView(): React.JSX.Element {
 
   const load = useCallback(async () => {
     if (!window.nyteShiftApi) return;
-    const [allTriggers, allAgents, status, allRuns] = await Promise.all([
+    const [allTriggers, allAgents, status, allRuns, allGraphs] = await Promise.all([
       window.nyteShiftApi.triggersListAll(),
       window.nyteShiftApi.listAgents(),
       window.nyteShiftApi.triggersEngineStatus(),
       window.nyteShiftApi.triggersRuns(),
+      (window.nyteShiftApi.graphList?.() ?? Promise.resolve([])).catch(() => []),
     ]);
     setTriggers(allTriggers);
     setAgents(allAgents);
     setEngineRunning(status.running);
     setRuns(allRuns);
+    setGraphs((allGraphs as any[]).map((g) => ({ id: g.id, name: g.name ?? g.id })));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -277,7 +284,11 @@ export function TriggersView(): React.JSX.Element {
                     <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: "0.8rem", color: c.subtext }}>
                       <span>{typeLabel(t.type)}</span>
                       <span style={{ color: c.dim }}>→</span>
-                      <span style={{ color: c.accent }}>{t.agentName}</span>
+                      <span style={{ color: c.accent }}>
+                        {t.targetType === "graph"
+                          ? (graphs.find((g) => g.id === t.targetId)?.name ?? `graph:${(t.targetId ?? "?").slice(0, 8)}`)
+                          : t.agentName}
+                      </span>
                       {describeTriggerSchedule(t) && (
                         <span style={{ color: c.muted }}>({describeTriggerSchedule(t)})</span>
                       )}
@@ -301,38 +312,99 @@ export function TriggersView(): React.JSX.Element {
                   </h3>
 
                   <DetailRow label="Type" value={typeLabel(selectedTrigger.type)} />
-                  <DetailRow label="Agent" value={selectedTrigger.agentName} accent />
                   <DetailRow label="Status" value={selectedTrigger.enabled ? "Enabled" : "Disabled"} />
+
+                  {/* Target — agent or graph */}
+                  {selectedTrigger.targetType !== "graph" ? (
+                    <DetailRow label="Agent" value={selectedTrigger.agentName} accent />
+                  ) : (
+                    <DetailRow label="Graph" value={graphs.find((g) => g.id === selectedTrigger.targetId)?.name ?? selectedTrigger.targetId ?? "—"} accent />
+                  )}
+
                   {describeTriggerSchedule(selectedTrigger) && (
                     <DetailRow label="Schedule" value={describeTriggerSchedule(selectedTrigger)} />
                   )}
                   {selectedTrigger.webhookPath && <DetailRow label="Webhook" value={selectedTrigger.webhookPath} />}
+
+                  {/* Discord rows — conditionally shown */}
                   {selectedTrigger.type === "discord" && (
                     <>
-                      <DetailRow label="Discord Mode" value={selectedTrigger.discordMode === "bridge" ? "Chat Bridge" : "Trigger"} />
-                      {selectedTrigger.discordGuildId && <DetailRow label="Guild ID" value={selectedTrigger.discordGuildId} />}
-                      {selectedTrigger.discordChannelIds?.length ? <DetailRow label="Channels" value={selectedTrigger.discordChannelIds.join(", ")} /> : null}
-                      <DetailRow label="Mention Only" value={selectedTrigger.discordMentionOnly ? "Yes" : "No"} />
+                      {/* Mode only makes sense for agent (bridge vs trigger) */}
+                      {selectedTrigger.targetType !== "graph" && (
+                        <DetailRow label="Discord Mode" value={selectedTrigger.discordMode === "bridge" ? "Chat Bridge" : "Trigger"} />
+                      )}
+                      {selectedTrigger.discordGuildId && <DetailRow label="Server ID" value={selectedTrigger.discordGuildId} />}
+                      {selectedTrigger.discordChannelIds?.length ? (
+                        <DetailRow label="Channels" value={selectedTrigger.discordChannelIds.join(", ")} />
+                      ) : null}
+                      {/* Mention only applies to agent triggers, not graph slash commands */}
+                      {selectedTrigger.targetType !== "graph" && (
+                        <DetailRow label="Mention Only" value={selectedTrigger.discordMentionOnly ? "Yes" : "No"} />
+                      )}
+                      {selectedTrigger.discordCommand && (
+                        <DetailRow label="Slash Command" value={`/${selectedTrigger.discordCommand}`} />
+                      )}
+                      {selectedTrigger.discordCommand && selectedTrigger.discordCommandInput && selectedTrigger.discordCommandInput !== "none" && (
+                        <DetailRow
+                          label="Input Mode"
+                          value={selectedTrigger.discordCommandInput === "text" ? "Text args → input.text" : "JSON args → input"}
+                        />
+                      )}
                     </>
                   )}
-                  <DetailRow label="Max Steps" value={String(selectedTrigger.maxSteps ?? 10)} />
+
+                  {/* Channel adapter rows — conditionally shown */}
+                  {selectedTrigger.type === "channel" && (
+                    <>
+                      {selectedTrigger.channelName && <DetailRow label="Channel Adapter" value={selectedTrigger.channelName} accent />}
+                      <DetailRow label="Mode" value={selectedTrigger.channelMode === "bridge" ? "Chat Bridge" : "Trigger"} />
+                    </>
+                  )}
+
+                  {/* Max Steps only for agent triggers */}
+                  {selectedTrigger.targetType !== "graph" && (
+                    <DetailRow label="Max Steps" value={String(selectedTrigger.maxSteps ?? 10)} />
+                  )}
+
                   <DetailRow label="Created" value={new Date(selectedTrigger.createdAt).toLocaleString()} />
 
-                  <div style={{ margin: "14px 0 8px" }}>
-                    <span style={{ fontSize: "0.78rem", color: c.muted, fontWeight: 500 }}>Task Template</span>
-                    <pre style={{
-                      background: c.card,
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                      fontSize: "0.78rem",
-                      color: c.subtext,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      margin: "4px 0 0",
-                      maxHeight: 120,
-                      overflow: "auto",
-                    }}>{selectedTrigger.taskTemplate}</pre>
-                  </div>
+                  {/* Task Template — agent triggers only, and only when non-empty */}
+                  {selectedTrigger.targetType !== "graph" && !!selectedTrigger.taskTemplate && (
+                    <div style={{ margin: "14px 0 8px" }}>
+                      <span style={{ fontSize: "0.78rem", color: c.muted, fontWeight: 500 }}>Task Template</span>
+                      <pre style={{
+                        background: c.card,
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        fontSize: "0.78rem",
+                        color: c.subtext,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        margin: "4px 0 0",
+                        maxHeight: 120,
+                        overflow: "auto",
+                      }}>{selectedTrigger.taskTemplate}</pre>
+                    </div>
+                  )}
+
+                  {/* Static input summary — graph triggers only */}
+                  {selectedTrigger.targetType === "graph" && selectedTrigger.triggerInput && Object.keys(selectedTrigger.triggerInput).length > 0 && (
+                    <div style={{ margin: "14px 0 8px" }}>
+                      <span style={{ fontSize: "0.78rem", color: c.muted, fontWeight: 500 }}>Static Input</span>
+                      <pre style={{
+                        background: c.card,
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        fontSize: "0.78rem",
+                        color: c.subtext,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        margin: "4px 0 0",
+                        maxHeight: 120,
+                        overflow: "auto",
+                      }}>{JSON.stringify(selectedTrigger.triggerInput, null, 2)}</pre>
+                    </div>
+                  )}
 
                   <div style={{ margin: "10px 0 4px", fontSize: "0.72rem", color: c.dim, fontFamily: "monospace" }}>
                     ID: {selectedTrigger.id}

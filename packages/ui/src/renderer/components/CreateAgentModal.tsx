@@ -167,6 +167,12 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
 
+  // Discord access control
+  const [discordAccessMode, setDiscordAccessMode] = useState<"disabled" | "global" | "restricted">("disabled");
+  const [discordAccessServerIds, setDiscordAccessServerIds] = useState("");
+  const [discordAccessChannelIds, setDiscordAccessChannelIds] = useState("");
+  const [discordAccessChannelNames, setDiscordAccessChannelNames] = useState("");
+
   // Options
   const [providers, setProviders] = useState<string[]>([]);
   const [models, setModels] = useState<import("../global.js").ModelInfo[]>([]);
@@ -222,6 +228,19 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
       if (maxTokens !== "")           cfg.maxTokens   = parseInt(maxTokens, 10);
       if (selectedSkills.length > 0)  cfg.skills      = selectedSkills;
       if (selectedTools.length > 0)   cfg.tools       = selectedTools;
+
+      // Discord access control
+      const discordAccess: Record<string, unknown> = { mode: discordAccessMode };
+      if (discordAccessMode === "restricted") {
+        const sids = discordAccessServerIds.trim() ? discordAccessServerIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+        const cids = discordAccessChannelIds.trim() ? discordAccessChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+        const cnames = discordAccessChannelNames.trim() ? discordAccessChannelNames.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+        if (sids) discordAccess.serverIds = sids;
+        if (cids) discordAccess.channelIds = cids;
+        if (cnames) discordAccess.channelNames = cnames;
+      }
+      cfg.discordAccess = discordAccess;
+
       await window.nyteShiftApi.writeAgentConfig(trimmedName, cfg);
 
       // 3. Persist soul.md if the user typed anything
@@ -357,7 +376,78 @@ export function CreateAgentModal({ onClose, onCreated }: Props): React.JSX.Eleme
             descOf={(i) => (i as unknown as ToolInfo).description ?? ""}
           />
         </div>
-
+        {/* ── Discord Access ─────────────────────────────────────── */}
+        <div>
+          <p style={sectionHeadStyle}>Discord Access</p>
+          <p style={{ fontSize: 12, color: C.overlay1, margin: "0 0 10px" }}>
+            Controls whether this agent responds to Discord messages. Restricted to specific channels
+            or servers can be configured here or later in the agent settings.
+          </p>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {([
+              { id: "disabled",   icon: "🚫", label: "Disabled" },
+              { id: "global",     icon: "🌐", label: "Globally Available" },
+              { id: "restricted", icon: "🔒", label: "Restricted" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setDiscordAccessMode(opt.id)}
+                style={{
+                  flex: 1,
+                  padding: "8px 6px",
+                  borderRadius: 6,
+                  border: discordAccessMode === opt.id ? `1px solid rgba(203,166,247,0.5)` : `1px solid ${C.surface1}`,
+                  background: discordAccessMode === opt.id ? "rgba(203,166,247,0.12)" : C.mantle,
+                  color: discordAccessMode === opt.id ? C.mauve : C.subtext0,
+                  fontWeight: discordAccessMode === opt.id ? 700 : 400,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                }}
+              >
+                <span>{opt.icon}</span>
+                <span>{opt.label}</span>
+              </button>
+            ))}
+          </div>
+          {discordAccessMode === "restricted" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Server IDs</label>
+                <input
+                  style={inputStyle}
+                  value={discordAccessServerIds}
+                  onChange={(e) => setDiscordAccessServerIds(e.target.value)}
+                  placeholder="Comma-separated Discord server IDs (blank = any server)"
+                />
+                <span style={{ fontSize: 11, color: C.overlay1 }}>When set, channel filters only apply within these servers.</span>
+              </div>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Channel IDs <span style={{ color: C.green, fontWeight: 400 }}>(more secure)</span></label>
+                <input
+                  style={inputStyle}
+                  value={discordAccessChannelIds}
+                  onChange={(e) => setDiscordAccessChannelIds(e.target.value)}
+                  placeholder="Comma-separated channel snowflake IDs"
+                />
+              </div>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Channel Names <span style={{ color: C.yellow, fontWeight: 400 }}>(less secure)</span></label>
+                <input
+                  style={inputStyle}
+                  value={discordAccessChannelNames}
+                  onChange={(e) => setDiscordAccessChannelNames(e.target.value)}
+                  placeholder="e.g. general, #support"
+                />
+                <span style={{ fontSize: 11, color: C.overlay1 }}>⚠️ Names can be changed by server admins. Prefer IDs when possible.</span>
+              </div>
+            </div>
+          )}
+        </div>
         {/* ── Soul.md ───────────────────────────────────────────────── */}
         <div>
           <p style={sectionHeadStyle}>Soul.md</p>

@@ -26,6 +26,8 @@ import {
   fetchRawFile,
   type GitTreeEntry,
 } from "./marketplaceRemote.js";
+import { saveGraph } from "../graph/graphStore.js";
+import type { GraphDefinition } from "../graph/types.js";
 import matter from "gray-matter";
 
 /** Top-level folders that are not marketplace categories */
@@ -351,4 +353,89 @@ export async function extractDescriptionFromDir(itemPath: string): Promise<strin
     } catch { /* ignore */ }
   }
   return "";
+}
+
+// ── Graph marketplace helpers ─────────────────────────────────────────────────
+
+/**
+ * Fetch the `graph.json` for a marketplace graph item without installing it.
+ *
+ * Used by the UI to read the graph's dependency requirements before committing
+ * to the download so that the user can be prompted to install any missing
+ * tools or skills first.
+ */
+export async function fetchMarketplaceGraphDef(item: {
+  remotePath: string;
+  source?: string;
+}): Promise<GraphDefinition> {
+  const cfg = await readMarketplaceConfig();
+  const source = item.source
+    ? cfg.sources.find((s) => s.name === item.source)
+    : cfg.sources.find((s) => s.enabled);
+  if (!source) throw new Error("No enabled marketplace source found");
+
+  const coords = parseGithubUrl(source.url);
+  if (!coords) throw new Error(`Source "${source.name}" does not use a GitHub URL`);
+
+  const branch = source.branch ?? "main";
+  // Verify the graph file exists in the repo tree before attempting to
+  // download it. This avoids unhelpful HTTP 404 errors from the raw CDN
+  // and lets us surface a clearer message to the caller/UI.
+  const graphPath = `${item.remotePath}/graph.json`;
+  const entries = await fetchRepoTree(coords.owner, coords.repo, branch);
+  const hasGraph = entries.some((e) => e.type === "blob" && e.path === graphPath);
+  if (!hasGraph) {
+    throw new Error(`Graph definition not found at "${graphPath}" in ${coords.owner}/${coords.repo}@${branch}`);
+  }
+
+  const raw = await fetchRawFile(coords.owner, coords.repo, branch, graphPath);
+  return JSON.parse(raw) as GraphDefinition;
+}
+
+/**
+ * Install a graph from the marketplace by saving it into the local graph store
+ * (`~/.nyteshift/graphs/<id>.json`) and registering it in `installed.json`.
+ *
+ * Unlike skill/tool installs, the graph does NOT get a separate file tree under
+ * `~/.nyteshift/graphs/<contributor>/<name>/` — it is saved directly via the
+ * graph store using its embedded `id` field.
+ */
+export async function installMarketplaceGraph(
+  graph: GraphDefinition,
+  item: {
+    category: string;
+    contributor: string;
+    name: string;
+    remotePath?: string;
+    source?: string;
+  },
+): Promise<{ installed: boolean; message: string }> {
+  try {
+    await saveGraph(graph);
+
+    // Record in installed.json using the graph's id as the hash so update
+    // tracking can detect when the remote graph.json changes.
+    try {
+      const gcfg = await readGlobalConfig();
+      const defaultAuto = (gcfg.autoUpdate?.marketplace as boolean) ?? false;
+      await saveInstalledItem({
+        category: item.category,
+        contributor: item.contributor,
+        name: item.name,
+        version: graph.version,
+        hash: graph.id,
+        autoUpdate: defaultAuto,
+      });
+    } catch { /* Non-fatal — graph is saved even if index registration fails */ }
+
+    return {
+      installed: true,
+      message: `Graph "${graph.name}" has been added to your graphs.`,
+    };
+  } catch (err) {
+    return {
+      installed: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

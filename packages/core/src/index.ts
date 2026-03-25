@@ -36,6 +36,7 @@ export { loadSkills as listSkills } from "./runtime/skills/skillLoader.js";
 // ── Tools ──────────────────────────────────────────────────────────────
 export { loadTools as listTools, getTool } from "./runtime/tools/toolLoader.js";
 export { ensureToolDeps } from "./runtime/tools/toolDeps.js";
+export { createToolContext } from "./runtime/tools/toolContext.js";
 
 // ── Providers ──────────────────────────────────────────────────────────
 export {
@@ -145,8 +146,12 @@ export type { DiscordBridgeOptions } from "./runtime/discord/discordBridge.js";
 export { AgentController } from "./runtime/control/controller.js";
 
 // ── Utils (selective) ──────────────────────────────────────────────────
-export { toKebab, nyteShiftHome } from "./utils/index.js";
+export { toKebab, nyteShiftHome, channelsDir } from "./utils/index.js";
 export { listPersistedGraphRuns, listPersistedTriggerRuns, saveGraphRun, saveTriggerRun, prunePersistedRuns } from "./runtime/runs/runStore.js";
+
+// ── Channels ───────────────────────────────────────────────────────────
+export { loadChannels as listChannels, getChannel } from "./runtime/channels/channelLoader.js";
+export { ensureChannelDeps } from "./runtime/channels/channelDeps.js";
 
 // ── Agent Graph ────────────────────────────────────────────────────────
 export type {
@@ -171,8 +176,11 @@ export {
   deleteGraph,
   graphRunRegistry,
   runGraphTracked,
+  resumePausedRun,
+  checkGraphDeps,
 } from "./runtime/graph/index.js";
 export type { GraphRunRecord, GraphRunMeta, GraphRunSource, GraphRunStatus } from "./runtime/graph/index.js";
+export type { GraphDepsResult } from "./runtime/graph/index.js";
 
 // ── Sub-Agent Delegation ───────────────────────────────────────────────
 export { createSubAgentTools } from "./runtime/subagent/subagentTools.js";
@@ -206,4 +214,7 @@ export {
   checkAndUpdateItem,
   autoUpdateInstalledItems,
   reconcileInstalledItems,
+  // graph marketplace
+  fetchMarketplaceGraphDef,
+  installMarketplaceGraph,
 } from "./runtime/marketplace/index.js";

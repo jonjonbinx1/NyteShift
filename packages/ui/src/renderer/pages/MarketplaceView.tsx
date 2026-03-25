@@ -3,8 +3,11 @@ import type {
   MarketplaceItemInfo,
   MarketplaceSourceConfig,
   MarketplaceSyncResultInfo,
+  GraphDefinitionInfo,
+  GraphDepsResultInfo,
 } from "../global.js";
 import { useTheme } from "../theme/ThemeContext.js";
+import { GraphDepsModal } from "../components/GraphDepsModal.js";
 
 const CAT_COLORS: Record<string, string> = {
   skills: "#cba6f7",
@@ -14,6 +17,7 @@ const CAT_COLORS: Record<string, string> = {
   "soul-templates": "#fab387",
   themes: "#89b4fa",
   "ui-themes": "#89b4fa",
+  graphs: "#74c7ec",
 };
 const catColor = (c: string) => CAT_COLORS[c] ?? "#9399b2";
 
@@ -33,6 +37,15 @@ export function MarketplaceView(): React.JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
+
+  /* ── graph dependency modal state ───────────────────────────────── */
+  type GraphDepsModalState = {
+    graph: GraphDefinitionInfo;
+    deps: GraphDepsResultInfo;
+    item: MarketplaceItemInfo;
+  };
+  const [graphDepsModal, setGraphDepsModal] = useState<GraphDepsModalState | null>(null);
+  const [graphDepsChecking, setGraphDepsChecking] = useState<string | null>(null);
 
   /* ── navigation state ───────────────────────────────────────────── */
   const [activeContributor, setActiveContributor] = useState<string | null>(null);
@@ -239,6 +252,41 @@ export function MarketplaceView(): React.JSX.Element {
     const a = api(); if (!a) return;
     const k = ikey(item); setBusy(k);
     try {
+      // Graphs need a special install flow: fetch the graph definition,
+      // check dependencies, and show the deps modal before installing.
+      if (item.category === "graphs") {
+        setBusy(null);
+        setGraphDepsChecking(k);
+        try {
+          const graphDef: GraphDefinitionInfo = await a.marketplaceFetchGraphDef({
+            remotePath: item.remotePath,
+            source: item.source,
+          });
+          const deps: GraphDepsResultInfo = await a.graphCheckDeps(graphDef);
+          if (deps.allSatisfied) {
+            // No missing deps — install straight away
+            const r = await a.marketplaceInstallGraph(graphDef, {
+              category: item.category,
+              contributor: item.contributor,
+              name: item.name,
+              remotePath: item.remotePath,
+              source: item.source,
+            });
+            flash(r.message);
+            await loadItems();
+            await loadInstalledIndex();
+          } else {
+            // Show the modal so the user can pick which deps to install
+            setGraphDepsModal({ graph: graphDef, deps, item });
+          }
+        } catch (e: any) {
+          flash(`Error fetching graph: ${e.message}`);
+        } finally {
+          setGraphDepsChecking(null);
+        }
+        return;
+      }
+
       const r = await a.marketplaceInstall({
         category: item.category,
         contributor: item.contributor,
@@ -250,6 +298,52 @@ export function MarketplaceView(): React.JSX.Element {
       if (item.category === "tools") a.notifyToolsChanged?.();
     } catch (e: any) { flash(`Error: ${e.message}`); }
     finally { setBusy(null); }
+  };
+
+  /* handle confirmation from the graph deps modal */
+  const handleGraphDepsConfirm = async (
+    selection: { items: MarketplaceItemInfo[]; skipDeps: boolean },
+  ) => {
+    const modal = graphDepsModal;
+    if (!modal) return;
+    setGraphDepsModal(null);
+    const a = api(); if (!a) return;
+    const k = ikey(modal.item); setBusy(k);
+    try {
+      // Install selected dependencies first
+      if (!selection.skipDeps && selection.items.length > 0) {
+        for (const depItem of selection.items) {
+          try {
+            const r = await a.marketplaceInstall({
+              category: depItem.category,
+              contributor: depItem.contributor,
+              name: depItem.name,
+              remotePath: depItem.remotePath,
+              source: depItem.source,
+            });
+            flash(`Installed ${depItem.category}/${depItem.name}: ${r.message}`);
+            if (depItem.category === "tools") a.notifyToolsChanged?.();
+          } catch (e: any) {
+            flash(`Failed to install ${depItem.name}: ${e.message}`);
+          }
+        }
+      }
+      // Now install the graph itself
+      const r = await a.marketplaceInstallGraph(modal.graph, {
+        category: modal.item.category,
+        contributor: modal.item.contributor,
+        name: modal.item.name,
+        remotePath: modal.item.remotePath,
+        source: modal.item.source,
+      });
+      flash(r.message);
+      await loadItems();
+      await loadInstalledIndex();
+    } catch (e: any) {
+      flash(`Error: ${e.message}`);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const handleUninstall = async (item: MarketplaceItemInfo) => {
@@ -284,6 +378,17 @@ export function MarketplaceView(): React.JSX.Element {
   /* ── render ──────────────────────────────────────────────────────── */
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: t.text, overflow: "hidden" }}>
+
+      {/* ▸ GRAPH DEPS MODAL ─────────────────────────────────────────── */}
+      {graphDepsModal && (
+        <GraphDepsModal
+          graph={graphDepsModal.graph}
+          deps={graphDepsModal.deps}
+          availableItems={items}
+          onConfirm={handleGraphDepsConfirm}
+          onCancel={() => setGraphDepsModal(null)}
+        />
+      )}
 
       {/* ▸ HEADER ──────────────────────────────────────────────────── */}
       <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 0 20px" }}>
@@ -432,7 +537,9 @@ export function MarketplaceView(): React.JSX.Element {
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
               {drillItems.map((item) => (
-                <ItemCard key={ikey(item)} item={item} busy={busy === ikey(item)}
+                <ItemCard key={ikey(item)} item={item}
+                  busy={busy === ikey(item) || graphDepsChecking === ikey(item)}
+                  busyLabel={graphDepsChecking === ikey(item) ? "Checking deps…" : undefined}
                   onInstall={() => handleInstall(item)} onUninstall={() => handleUninstall(item)}
                   onUpdate={() => handleUpdate(item)}
                   onAutoToggle={(en) => handleItemAutoToggle(item, en)} />
@@ -546,9 +653,11 @@ function ContributorCard({ contributor, items, onClick }: {
 }
 
 /* ── Item card (drill-down) ──────────────────────────────────────────── */
-function ItemCard({ item, busy, onInstall, onUninstall, onUpdate, onAutoToggle }: {
+function ItemCard({ item, busy, busyLabel, onInstall, onUninstall, onUpdate, onAutoToggle }: {
   item: MarketplaceItemInfo;
   busy: boolean;
+  /** Optional label shown instead of "Installing…" when busy (e.g. "Checking deps…"). */
+  busyLabel?: string;
   onInstall: () => void;
   onUninstall: () => void;
   onUpdate?: () => void;
@@ -614,7 +723,7 @@ function ItemCard({ item, busy, onInstall, onUninstall, onUpdate, onAutoToggle }
           </>
         ) : (
           <Btn variant="accent" onClick={onInstall} disabled={busy}>
-            {busy ? <><Spinner /> Installing…</> : "Install"}
+            {busy ? <><Spinner /> {busyLabel ?? "Installing…"}</> : (item.category === "graphs" ? "Add to Graphs" : "Install")}
           </Btn>
         )}
       </div>

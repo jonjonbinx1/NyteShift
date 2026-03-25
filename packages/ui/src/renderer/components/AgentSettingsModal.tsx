@@ -212,6 +212,12 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
   const [discordError, setDiscordError] = useState("");
   const [showToken, setShowToken] = useState(false);
 
+  // Discord access control (stored in config.json, not in discord-bridge.json)
+  const [discordAccessMode, setDiscordAccessMode] = useState<"disabled" | "global" | "restricted">("disabled");
+  const [discordAccessServerIds, setDiscordAccessServerIds] = useState("");
+  const [discordAccessChannelIds, setDiscordAccessChannelIds] = useState("");
+  const [discordAccessChannelNames, setDiscordAccessChannelNames] = useState("");
+
   // UI state
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -234,6 +240,11 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
       setFsPermission(perms.filesystem ?? "allow");
       setNetPermission(perms.network ?? "allow");
       setCodePermission(perms.codeExecution ?? "allow");
+      const access = (c.discordAccess as Record<string, any>) || {};
+      setDiscordAccessMode(access.mode ?? "disabled");
+      setDiscordAccessServerIds((access.serverIds as string[] | undefined)?.join(", ") ?? "");
+      setDiscordAccessChannelIds((access.channelIds as string[] | undefined)?.join(", ") ?? "");
+      setDiscordAccessChannelNames((access.channelNames as string[] | undefined)?.join(", ") ?? "");
     }).catch(console.error);
 
     window.nyteShiftApi.listSkills().then(setSkills).catch(console.error);
@@ -265,6 +276,15 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
     if (!window.nyteShiftApi) return;
     setSaving(true);
     try {
+      const discordAccess: Record<string, unknown> = { mode: discordAccessMode };
+      if (discordAccessMode === "restricted") {
+        const sids = discordAccessServerIds.trim() ? discordAccessServerIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+        const cids = discordAccessChannelIds.trim() ? discordAccessChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+        const cnames = discordAccessChannelNames.trim() ? discordAccessChannelNames.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+        if (sids) discordAccess.serverIds = sids;
+        if (cids) discordAccess.channelIds = cids;
+        if (cnames) discordAccess.channelNames = cnames;
+      }
       const next: Record<string, unknown> = {
         ...config,
         skills: selectedSkills,
@@ -279,6 +299,7 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
           network: netPermission,
           codeExecution: codePermission,
         },
+        discordAccess,
       };
       await window.nyteShiftApi.writeAgentConfig(agentName, next);
       setConfig(next as Record<string, any>);
@@ -534,6 +555,94 @@ export function AgentSettingsModal({ agentName, onClose }: Props): React.JSX.Ele
           {/* ── Discord ── */}
           {activeTab === "discord" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+              {/* ── Discord Response Access ── */}
+              <div style={sectionStyle}>
+                <h4 style={{ margin: 0, fontSize: 13, color: C.text }}>Discord Response Access</h4>
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: C.subtext0, lineHeight: 1.4 }}>
+                  Controls whether and where this agent responds to Discord messages.
+                  Agents are silent by default — you must explicitly enable access.
+                </p>
+
+                {/* Mode buttons */}
+                <div style={{ display: "flex", gap: 8 }}>
+                  {([
+                    { id: "disabled",   icon: "🚫", label: "Disabled",            desc: "No Discord responses" },
+                    { id: "global",     icon: "🌐", label: "Globally Available", desc: "Any channel or server" },
+                    { id: "restricted", icon: "🔒", label: "Restricted",          desc: "Specific channels/servers" },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setDiscordAccessMode(opt.id)}
+                      style={{
+                        flex: 1, background: discordAccessMode === opt.id ? "rgba(203,166,247,0.15)" : C.surface0,
+                        border: discordAccessMode === opt.id ? `1px solid rgba(203,166,247,0.4)` : `1px solid transparent`,
+                        borderRadius: 8, padding: "10px 8px", cursor: "pointer",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                        transition: "background 0.15s, border-color 0.15s",
+                      }}
+                    >
+                      <span style={{ fontSize: 18 }}>{opt.icon}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: discordAccessMode === opt.id ? C.mauve : C.text }}>
+                        {opt.label}
+                      </span>
+                      <span style={{ fontSize: 10, color: C.subtext0, textAlign: "center", lineHeight: 1.3 }}>
+                        {opt.desc}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Restricted filters */}
+                {discordAccessMode === "restricted" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div>
+                      <label style={labelStyle}>Server IDs</label>
+                      <input
+                        value={discordAccessServerIds}
+                        onChange={(e) => setDiscordAccessServerIds(e.target.value)}
+                        placeholder="Comma-separated Discord server IDs (blank = any server)"
+                        style={inputStyle}
+                      />
+                      <div style={{ fontSize: 10, color: C.subtext0, marginTop: 3 }}>
+                        When set, channel filters only apply within these servers. Messages from other servers are ignored.
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>
+                        Channel IDs{" "}
+                        <span style={{ color: C.green, fontWeight: 400, textTransform: "none" }}>(more secure)</span>
+                      </label>
+                      <input
+                        value={discordAccessChannelIds}
+                        onChange={(e) => setDiscordAccessChannelIds(e.target.value)}
+                        placeholder="Comma-separated channel snowflake IDs"
+                        style={inputStyle}
+                      />
+                      <div style={{ fontSize: 10, color: C.subtext0, marginTop: 3 }}>
+                        Channel IDs are stable and globally unique — they cannot be changed by server admins.
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>
+                        Channel Names{" "}
+                        <span style={{ color: C.yellow, fontWeight: 400, textTransform: "none" }}>(less secure)</span>
+                      </label>
+                      <input
+                        value={discordAccessChannelNames}
+                        onChange={(e) => setDiscordAccessChannelNames(e.target.value)}
+                        placeholder="e.g. general, #support, bot-channel"
+                        style={inputStyle}
+                      />
+                      <div style={{ fontSize: 10, color: C.overlay0, marginTop: 3, display: "flex", alignItems: "flex-start", gap: 4 }}>
+                        <span>⚠️</span>
+                        <span>Channel names can be changed by server admins and are not globally unique. Prefer Channel IDs when possible.</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Intro */}
               <div>
                 <h3 style={{ margin: "0 0 6px", fontSize: 14, color: C.text }}>Discord Bot</h3>

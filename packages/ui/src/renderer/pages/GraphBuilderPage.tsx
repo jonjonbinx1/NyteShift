@@ -544,6 +544,11 @@ export function GraphBuilderPage(): React.JSX.Element {
     setRunning(false);
   };
 
+  const handleStopRun = async () => {
+    if (runId) await window.nyteShiftApi?.graphRunStop(runId);
+    // run continues to natural completion
+  };
+
   // ── Validate ───────────────────────────────────────────────────────────────
 
   const [validating, setValidating] = useState(false);
@@ -811,6 +816,7 @@ export function GraphBuilderPage(): React.JSX.Element {
           onRunInputChange={setRunInput}
           onRun={handleRun}
           onCancel={handleCancelRun}
+          onStop={handleStopRun}
           onClose={() => setRunOpen(false)}
         />
       )}
@@ -881,7 +887,7 @@ function formatMs(ms: number): string {
   return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
 }
 
-function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, runError, runInput, runInputError, onRunInputChange, onRun, onCancel, onClose, graphInputs }: {
+function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, runError, runInput, runInputError, onRunInputChange, onRun, onCancel, onStop, onClose, graphInputs }: {
   C: ThemePalette;
   running: boolean;
   runLog: NodeRunEvent[];
@@ -894,9 +900,11 @@ function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, 
   onRunInputChange(v: string): void;
   onRun(): void;
   onCancel(): void;
+  onStop(): void;
   onClose(): void;
   graphInputs?: GraphInputInfo[];
 }) {
+  const [stopModalOpen, setStopModalOpen] = useState(false);
   const [showRawInput, setShowRawInput] = useState(false);
   const [structuredInput, setStructuredInput] = useState<Record<string, unknown>>(() => {
     try { return runInput ? JSON.parse(runInput) : {}; } catch { return {}; }
@@ -956,7 +964,7 @@ function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, 
         )}
         <div style={{ flex: 1 }} />
         {running
-          ? <button onClick={onCancel} style={{ ...actionBtn(C), background: `${C.red}22`, border: `1px solid ${C.red}`, color: C.red }}>Stop</button>
+          ? <button onClick={() => setStopModalOpen(true)} style={{ ...actionBtn(C), background: `${C.red}22`, border: `1px solid ${C.red}`, color: C.red }}>Stop</button>
           : <button onClick={onRun} style={{ ...actionBtn(C), background: C.green, color: "#1e1e2e" }}>▶ Run</button>
         }
         <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.overlay0, fontSize: "1rem" }}>✕</button>
@@ -1157,6 +1165,28 @@ function RunPanel({ C, running, runLog, runNodeStates, runStartedAt, runResult, 
           <div ref={logEndRef} />
         </div>
       </div>
+
+      {stopModalOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: C.base, border: `1px solid ${C.surface1}`, borderRadius: 10, padding: "24px 28px", minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: "1rem" }}>Stop Run?</div>
+            <div style={{ color: C.subtext0, fontSize: "0.85rem" }}>Choose how to stop the current run:</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button onClick={() => { setStopModalOpen(false); onCancel(); }} style={{ padding: "10px 16px", borderRadius: 6, border: `1px solid ${C.red}`, background: `${C.red}22`, color: C.red, cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontWeight: 600 }}>⚡ Abort</div>
+                <div style={{ fontSize: "0.78rem", color: C.subtext0, marginTop: 2 }}>Kill immediately. Catch nodes will not run.</div>
+              </button>
+              <button onClick={() => { setStopModalOpen(false); onStop(); }} style={{ padding: "10px 16px", borderRadius: 6, border: `1px solid ${C.yellow}`, background: `${C.yellow}22`, color: C.yellow, cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontWeight: 600 }}>⏹ Stop</div>
+                <div style={{ fontSize: "0.78rem", color: C.subtext0, marginTop: 2 }}>Finish the current step, then stop. Catch nodes will run.</div>
+              </button>
+              <button onClick={() => setStopModalOpen(false)} style={{ padding: "8px 16px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: "none", color: C.subtext0, cursor: "pointer" }}>
+                Keep Running
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

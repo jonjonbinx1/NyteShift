@@ -129,7 +129,23 @@ export interface MemoryEntryInfo {
 }
 // ── Triggers ────────────────────────────────────────────────────────
 
-export type TriggerType = "cron" | "webhook" | "manual" | "discord" | "oneoff" | "monthly";
+export type TriggerType = "cron" | "webhook" | "manual" | "discord" | "oneoff" | "monthly" | "channel";
+
+// ── Channels (messaging adapters) ───────────────────────────────────
+
+export interface ChannelInfo {
+  name: string;
+  contributor: string;
+  version: string;
+  description: string;
+  /** Whether this channel needs a persistent running bridge (Start/Stop controls). */
+  requiresBridge?: boolean;
+  /** How messages are received: persistent connection, webhook callbacks, or OAuth flow. */
+  connectionMode?: "persistent" | "webhook" | "oauth";
+  /** Link to platform setup docs (creating app, scopes, admin consent). */
+  docsUrl?: string;
+  config?: ConfigFieldDefinitionInfo[];
+}
 
 // ── Configurable Field Contract ─────────────────────────────────────
 
@@ -186,6 +202,11 @@ export interface TriggerDefinitionInfo {
   discordChannelIds?: string[];
   discordMentionOnly?: boolean;
   discordMode?: "trigger" | "bridge";
+  discordCommand?: string;
+  discordCommandInput?: "none" | "text" | "json";
+  // Channel-adapter fields
+  channelName?: string;
+  channelMode?: "trigger" | "bridge";
   createdAt: number;
   updatedAt: number;
 }
@@ -221,6 +242,8 @@ export interface NyteShiftApi {
     hash?: string;
   } | null>;
   listTools(): Promise<ToolInfo[]>;
+  // Channels (messaging adapters)
+  listChannels(): Promise<ChannelInfo[]>;
   // Providers
   listProviders(): Promise<Array<{ id: string }>>;
   /** Fetch models from a specific provider (or all if omitted). */
@@ -272,6 +295,17 @@ export interface NyteShiftApi {
   marketplaceSetGlobalAutoUpdate(enabled: boolean): Promise<void>;
   marketplaceInstalled(): Promise<{ globalAutoUpdate?: boolean; items: Array<{ category: string; contributor: string; name: string; version?: string; hash: string; autoUpdate?: boolean }> }>;
 
+  // ── Graph marketplace helpers ──────────────────────────────────────────
+  /** Fetch the graph.json for a marketplace graph item (before installing). */
+  marketplaceFetchGraphDef(item: { remotePath: string; source?: string }): Promise<GraphDefinitionInfo>;
+  /** Check which tool / skill / agent dependencies of a graph are missing. */
+  graphCheckDeps(graph: GraphDefinitionInfo): Promise<GraphDepsResultInfo>;
+  /** Save a marketplace graph into the local graph store (after dep check). */
+  marketplaceInstallGraph(
+    graph: GraphDefinitionInfo,
+    item: { category: string; contributor: string; name: string; remotePath?: string; source?: string },
+  ): Promise<{ installed: boolean; message: string }>;
+
   // Change notifications
   onToolsChanged(cb: () => void): void;
   notifyToolsChanged(): void;
@@ -309,6 +343,11 @@ export interface NyteShiftApi {
     discordChannelIds?: string[];
     discordMentionOnly?: boolean;
     discordMode?: "trigger" | "bridge";
+    discordCommand?: string;
+    discordCommandInput?: "none" | "text" | "json";
+    // Channel-adapter fields
+    channelName?: string;
+    channelMode?: "trigger" | "bridge";
   }): Promise<TriggerDefinitionInfo>;
 
   // ── Discord Bridge ──────────────────────────────────────────────
@@ -372,9 +411,9 @@ export interface NyteShiftApi {
 
   // ── Skill / Tool Config ────────────────────────────────────────────
   /** Read resolved config values for a skill or tool (global → agent merge). */
-  skillToolConfigRead(kind: "skill" | "tool", qualifiedName: string, agentName?: string): Promise<Record<string, unknown>>;
+  skillToolConfigRead(kind: "skill" | "tool" | "channel", qualifiedName: string, agentName?: string): Promise<Record<string, unknown>>;
   /** Write config values at global or agent scope. */
-  skillToolConfigWrite(kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string): Promise<void>;
+  skillToolConfigWrite(kind: "skill" | "tool" | "channel", qualifiedName: string, values: Record<string, unknown>, agentName?: string): Promise<void>;
   // ── Secret Store ─────────────────────────────────────────────────
   /** Retrieve a stored secret by name (undefined if not found). */
   secretGet(name: string): Promise<string | undefined>;
@@ -409,12 +448,16 @@ export interface NyteShiftApi {
   graphDelete(id: string): Promise<void>;
   graphValidate(graph: GraphDefinitionInfo): Promise<{ valid: boolean; errors: GraphValidationErrorInfo[] }>;
   /** Start a graph run — returns immediately with a runId. The run progresses asynchronously. */
-  graphRun(graphOrId: string | GraphDefinitionInfo, opts?: { input?: Record<string, unknown>; provider?: string; model?: string }): Promise<{ runId: string }>;
+  graphRun(graphOrId: string | GraphDefinitionInfo, opts?: { input?: Record<string, unknown>; provider?: string; model?: string; runId?: string }): Promise<{ runId: string }>;
   graphRunStatus(runId: string): Promise<GraphRunStatusInfo | null>;
   graphRuns(): Promise<GraphRunRecordInfo[]>;
   /** List all tracked runs for a specific graph (from any source). */
   graphRunsForGraph(graphId: string): Promise<GraphRunRecordInfo[]>;
   graphRunCancel(runId: string): Promise<void>;
+  /** Graceful stop — lets the current loop finish then fires catch nodes. */
+  graphRunStop(runId: string): Promise<void>;
+  /** Resume a paused run — returns immediately with the new run's ID. */
+  graphRunResume(runId: string): Promise<{ runId: string }>;
   onGraphRunRegistered(cb: (data: { runId: string; graphId: string; graphName: string; status: string; source: string; startedAt: number }) => void): () => void;
   onGraphNodeStart(cb: (data: { runId: string; nodeId: string; nodeName: string; nodeType?: string }) => void): () => void;
   onGraphNodeComplete(cb: (data: { runId: string; nodeOutput: NodeOutputInfo }) => void): () => void;
@@ -463,6 +506,15 @@ export interface GraphInputInfo {
  */
 export type CatchTrigger = "maxIterations" | "error" | "abort";
 
+/** Controls when auto/manual resume is triggered after a catch handles an error. */
+export type CatchResumePolicy = "never" | "ifHandled" | "always";
+
+/** When multiple catch nodes match, how "handled" is evaluated across all of them. */
+export type CatchResumeMode = "any" | "all";
+
+/** Strategy for how a catch node's resumeTarget is applied. */
+export type CatchResumeStrategy = "resumeFrom" | "rewindTo";
+
 export interface GraphNodeInfo {
   id: string;
   name: string;
@@ -494,6 +546,34 @@ export interface GraphNodeInfo {
   cache?: boolean;
   /** Triggers that cause this catch node to fire after a loop exits. */
   catchTriggers?: CatchTrigger[];
+  /**
+   * Execution priority among catch nodes with matching triggers.
+   * Lower values run first. Nodes sharing the same value may fire in any order.
+   */
+  catchOrder?: number;
+  /**
+   * Maximum number of times this catch node may fire in a single run.
+   * undefined/1 = once, 0 = unlimited, N > 1 = at most N times.
+   */
+  catchMaxFires?: number;
+  /** Controls when resume (auto or manual) is triggered after a catch handles the error. */
+  resumePolicy?: CatchResumePolicy;
+  /** Predicate that tells the runtime whether the catch actually handled the error. */
+  handledWhen?: ConditionPredicateInfo;
+  /** Output path on the catch node to check for a handled signal (e.g. "output.handled"). */
+  handledOutputPath?: string;
+  /** How to combine multiple catch nodes when evaluating "handled". */
+  resumeMode?: CatchResumeMode;
+  /** Node ID to jump to when resume is triggered. */
+  resumeTarget?: string;
+  /**
+   * How the resumeTarget is applied.
+   * - "resumeFrom" — always jump to the target and continue.
+   * - "rewindTo"   — only jump if the target already ran; otherwise skip this catch.
+   */
+  resumeStrategy?: CatchResumeStrategy;
+  /** When true, pause the run and persist state instead of auto-resuming. */
+  manualResume?: boolean;
   outputKey?: string;
   errorPolicy?: ErrorPolicyInfo;
   position?: { x: number; y: number };
@@ -573,6 +653,24 @@ export interface GraphValidationErrorInfo {
   field?: string;
 }
 
+/** Result of a graph dependency check — mirrors core GraphDepsResult. */
+export interface GraphDepsResultInfo {
+  /** All tool names referenced in the graph. */
+  tools: string[];
+  /** All skill refs referenced in the graph. */
+  skills: string[];
+  /** All agent names referenced in the graph. */
+  agents: string[];
+  /** Tool names that are NOT currently installed. */
+  missingTools: string[];
+  /** Skill refs that are NOT currently installed. */
+  missingSkills: string[];
+  /** Agent names that are NOT found locally. */
+  missingAgents: string[];
+  /** True when all dependencies are satisfied. */
+  allSatisfied: boolean;
+}
+
 export interface GraphRunStatusInfo {
   status: "running" | "done" | "error";
   result?: GraphExecutionResultInfo;
@@ -588,7 +686,7 @@ export interface GraphRunRecordInfo {
   runId: string;
   graphId: string;
   graphName: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "paused";
   nodeProgress: NodeOutputInfo[];
   source: "manual" | "trigger" | "trigger-node";
   triggerId?: string;
@@ -598,6 +696,8 @@ export interface GraphRunRecordInfo {
   completedAt?: number;
   error?: string;
   result?: GraphExecutionResultInfo;
+  /** Node ID to resume from when status is "paused". */
+  pausedResumeFrom?: string;
 }
 
 /** Live state of a single node during or after a graph run. */

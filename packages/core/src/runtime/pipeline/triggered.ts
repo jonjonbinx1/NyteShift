@@ -10,6 +10,7 @@ import { injectSoul } from "../soul/soulInjector.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { getSkill } from "../skills/skillLoader.js";
 import { getTool } from "../tools/toolLoader.js";
+import { createToolContext } from "../tools/toolContext.js";
 
 /**
  * Run a triggered pipeline: when an event occurs, execute a series of
@@ -63,7 +64,11 @@ export async function runTriggeredPipeline(
 
       const toolOutput = await tool.run({
         input: stepCfg.input ?? lastOutput,
-        context: { event, agentName },
+        context: {
+          ...(await createToolContext(stepCfg.tool, agentName)),
+          event,
+          agentName,
+        },
       });
       lastOutput = toolOutput;
 

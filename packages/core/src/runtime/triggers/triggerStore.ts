@@ -19,6 +19,7 @@ import {
   writeJsonFile,
 } from "../../utils/index.js";
 import { listAgents } from "../agents/agentManager.js";
+import { getSecret, setSecret, SECRET_KEYS } from "../config/secretStore.js";
 
 // ── Path helper ────────────────────────────────────────────────────────
 
@@ -33,7 +34,22 @@ export async function readAgentTriggers(agentName: string): Promise<TriggerDefin
   const p = triggersFilePath(agentName);
   if (!(await pathExists(p))) return [];
   try {
-    return await readJsonFile<TriggerDefinition[]>(p);
+    const triggers = await readJsonFile<TriggerDefinition[]>(p);
+
+    // Migrate any plaintext discordBotToken values into the secret store.
+    let needsWrite = false;
+    for (const trigger of triggers) {
+      if (typeof trigger.discordBotToken === "string" && trigger.discordBotToken.trim() !== "") {
+        await setSecret(SECRET_KEYS.discordTriggerBotToken(trigger.id), trigger.discordBotToken.trim());
+        delete (trigger as Partial<TriggerDefinition>).discordBotToken;
+        needsWrite = true;
+      }
+    }
+    if (needsWrite) {
+      await writeJsonFile(p, triggers);
+    }
+
+    return triggers;
   } catch {
     return [];
   }
@@ -44,7 +60,15 @@ export async function writeAgentTriggers(
   agentName: string,
   triggers: TriggerDefinition[],
 ): Promise<void> {
-  await writeJsonFile(triggersFilePath(agentName), triggers);
+  // Strip plaintext bot tokens before persisting — they live in the secret store.
+  const sanitized = triggers.map((t) => {
+    if ("discordBotToken" in t) {
+      const { discordBotToken: _stripped, ...rest } = t as TriggerDefinition & { discordBotToken?: string };
+      return rest as TriggerDefinition;
+    }
+    return t;
+  });
+  await writeJsonFile(triggersFilePath(agentName), sanitized);
 }
 
 /** List all trigger definitions across every agent. */

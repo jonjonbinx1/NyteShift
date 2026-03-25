@@ -20,6 +20,10 @@ interface TriggerDefinitionInfo {
   discordChannelIds?: string[];
   discordMentionOnly?: boolean;
   discordMode?: "trigger" | "bridge";
+  discordCommand?: string;
+  discordCommandInput?: "none" | "text" | "json";
+  channelName?: string;
+  channelMode?: "trigger" | "bridge";
   createdAt: number;
   updatedAt: number;
   targetType?: string;
@@ -41,6 +45,7 @@ const TRIGGER_TYPES: { value: TriggerType; label: string; description: string }[
   { value: "cron", label: "Scheduled", description: "Run on a repeating schedule — repeat, daily, weekly, monthly, or a one-off date." },
   { value: "webhook", label: "Webhook", description: "Trigger via HTTP POST (Slack, email, Zapier, etc.)." },
   { value: "discord", label: "Discord", description: "Connect a Discord bot — trigger per message or enable a persistent chat bridge." },
+  { value: "channel", label: "Channel", description: "Use a marketplace channel adapter (Slack, Facebook Messenger, WhatsApp, etc.)." },
   { value: "manual", label: "Manual", description: "Fire manually from the UI or CLI." },
 ];
 
@@ -513,6 +518,65 @@ function ScheduleBuilder({ value, onChange }: { value: ScheduleBuilderOutput; on
   );
 }
 
+/* ── Reusable searchable list ─────────────────────────────────────── */
+
+interface SearchableListProps {
+  /** Either plain strings or { value, label } objects. */
+  items: string[] | Array<{ value: string; label: string }>;
+  selectedValue: string;
+  onSelect(value: string): void;
+  placeholder: string;
+  emptyLabel?: string;
+  maxHeight?: number;
+  c: Record<string, string>;
+  inputStyle: React.CSSProperties;
+}
+
+function SearchableList({ items, selectedValue, onSelect, placeholder, emptyLabel = "No results", maxHeight = 200, c, inputStyle }: SearchableListProps): React.JSX.Element {
+  const [search, setSearch] = useState("");
+  const normalized = useMemo(() =>
+    (typeof items[0] === "string" || items.length === 0)
+      ? (items as string[]).map((s) => ({ value: s, label: s }))
+      : items as Array<{ value: string; label: string }>,
+    [items],
+  );
+  const filtered = useMemo(() =>
+    normalized.filter((it) => it.label.toLowerCase().includes(search.toLowerCase())),
+    [normalized, search],
+  );
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={placeholder}
+        style={inputStyle}
+      />
+      <div style={{ border: `1px solid ${c.border}`, borderRadius: 8, background: c.surface, maxHeight, overflowY: "auto", marginTop: -6 }}>
+        {filtered.map((it) => (
+          <div
+            key={it.value}
+            onClick={() => { onSelect(it.value); setSearch(""); }}
+            style={{
+              padding: "7px 12px",
+              cursor: "pointer",
+              background: it.value === selectedValue ? "rgba(203,166,247,0.10)" : "transparent",
+              color: it.value === selectedValue ? c.accent : c.text,
+              fontWeight: it.value === selectedValue ? 600 : 400,
+              fontSize: "0.86rem",
+            }}
+          >
+            {it.label}
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div style={{ padding: "10px 12px", color: c.muted, fontSize: "0.83rem" }}>{emptyLabel}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Main modal ───────────────────────────────────────────────────── */
 
 export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, editTrigger }: Props): React.JSX.Element {
@@ -551,7 +615,32 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
   const [discordChannelIds, setDiscordChannelIds] = useState(editTrigger?.discordChannelIds?.join(", ") ?? "");
   const [discordMentionOnly, setDiscordMentionOnly] = useState(editTrigger?.discordMentionOnly ?? false);
   const [discordMode, setDiscordMode] = useState<"trigger" | "bridge">(editTrigger?.discordMode ?? "trigger");
+  const [discordCommand, setDiscordCommand] = useState(editTrigger?.discordCommand ?? "");
+  const [discordCommandInput, setDiscordCommandInput] = useState<"none" | "text" | "json">(editTrigger?.discordCommandInput ?? "text");
+  const [discordSilentStart, setDiscordSilentStart] = useState<boolean>((editTrigger as any)?.discordSilentStart ?? false);
   const [showBotToken, setShowBotToken] = useState(false);
+
+  // Channel adapter state
+  const [channelName, setChannelName] = useState(editTrigger?.channelName ?? "");
+  const [channelMode, setChannelMode] = useState<"trigger" | "bridge">(editTrigger?.channelMode ?? "trigger");
+  const [installedChannels, setInstalledChannels] = useState<Array<{ name: string; contributor: string; description: string }>>([]);
+
+  // Fetch installed channels when type is "channel"
+  useEffect(() => {
+    if (type === "channel") {
+      (window as any).nyteshift?.listChannels?.().then((chs: any[]) => {
+        setInstalledChannels(chs ?? []);
+      }).catch(() => setInstalledChannels([]));
+    }
+  }, [type]);
+
+  const [rawInputJson, setRawInputJson] = useState<string>(() => {
+    if (editTrigger?.triggerInput && Object.keys(editTrigger.triggerInput).length > 0) {
+      try { return JSON.stringify(editTrigger.triggerInput, null, 2); } catch { return "{}"; }
+    }
+    return "{}";
+  });
+  const [showRawJson, setShowRawJson] = useState(false);
 
   // Auto-generate webhook path from name (only for new triggers).
   useEffect(() => {
@@ -588,10 +677,21 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { setError("Name is required"); return; }
-    if (!agentName) { setError("Select an agent"); return; }
-    if (!taskTemplate.trim()) { setError("Task template is required"); return; }
+    if (targetType === "agent" && !agentName) { setError("Select an agent"); return; }
+    if (targetType === "agent" && !taskTemplate.trim()) { setError("Task template is required for agent targets"); return; }
     if (type === "webhook" && !webhookPath.trim()) { setError("Webhook path is required"); return; }
-    if (type === "discord" && !discordBotToken.trim()) { setError("A Discord bot token is required"); return; }
+    if (type === "discord" && targetType === "agent" && !discordBotToken.trim() && !discordCommand.trim()) {
+      setError("A Discord bot token or a slash-command name is required"); return;
+    }
+    if (type === "discord" && targetType === "graph" && !discordCommand.trim()) {
+      setError("A slash-command name is required for graph triggers via Discord"); return;
+    }
+    if (type === "discord" && discordCommand.trim()) {
+      const reserved = ["help", "newchat", "cancel"];
+      const cmd = discordCommand.trim().toLowerCase().replace(/^\/+/, "");
+      if (reserved.includes(cmd)) { setError(`"/${cmd}" is a reserved command and cannot be used`); return; }
+      if (!/^[a-z0-9_-]+$/.test(cmd)) { setError("Command name must use lowercase letters, numbers, _ or - only"); return; }
+    }
     if (type === "cron") {
       if (scheduleOutput.subType === "cron" && !scheduleOutput.schedule?.trim()) {
         setError("A schedule is required"); return;
@@ -623,38 +723,64 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
     try {
       if (isEdit) {
         await window.nyteShiftApi!.triggersUpdate(editTrigger!.id, {
-          name: name.trim(), agentName, type: actualType, enabled,
-          taskTemplate: taskTemplate.trim(),
+          name: name.trim(), agentName: targetType === "agent" ? agentName : (agentName || agents[0] || "default"), type: actualType, enabled,
+          taskTemplate: targetType === "agent" ? taskTemplate.trim() : "",
           ...scheduledFields,
           targetType,
           targetId: targetType === "graph" ? selectedGraphId : undefined,
           triggerInput: targetType === "graph" ? triggerInput : undefined,
           webhookPath: type === "webhook" ? webhookPath.trim() : undefined,
           webhookSecret: type === "webhook" && webhookSecret.trim() ? webhookSecret.trim() : undefined,
-          maxSteps: parseInt(maxSteps, 10) || 10,
+          ...(targetType === "agent" ? { maxSteps: parseInt(maxSteps, 10) || 10 } : {}),
           ...(type === "discord" ? {
-            discordBotToken: discordBotToken.trim(),
-            discordGuildId: discordGuildId.trim() || undefined,
-            discordChannelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-            discordMentionOnly, discordMode,
+            ...(targetType === "agent" ? {
+              discordBotToken: discordBotToken.trim() || undefined,
+              discordGuildId: discordGuildId.trim() || undefined,
+              discordChannelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+              discordMentionOnly, discordMode,
+            } : {}),
+            discordCommand: discordCommand.trim().replace(/^\/+/, "") || undefined,
+            discordCommandInput: discordCommand.trim() ? discordCommandInput : undefined,
+            discordSilentStart: discordSilentStart,
+            ...(targetType === "graph" ? {
+              discordGuildId: discordGuildId.trim() || undefined,
+              discordChannelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+            } : {}),
+          } : {}),
+          ...(type === "channel" ? {
+            channelName: channelName.trim() || undefined,
+            channelMode,
           } : {}),
         });
       } else {
         await window.nyteShiftApi!.triggersCreate({
-          name: name.trim(), agentName, type: actualType, enabled,
-          taskTemplate: taskTemplate.trim(),
+          name: name.trim(), agentName: targetType === "agent" ? agentName : (agentName || agents[0] || "default"), type: actualType, enabled,
+          taskTemplate: targetType === "agent" ? taskTemplate.trim() : "",
           ...scheduledFields,
           targetType,
           targetId: targetType === "graph" ? selectedGraphId : undefined,
           triggerInput: targetType === "graph" ? triggerInput : undefined,
           webhookPath: type === "webhook" ? webhookPath.trim() : undefined,
           webhookSecret: type === "webhook" && webhookSecret.trim() ? webhookSecret.trim() : undefined,
-          maxSteps: parseInt(maxSteps, 10) || 10,
+          ...(targetType === "agent" ? { maxSteps: parseInt(maxSteps, 10) || 10 } : {}),
           ...(type === "discord" ? {
-            discordBotToken: discordBotToken.trim(),
-            discordGuildId: discordGuildId.trim() || undefined,
-            discordChannelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-            discordMentionOnly, discordMode,
+            ...(targetType === "agent" ? {
+              discordBotToken: discordBotToken.trim() || undefined,
+              discordGuildId: discordGuildId.trim() || undefined,
+              discordChannelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+              discordMentionOnly, discordMode,
+            } : {}),
+            discordCommand: discordCommand.trim().replace(/^\/+/, "") || undefined,
+            discordCommandInput: discordCommand.trim() ? discordCommandInput : undefined,
+            discordSilentStart: discordSilentStart,
+            ...(targetType === "graph" ? {
+              discordGuildId: discordGuildId.trim() || undefined,
+              discordChannelIds: discordChannelIds.trim() ? discordChannelIds.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+            } : {}),
+          } : {}),
+          ...(type === "channel" ? {
+            channelName: channelName.trim() || undefined,
+            channelMode,
           } : {}),
         });
       }
@@ -673,7 +799,7 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
       onClick={onClose}
     >
       <div
-        style={{ background: c.card, borderRadius: 16, border: `1px solid ${c.border}`, padding: 28, width: 540, maxHeight: "85vh", overflow: "auto" }}
+        style={{ background: c.card, borderRadius: 16, border: `1px solid ${c.border}`, padding: 28, width: 600, maxHeight: "85vh", overflow: "auto" }}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 style={{ margin: "0 0 18px", color: c.text, fontSize: "1.3rem" }}>{isEdit ? "Edit Trigger" : "Create Trigger"}</h2>
@@ -683,15 +809,7 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
           <label style={labelStyle}>Trigger Name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. daily-digest" style={inputStyle} autoFocus />
 
-          {/* Agent */}
-          <label style={labelStyle}>Agent</label>
-          <select value={agentName} onChange={(e) => setAgentName(e.target.value)} style={inputStyle}>
-            {agents.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </select>
-
-          {/* Target selector: agent vs graph */}
+          {/* Target selector: agent vs graph — shown first to conditionally reveal the right fields */}
           <label style={labelStyle}>Target</label>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             <button
@@ -730,37 +848,225 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
             </button>
           </div>
 
+          {/* Agent (searchable) — only for agent targets */}
+          {targetType === "agent" && (
+            <>
+              <label style={labelStyle}>Agent</label>
+              <SearchableList
+                items={agents}
+                selectedValue={agentName}
+                onSelect={(a) => { setAgentName(a); }}
+                placeholder={agentName ? `Selected: ${agentName} — type to search` : "Search agents..."}
+                emptyLabel="No agents found"
+                maxHeight={160}
+                c={c}
+                inputStyle={inputStyle}
+              />
+            </>
+          )}
+
           {targetType === "graph" && (
             <>
               <label style={labelStyle}>Graph</label>
-              <select value={selectedGraphId ?? ""} onChange={(e) => setSelectedGraphId(e.target.value)} style={inputStyle}>
-                {graphs.map((g) => <option key={g.id} value={g.id}>{g.name ?? g.id}</option>)}
-              </select>
-              {selectedGraph && selectedGraph.inputs && selectedGraph.inputs.length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <label style={labelStyle}>Trigger Input</label>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {selectedGraph.inputs.map((inp: any) => (
-                      <div key={inp.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        <label style={{ fontSize: "0.85rem", color: c.subtext, fontWeight: 600 }}>{inp.label ?? inp.key}{inp.required ? " *" : ""}</label>
-                        {inp.type === "boolean" ? (
-                          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <input type="checkbox" checked={!!(triggerInput ?? {})[inp.key]} onChange={e => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.checked })} />
-                            <span style={{ color: c.muted }}>{inp.description ?? ""}</span>
-                          </label>
-                        ) : inp.type === "number" ? (
-                          <input type="number" value={(triggerInput ?? {})[inp.key] ?? ""} onChange={e => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value === "" ? undefined : Number(e.target.value) })} style={inputStyle} />
-                        ) : inp.type === "json" ? (
-                          <textarea style={{ ...inputStyle, minHeight: 80, fontFamily: "monospace" }} value={((triggerInput ?? {})[inp.key] ?? "") as any} onChange={e => {
-                            try { setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: JSON.parse(e.target.value) }); } catch { setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value }); }
-                          }} />
-                        ) : (
-                          <input style={inputStyle} value={(triggerInput ?? {})[inp.key] ?? ""} onChange={e => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value })} />
+              <SearchableList
+                items={graphs.map((g) => ({ value: g.id, label: g.name ?? g.id }))}
+                selectedValue={selectedGraphId ?? ""}
+                onSelect={(id) => setSelectedGraphId(id)}
+                placeholder={selectedGraph ? `Selected: ${selectedGraph.name ?? selectedGraphId} — type to search` : "Search graphs..."}
+                emptyLabel="No graphs found"
+                maxHeight={200}
+                c={c}
+                inputStyle={inputStyle}
+              />
+              {/* Graph input configuration — only once a graph is selected */}
+              {selectedGraphId && (
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <label style={labelStyle}>
+                      Graph Input
+                      {selectedGraph?.inputs?.length > 0 && (
+                        <span style={{ color: c.muted, fontWeight: 400 }}>
+                          {" "}({selectedGraph.inputs.length} field{selectedGraph.inputs.length !== 1 ? "s" : ""})
+                        </span>
+                      )}
+                    </label>
+                    {selectedGraph?.inputs?.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!showRawJson) {
+                            try {
+                              setRawInputJson(Object.keys(triggerInput ?? {}).length ? JSON.stringify(triggerInput, null, 2) : "{}");
+                            } catch { /* keep existing */ }
+                          }
+                          setShowRawJson(!showRawJson);
+                        }}
+                        style={{ ...cancelBtnStyle, padding: "3px 10px", fontSize: "0.72rem" }}
+                      >
+                        {showRawJson ? "Use form" : "Edit as JSON"}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* For Discord with a slash command: input source selector */}
+                  {type === "discord" && discordCommand.trim() && (
+                    <>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                        {(["none", "text", "json"] as const).map((mode) => {
+                          const labels: Record<string, string> = { none: "Static", text: "\u21a9 Text args", json: "{ } JSON args" };
+                          const hints: Record<string, string> = {
+                            none: "Fixed values stored on the trigger",
+                            text: "Text after the command becomes input.text",
+                            json: "JSON after the command replaces the entire input",
+                          };
+                          return (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setDiscordCommandInput(mode)}
+                              title={hints[mode]}
+                              style={{
+                                flex: 1,
+                                padding: "7px 6px",
+                                borderRadius: 8,
+                                border: `1.5px solid ${discordCommandInput === mode ? c.accent : c.border}`,
+                                background: discordCommandInput === mode ? "rgba(203,166,247,0.12)" : c.surface,
+                                color: discordCommandInput === mode ? c.accent : c.subtext,
+                                cursor: "pointer",
+                                fontSize: "0.78rem",
+                                fontWeight: discordCommandInput === mode ? 600 : 400,
+                                textAlign: "center",
+                              }}
+                            >
+                              {labels[mode]}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {discordCommandInput === "text" && (
+                        <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(203,166,247,0.05)", border: `1px solid ${c.border}`, marginBottom: 10, fontSize: "0.79rem", color: c.subtext }}>
+                          Text after{" "}
+                          <code>/{discordCommand} your message</code>{" "}
+                          is passed as <code>input.text</code> to the graph.
+                          {selectedGraph?.inputs?.some((i: any) => i.key === "text") &&
+                            ` The graph declares a "text" input — it will receive the message directly.`}
+                        </div>
+                      )}
+                      {discordCommandInput === "json" && (
+                        <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(203,166,247,0.05)", border: `1px solid ${c.border}`, marginBottom: 10, fontSize: "0.79rem", color: c.subtext }}>
+                          JSON after{" "}
+                          <code>/{discordCommand} {'{"key":"val"}'}</code>{" "}
+                          is parsed and passed as the full graph input. Invalid JSON sends an empty object.
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Silent-start toggle: show for Discord triggers (slash-command or otherwise) */}
+                  {type === "discord" && (
+                    <label style={{
+                      display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+                      padding: "9px 12px", borderRadius: 8, marginTop: 4,
+                      background: discordSilentStart ? "rgba(203,166,247,0.06)" : c.surface,
+                      border: `1px solid ${discordSilentStart ? "rgba(203,166,247,0.3)" : c.border}`,
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={discordSilentStart}
+                        onChange={(e) => setDiscordSilentStart(e.target.checked)}
+                        style={{ accentColor: c.accent, width: 14, height: 14, flexShrink: 0 }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: discordSilentStart ? c.accent : c.text }}>
+                          Silent start
+                        </div>
+                        <div style={{ fontSize: "0.74rem", color: c.subtext, marginTop: 2, lineHeight: 1.4 }}>
+                          Skip the "🚀 Command started" acknowledgement message. Useful when the graph sends its own reply.
+                        </div>
+                      </div>
+                    </label>
+                  )}
+
+                  {/* Static input fields — shown for "Static" mode (or non-Discord / no command) */}
+                  {(discordCommandInput === "none" || !discordCommand.trim() || type !== "discord") && (
+                    showRawJson || !selectedGraph?.inputs?.length ? (
+                      <div>
+                        <textarea
+                          placeholder={'{\n  "key": "value"\n}'}
+                          style={{ ...inputStyle, minHeight: 110, fontFamily: "monospace", fontSize: "0.8rem", resize: "vertical" }}
+                          value={rawInputJson}
+                          onChange={(e) => {
+                            setRawInputJson(e.target.value);
+                            try { setTriggerInput(JSON.parse(e.target.value)); } catch { /* keep last valid */ }
+                          }}
+                        />
+                        {!selectedGraph?.inputs?.length && (
+                          <p style={{ color: c.muted, fontSize: "0.72rem", margin: "-8px 0 6px" }}>
+                            {selectedGraph
+                              ? "This graph has no declared inputs. Enter a JSON object to pass as input, or leave empty."
+                              : "Loading graph…"}
+                          </p>
                         )}
                       </div>
-                    ))}
-                    <div style={{ fontSize: "0.82rem", color: c.muted }}>Values saved as the trigger's structured <code style={{ fontFamily: "monospace" }}>triggerInput</code>.</div>
-                  </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {selectedGraph.inputs.map((inp: any) => (
+                          <div key={inp.key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            <label style={{ fontSize: "0.82rem", color: c.subtext, fontWeight: 600 }}>
+                              {inp.label ?? inp.key}{inp.required ? " *" : ""}
+                              {inp.description && (
+                                <span style={{ fontWeight: 400, color: c.muted, fontSize: "0.78rem" }}> — {inp.description}</span>
+                              )}
+                            </label>
+                            {inp.type === "boolean" ? (
+                              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!(triggerInput ?? {})[inp.key]}
+                                  onChange={(e) => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.checked })}
+                                />
+                                <span style={{ color: c.muted, fontSize: "0.8rem" }}>{inp.description ?? inp.key}</span>
+                              </label>
+                            ) : inp.type === "number" ? (
+                              <input
+                                type="number"
+                                style={inputStyle}
+                                value={(triggerInput ?? {})[inp.key] ?? ""}
+                                onChange={(e) =>
+                                  setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value === "" ? undefined : Number(e.target.value) })
+                                }
+                              />
+                            ) : inp.type === "json" ? (
+                              <textarea
+                                style={{ ...inputStyle, minHeight: 70, fontFamily: "monospace", fontSize: "0.79rem" }}
+                                value={
+                                  typeof (triggerInput ?? {})[inp.key] === "string"
+                                    ? ((triggerInput ?? {})[inp.key] as string)
+                                    : JSON.stringify((triggerInput ?? {})[inp.key] ?? "", null, 2)
+                                }
+                                onChange={(e) => {
+                                  try {
+                                    setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: JSON.parse(e.target.value) });
+                                  } catch {
+                                    setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value });
+                                  }
+                                }}
+                              />
+                            ) : (
+                              <input
+                                style={inputStyle}
+                                value={(triggerInput ?? {})[inp.key] ?? ""}
+                                onChange={(e) => setTriggerInput({ ...(triggerInput ?? {}), [inp.key]: e.target.value })}
+                              />
+                            )}
+                          </div>
+                        ))}
+                        <p style={{ color: c.muted, fontSize: "0.72rem", margin: "0" }}>
+                          Stored as static input — passed to the graph every time it fires.
+                        </p>
+                      </div>
+                    )
+                  )}
                 </div>
               )}
             </>
@@ -816,27 +1122,189 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
           {/* Discord-specific */}
           {type === "discord" && (
             <>
-              {/* Mode selector */}
-              <label style={labelStyle}>Discord Mode</label>
+              {/* Agent-only Discord fields: mode, bot token, guild, channel, mention-only */}
+              {targetType === "agent" && (
+                <>
+                  {/* Mode selector */}
+                  <label style={labelStyle}>Discord Mode</label>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                    {([
+                      { key: "trigger" as const, label: "Trigger", desc: "Each message spawns an independent agent run (no memory)." },
+                      { key: "bridge" as const, label: "Chat Bridge", desc: "Persistent conversation — the agent remembers the full chat." },
+                    ] as const).map((m) => (
+                      <button
+                        key={m.key}
+                        type="button"
+                        onClick={() => setDiscordMode(m.key)}
+                        style={{
+                          flex: 1,
+                          padding: "10px 10px",
+                          borderRadius: 10,
+                          border: `1.5px solid ${discordMode === m.key ? c.accent : c.border}`,
+                          background: discordMode === m.key ? "rgba(203,166,247,0.12)" : c.surface,
+                          color: discordMode === m.key ? c.accent : c.subtext,
+                          cursor: "pointer",
+                          fontSize: "0.83rem",
+                          fontWeight: discordMode === m.key ? 600 : 400,
+                          textAlign: "center",
+                        }}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p style={{ color: c.muted, fontSize: "0.78rem", margin: "-6px 0 14px" }}>
+                    {discordMode === "trigger"
+                      ? "Each matching Discord message spawns an independent agent run using the task template."
+                      : "The Discord channel acts as a live chat proxy with full conversation history."}
+                  </p>
+
+                  {/* Bot Token */}
+                  <label style={labelStyle}>Bot Token <span style={{ color: c.muted, fontWeight: 400 }}>(optional if using slash command)</span></label>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                    <input
+                      value={discordBotToken}
+                      onChange={(e) => setDiscordBotToken(e.target.value)}
+                      placeholder="Paste your Discord bot token"
+                      type={showBotToken ? "text" : "password"}
+                      style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowBotToken(!showBotToken)}
+                      style={{ ...cancelBtnStyle, padding: "6px 12px", fontSize: "0.78rem", whiteSpace: "nowrap" }}
+                    >
+                      {showBotToken ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                  <p style={{ color: c.muted, fontSize: "0.72rem", margin: "-8px 0 14px" }}>
+                    Create a bot at{" "}
+                    <span style={{ color: c.accent, cursor: "pointer" }} onClick={() => (window as any).open?.("https://discord.com/developers/applications")}>
+                      discord.com/developers
+                    </span>
+                    . Enable Message Content Intent under Privileged Gateway Intents.
+                  </p>
+
+                  {/* Mention-only toggle */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                    <input
+                      type="checkbox"
+                      checked={discordMentionOnly}
+                      onChange={(e) => setDiscordMentionOnly(e.target.checked)}
+                      id="discord-mention-only"
+                    />
+                    <label htmlFor="discord-mention-only" style={{ color: c.subtext, fontSize: "0.85rem" }}>
+                      Only respond when @mentioned
+                    </label>
+                  </div>
+                </>
+              )}
+
+              {/* Graph-target Discord: explain how it works */}
+              {targetType === "graph" && (
+                <div style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(203,166,247,0.06)", border: `1px solid ${c.border}`, marginBottom: 14, fontSize: "0.8rem", color: c.subtext }}>
+                  Graph triggers use the <strong>Global Discord Bridge</strong> — define a slash command below and users type <code>/command</code> to run the graph.
+                </div>
+              )}
+
+              {/* Shared scope: Guild + Channel restriction */}
+              <label style={labelStyle}>Server ID <span style={{ color: c.muted, fontWeight: 400 }}>(optional — restrict to a specific server)</span></label>
+              <input
+                value={discordGuildId}
+                onChange={(e) => setDiscordGuildId(e.target.value)}
+                placeholder="e.g. 1234567890 — blank allows any server"
+                style={inputStyle}
+              />
+
+              <label style={labelStyle}>Channel Restrictions <span style={{ color: c.muted, fontWeight: 400 }}>(optional, comma-separated)</span></label>
+              <input
+                value={discordChannelIds}
+                onChange={(e) => setDiscordChannelIds(e.target.value)}
+                placeholder="IDs or names: 111222333, general, #announcements — blank = all channels"
+                style={inputStyle}
+              />
+
+              {/* Slash command — shown for both targets */}
+              <label style={labelStyle}>
+                Discord Slash Command{" "}
+                <span style={{ color: c.muted, fontWeight: 400, fontSize: "0.8rem" }}>
+                  {targetType === "graph" ? "(required for graph triggers)" : "(optional — uses Global Bridge)"}
+                </span>
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ color: c.muted, fontSize: "0.95rem", userSelect: "none" }}>/</span>
+                <input
+                  value={discordCommand}
+                  onChange={(e) => setDiscordCommand(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
+                  placeholder="e.g. sortmail or run-report"
+                  style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
+                />
+              </div>
+              <p style={{ color: c.muted, fontSize: "0.72rem", margin: "2px 0 12px" }}>
+                Users type <code>/command</code> in Discord to fire this trigger.
+                Reserved: <code>help</code>, <code>newchat</code>, <code>cancel</code>.
+              </p>
+
+              {discordCommand.trim() && (
+                <>
+                  <label style={labelStyle}>Command Input Mapping</label>
+                  <select
+                    value={discordCommandInput}
+                    onChange={(e) => setDiscordCommandInput(e.target.value as "none" | "text" | "json")}
+                    style={inputStyle}
+                  >
+                    <option value="text">Pass args as input.text (default)</option>
+                    <option value="json">Parse args as JSON → input</option>
+                    <option value="none">Ignore args — use static trigger input</option>
+                  </select>
+                </>
+              )}
+            </>
+          )}
+
+          {/* Channel adapter fields */}
+          {type === "channel" && (
+            <>
+              <label style={labelStyle}>Channel Adapter</label>
+              {installedChannels.length > 0 ? (
+                <select
+                  value={channelName}
+                  onChange={(e) => setChannelName(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Select a channel…</option>
+                  {installedChannels.map((ch) => (
+                    <option key={`${ch.contributor}/${ch.name}`} value={`${ch.contributor}/${ch.name}`}>
+                      {ch.contributor}/{ch.name} — {ch.description}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p style={{ color: c.muted, fontSize: "0.82rem", margin: "0 0 12px" }}>
+                  No channel adapters installed. Install one from the Marketplace under the <strong>channels</strong> category.
+                </p>
+              )}
+
+              <label style={labelStyle}>Mode</label>
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                 {([
-                  { key: "trigger" as const, label: "Trigger", desc: "Each message spawns an independent agent run (no memory)." },
-                  { key: "bridge" as const, label: "Chat Bridge", desc: "Persistent conversation — the agent remembers the full chat." },
+                  { key: "trigger" as const, label: "Trigger", desc: "Each message spawns an independent agent run." },
+                  { key: "bridge" as const, label: "Chat Bridge", desc: "Persistent conversation with full chat history." },
                 ] as const).map((m) => (
                   <button
                     key={m.key}
                     type="button"
-                    onClick={() => setDiscordMode(m.key)}
+                    onClick={() => setChannelMode(m.key)}
                     style={{
                       flex: 1,
                       padding: "10px 10px",
                       borderRadius: 10,
-                      border: `1.5px solid ${discordMode === m.key ? c.accent : c.border}`,
-                      background: discordMode === m.key ? "rgba(203,166,247,0.12)" : c.surface,
-                      color: discordMode === m.key ? c.accent : c.subtext,
+                      border: `1.5px solid ${channelMode === m.key ? c.accent : c.border}`,
+                      background: channelMode === m.key ? "rgba(203,166,247,0.12)" : c.surface,
+                      color: channelMode === m.key ? c.accent : c.subtext,
                       cursor: "pointer",
                       fontSize: "0.83rem",
-                      fontWeight: discordMode === m.key ? 600 : 400,
+                      fontWeight: channelMode === m.key ? 600 : 400,
                       textAlign: "center",
                     }}
                   >
@@ -845,86 +1313,35 @@ export function CreateTriggerModal({ agents, onClose, onCreated, defaultAgent, e
                 ))}
               </div>
               <p style={{ color: c.muted, fontSize: "0.78rem", margin: "-6px 0 14px" }}>
-                {discordMode === "trigger"
-                  ? "Each matching Discord message spawns an independent agent run using the task template."
-                  : "The Discord channel acts as a live chat proxy with full conversation history."}
+                Configure secrets (API keys, tokens) for this channel via Marketplace → Channel Adapter → Settings.
               </p>
-
-              {/* Bot Token */}
-              <label style={labelStyle}>Bot Token</label>
-              <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-                <input
-                  value={discordBotToken}
-                  onChange={(e) => setDiscordBotToken(e.target.value)}
-                  placeholder="Paste your Discord bot token"
-                  type={showBotToken ? "text" : "password"}
-                  style={{ ...inputStyle, flex: 1, marginBottom: 0 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowBotToken(!showBotToken)}
-                  style={{ ...cancelBtnStyle, padding: "6px 12px", fontSize: "0.78rem", whiteSpace: "nowrap" }}
-                >
-                  {showBotToken ? "Hide" : "Show"}
-                </button>
-              </div>
-              <p style={{ color: c.muted, fontSize: "0.72rem", margin: "-8px 0 14px" }}>
-                Create a bot at{" "}
-                <span style={{ color: c.accent, cursor: "pointer" }} onClick={() => (window as any).open?.("https://discord.com/developers/applications")}>
-                  discord.com/developers
-                </span>
-                . Enable Message Content Intent under Privileged Gateway Intents.
-              </p>
-
-              {/* Guild ID */}
-              <label style={labelStyle}>Guild (Server) ID <span style={{ color: c.muted, fontWeight: 400 }}>(optional)</span></label>
-              <input
-                value={discordGuildId}
-                onChange={(e) => setDiscordGuildId(e.target.value)}
-                placeholder="e.g. 1234567890"
-                style={inputStyle}
-              />
-
-              {/* Channel IDs */}
-              <label style={labelStyle}>Channel IDs <span style={{ color: c.muted, fontWeight: 400 }}>(optional, comma-separated)</span></label>
-              <input
-                value={discordChannelIds}
-                onChange={(e) => setDiscordChannelIds(e.target.value)}
-                placeholder="e.g. 111222333, 444555666 — blank = all visible channels"
-                style={inputStyle}
-              />
-
-              {/* Mention-only toggle */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                <input
-                  type="checkbox"
-                  checked={discordMentionOnly}
-                  onChange={(e) => setDiscordMentionOnly(e.target.checked)}
-                  id="discord-mention-only"
-                />
-                <label htmlFor="discord-mention-only" style={{ color: c.subtext, fontSize: "0.85rem" }}>
-                  Only respond when @mentioned
-                </label>
-              </div>
             </>
           )}
 
-          {/* Task Template */}
-          <label style={labelStyle}>Task Template</label>
-          <textarea
-            value={taskTemplate}
-            onChange={(e) => setTaskTemplate(e.target.value)}
-            placeholder={"A new message was received: {{payload.content}}\n\nRespond helpfully and concisely."}
-            rows={4}
-            style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace", fontSize: "0.83rem" }}
-          />
-          <p style={{ color: c.muted, fontSize: "0.75rem", margin: "-8px 0 14px" }}>
-            {"Supports {{payload}}, {{payload.field}}, {{type}}, {{timestamp}} interpolation."}
-          </p>
+          {/* Task Template — agent only */}
+          {targetType === "agent" && (
+            <>
+              <label style={labelStyle}>Task Template</label>
+              <textarea
+                value={taskTemplate}
+                onChange={(e) => setTaskTemplate(e.target.value)}
+                placeholder={"A new message was received: {{payload.content}}\n\nRespond helpfully and concisely."}
+                rows={4}
+                style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace", fontSize: "0.83rem" }}
+              />
+              <p style={{ color: c.muted, fontSize: "0.75rem", margin: "-8px 0 14px" }}>
+                {"Supports {{payload}}, {{payload.field}}, {{type}}, {{timestamp}} interpolation."}
+              </p>
+            </>
+          )}
 
-          {/* Max Steps */}
-          <label style={labelStyle}>Max Steps</label>
-          <input value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} type="number" min={1} max={50} style={{ ...inputStyle, width: 100 }} />
+          {/* Max Steps — agent only */}
+          {targetType === "agent" && (
+            <>
+              <label style={labelStyle}>Max Steps</label>
+              <input value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} type="number" min={1} max={50} style={{ ...inputStyle, width: 100 }} />
+            </>
+          )}
 
           {/* Enabled */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>

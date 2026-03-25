@@ -31,6 +31,7 @@ import type {
   TriggerEvent,
   TriggerRun,
   PipelineResult,
+  ChannelContract,
 } from "../../types/index.js";
 import { saveTriggerRun } from "../runs/runStore.js";
 import { runAutonomousTask } from "../pipeline/autonomous.js";
@@ -45,12 +46,17 @@ import {
   type CronFields,
 } from "./cronParser.js";
 import { DiscordBridge, type DiscordBridgeOptions } from "../discord/discordBridge.js";
+import { getSecret, SECRET_KEYS } from "../config/secretStore.js";
+import { getChannel } from "../channels/channelLoader.js";
 
 // ── Logging ────────────────────────────────────────────────────────────
 
 const log  = (...args: unknown[]) => console.log("[trigger-engine]", ...args);
 const logW = (...args: unknown[]) => console.warn("[trigger-engine]", ...args);
 const logE = (...args: unknown[]) => console.error("[trigger-engine]", ...args);
+
+/** Maximum allowed request body size for incoming webhook requests (1 MiB). */
+const MAX_WEBHOOK_BODY_BYTES = 1 * 1024 * 1024;
 
 // ── Template renderer ──────────────────────────────────────────────────
 
@@ -143,6 +149,12 @@ export class TriggerEngine extends EventEmitter {
   /** Discord bridges indexed by trigger id. */
   private discordBridges = new Map<string, DiscordBridge>();
 
+  /** Channel adapters indexed by trigger id. */
+  private channelAdapters = new Map<string, ChannelContract>();
+
+  /** Slash-command triggers indexed by command name (lower-case, no leading /). */
+  private commandRegistry = new Map<string, TriggerDefinition[]>();
+
   /** In-memory run history (newest first). */
   private runs: TriggerRun[] = [];
 
@@ -182,6 +194,11 @@ export class TriggerEngine extends EventEmitter {
       if (t.type === "discord") {
         this.startDiscordTrigger(t).catch((err) =>
           logE(`failed to start Discord trigger "${t.name}":`, (err as Error).message),
+        );
+      }
+      if (t.type === "channel") {
+        this.startChannelTrigger(t).catch((err) =>
+          logE(`failed to start channel trigger "${t.name}":`, (err as Error).message),
         );
       }
     }
@@ -226,6 +243,17 @@ export class TriggerEngine extends EventEmitter {
       }
     }
     this.discordBridges.clear();
+    this.commandRegistry.clear();
+
+    // Stop all channel adapters.
+    for (const [, adapter] of this.channelAdapters) {
+      try {
+        await adapter.stop();
+      } catch (err) {
+        logE("error stopping channel adapter:", (err as Error).message);
+      }
+    }
+    this.channelAdapters.clear();
 
     if (this.webhookServer) {
       await new Promise<void>((resolve) => {
@@ -266,6 +294,10 @@ export class TriggerEngine extends EventEmitter {
       this.startDiscordTrigger(trigger).catch((err) =>
         logE(`failed to start Discord trigger "${trigger.name}":`, (err as Error).message),
       );
+    } else if (trigger.type === "channel") {
+      this.startChannelTrigger(trigger).catch((err) =>
+        logE(`failed to start channel trigger "${trigger.name}":`, (err as Error).message),
+      );
     }
   }
 
@@ -302,6 +334,16 @@ export class TriggerEngine extends EventEmitter {
       );
       this.discordBridges.delete(triggerId);
     }
+    // Stop channel adapter for this trigger.
+    const adapter = this.channelAdapters.get(triggerId);
+    if (adapter) {
+      adapter.stop().catch((err) =>
+        logE("error stopping channel adapter:", (err as Error).message),
+      );
+      this.channelAdapters.delete(triggerId);
+    }
+    // Unregister slash-command mapping for command-only triggers.
+    this.unregisterCommandTrigger(triggerId);
   }
 
   // ── Cron scheduling ────────────────────────────────────────────────
@@ -485,8 +527,11 @@ export class TriggerEngine extends EventEmitter {
         logE(`webhook server error: ${err.message}`);
         reject(err);
       });
-      this.webhookServer!.listen(this.webhookPort, () => {
-        log(`webhook server listening on port ${this.webhookPort}`);
+      // Bind to localhost only — the webhook server is not intended to be
+      // exposed directly to the internet.  Users who need external access
+      // should place a reverse proxy in front.
+      this.webhookServer!.listen(this.webhookPort, "127.0.0.1", () => {
+        log(`webhook server listening on 127.0.0.1:${this.webhookPort}`);
         resolve();
       });
     });
@@ -509,10 +554,27 @@ export class TriggerEngine extends EventEmitter {
       return;
     }
 
-    // Read body.
+    // Read body with a size cap to prevent DoS via large payloads.
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let bodySize = 0;
+    let bodySizeLimitExceeded = false;
+
+    req.on("data", (chunk: Buffer) => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_WEBHOOK_BODY_BYTES) {
+        bodySizeLimitExceeded = true;
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
     req.on("end", () => {
+      if (bodySizeLimitExceeded) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Request body too large" }));
+        return;
+      }
       const body = Buffer.concat(chunks).toString("utf-8");
 
       // Verify HMAC if secret is set.
@@ -555,13 +617,25 @@ export class TriggerEngine extends EventEmitter {
    * agent via either trigger mode (one-shot) or bridge mode (persistent chat).
    */
   private async startDiscordTrigger(trigger: TriggerDefinition): Promise<void> {
-    if (!trigger.discordBotToken) {
-      logW(`discord trigger "${trigger.name}" has no bot token — skipping`);
+    // Resolve bot token: prefer the secret store (set by migration), fall back
+    // to the deprecated plaintext field for any triggers not yet migrated.
+    const botToken =
+      (await getSecret(SECRET_KEYS.discordTriggerBotToken(trigger.id))) ??
+      (trigger as TriggerDefinition & { discordBotToken?: string }).discordBotToken;
+
+    if (!botToken) {
+      if ((trigger as any).discordCommand) {
+        // Command-only triggers use the GlobalDiscordBridge — no dedicated bot needed.
+        this.registerCommandTrigger(trigger);
+        log(`command trigger "${trigger.name}" registered as /${(trigger as any).discordCommand} (uses global bridge)`);
+      } else {
+        logW(`discord trigger "${trigger.name}" has no bot token — skipping`);
+      }
       return;
     }
 
     const bridge = new DiscordBridge({
-      botToken: trigger.discordBotToken,
+      botToken: botToken,
       agentName: trigger.agentName,
       guildId: trigger.discordGuildId,
       channelIds: trigger.discordChannelIds,
@@ -615,6 +689,231 @@ export class TriggerEngine extends EventEmitter {
     log(`discord trigger "${trigger.name}" started (mode: ${trigger.discordMode ?? "trigger"})`);
   }
 
+  // ── Channel adapters ────────────────────────────────────────────────
+
+  /**
+   * Start a marketplace-installed channel adapter for a trigger definition.
+   *
+   * The adapter is loaded by its qualified name (`channelName` field on the
+   * trigger) via the channel loader.  Inbound messages are routed to the
+   * agent using the standard runAutonomousTask() pipeline.
+   */
+  private async startChannelTrigger(trigger: TriggerDefinition): Promise<void> {
+    if (!trigger.channelName) {
+      logW(`channel trigger "${trigger.name}" has no channelName — skipping`);
+      return;
+    }
+
+    const adapter = await getChannel(trigger.channelName);
+    if (!adapter) {
+      logW(`channel adapter "${trigger.channelName}" not found — is it installed?`);
+      return;
+    }
+
+    // Resolve config values for this channel from the secret store.
+    const configValues: Record<string, unknown> = {};
+    if (adapter.config) {
+      for (const field of adapter.config) {
+        if (field.type === "secret") {
+          const secret = await getSecret(`channel:${trigger.channelName}:${field.key}`);
+          if (secret) configValues[field.key] = secret;
+        }
+      }
+    }
+
+    const onMessage = async (msg: import("../../types/index.js").ChannelMessage) => {
+      const task = renderTemplate(trigger.taskTemplate ?? "", {
+        type: "channel",
+        payload: { ...msg, channel: trigger.channelName! },
+        timestamp: Date.now(),
+      });
+
+      const startedAt = Date.now();
+      try {
+        const result = await runAutonomousTask(trigger.agentName, task, {
+          provider: trigger.provider,
+          model: trigger.model,
+          maxSteps: trigger.maxSteps ?? 10,
+        });
+
+        // Send the reply back through the channel.
+        if (result.finalOutput && typeof adapter.send === "function") {
+          await adapter.send(
+            { conversationId: msg.conversationId, text: result.finalOutput },
+            configValues,
+          );
+        }
+
+        const run: TriggerRun = {
+          id: randomUUID(),
+          triggerId: trigger.id,
+          triggerName: trigger.name,
+          agentName: trigger.agentName,
+          status: "completed",
+          event: { type: "channel", payload: { channel: trigger.channelName!, messageId: msg.messageId }, timestamp: Date.now() },
+          result,
+          startedAt,
+          completedAt: Date.now(),
+        };
+        this.runs.unshift(run);
+        this.trimRunHistory();
+        this.lastFired.set(trigger.id, Date.now());
+        this.runCounts.set(trigger.id, (this.runCounts.get(trigger.id) ?? 0) + 1);
+        this.emit("run:completed", run);
+      } catch (err) {
+        const run: TriggerRun = {
+          id: randomUUID(),
+          triggerId: trigger.id,
+          triggerName: trigger.name,
+          agentName: trigger.agentName,
+          status: "failed",
+          event: { type: "channel", payload: { channel: trigger.channelName! }, timestamp: Date.now() },
+          error: (err as Error).message,
+          startedAt,
+          completedAt: Date.now(),
+        };
+        this.runs.unshift(run);
+        this.trimRunHistory();
+        this.emit("run:failed", run);
+      }
+    };
+
+    await adapter.start(onMessage, configValues);
+    this.channelAdapters.set(trigger.id, adapter);
+    log(`channel trigger "${trigger.name}" started (adapter: ${trigger.channelName}, mode: ${trigger.channelMode ?? "trigger"})`);
+  }
+
+  // ── Discord slash-command helpers ─────────────────────────────
+
+  private registerCommandTrigger(trigger: TriggerDefinition): void {
+    const raw = ((trigger as any).discordCommand as string | undefined) ?? "";
+    if (!raw.trim()) return;
+    const cmd = raw.trim().toLowerCase().replace(/^\/+/, "");
+    const reserved = ["help", "newchat", "cancel"];
+    if (reserved.includes(cmd)) {
+      logW(`discord command trigger "${trigger.name}" uses reserved keyword "/${cmd}" — skipping`);
+      return;
+    }
+    const list = this.commandRegistry.get(cmd) ?? [];
+    if (!list.find((t) => t.id === trigger.id)) list.push(trigger);
+    this.commandRegistry.set(cmd, list);
+  }
+
+  private unregisterCommandTrigger(triggerId: string): void {
+    for (const [cmd, list] of this.commandRegistry) {
+      const filtered = list.filter((t) => t.id !== triggerId);
+      if (filtered.length === 0) this.commandRegistry.delete(cmd);
+      else this.commandRegistry.set(cmd, filtered);
+    }
+  }
+
+  /** Return enabled command triggers matching the given command name and channel scope. */
+  getCommandTriggersByName(commandName: string, guildId?: string, channelId?: string): TriggerDefinition[] {
+    const lower = commandName.toLowerCase().replace(/^\/+/, "");
+    const list = this.commandRegistry.get(lower) ?? [];
+    return list.filter((t) => {
+      if (!t.enabled) return false;
+      if (t.discordGuildId && guildId && t.discordGuildId !== guildId) return false;
+      if (t.discordChannelIds && t.discordChannelIds.length > 0 && channelId) {
+        if (!t.discordChannelIds.includes(channelId)) return false;
+      }
+      return true;
+    });
+  }
+
+  /** List all Discord slash commands accessible from a given guild/channel (for /help graphs). */
+  getDiscordCommandHelp(guildId?: string, channelId?: string): Array<{
+    command: string;
+    triggerName: string;
+    targetType: string;
+    targetId?: string;
+    agentName: string;
+  }> {
+    const out: Array<{ command: string; triggerName: string; targetType: string; targetId?: string; agentName: string }> = [];
+    for (const [cmd, list] of this.commandRegistry) {
+      for (const t of list) {
+        if (!t.enabled) continue;
+        if (t.discordGuildId && guildId && t.discordGuildId !== guildId) continue;
+        if (t.discordChannelIds && t.discordChannelIds.length > 0 && channelId) {
+          if (!t.discordChannelIds.includes(channelId)) continue;
+        }
+        out.push({
+          command: cmd,
+          triggerName: t.name,
+          targetType: (t as any).targetType ?? "agent",
+          targetId: (t as any).targetId,
+          agentName: t.agentName,
+        });
+      }
+    }
+    return out.sort((a, b) => a.command.localeCompare(b.command));
+  }
+
+  /**
+   * Handle an incoming Discord slash command dispatched from the GlobalDiscordBridge.
+   *
+   * Fires the matching trigger asynchronously so the bridge can reply to the
+   * channel immediately without waiting for the run to complete.
+   *
+   * Returns `{ runId, trigger }` on success, or `null` when no matching
+   * command is registered for the given channel/guild scope.
+   */
+  async handleDiscordCommand(
+    commandName: string,
+    args: string,
+    ctx: {
+      guildId?: string;
+      channelId: string;
+      channelName: string;
+      authorId: string;
+      authorName: string;
+      messageId: string;
+    },
+  ): Promise<{ runId: string; trigger: TriggerDefinition } | null> {
+    const triggers = this.getCommandTriggersByName(commandName, ctx.guildId, ctx.channelId);
+    if (triggers.length === 0) return null;
+
+    const trigger = triggers[0];
+    const inputMode = ((trigger as any).discordCommandInput as "none" | "text" | "json" | undefined) ?? "text";
+    let parsedInput: Record<string, unknown> = {};
+    if (inputMode === "json" && args.trim()) {
+      try { parsedInput = { input: JSON.parse(args.trim()) }; }
+      catch { parsedInput = { input: { text: args } }; }
+    } else if (inputMode === "text") {
+      parsedInput = { input: { text: args } };
+    }
+    // "none" → use the static triggerInput already on the trigger definition
+
+    // For graph targets with "none" input mode fall back to the configured triggerInput;
+    // otherwise merge the command args into the event payload for graph input resolution.
+    const extraInput = inputMode === "none"
+      ? ((trigger as any).triggerInput ?? {})
+      : parsedInput;
+
+    const event: TriggerEvent = {
+      type: "discord",
+      payload: {
+        command: commandName,
+        args,
+        ...extraInput,
+        channelId: ctx.channelId,
+        channelName: ctx.channelName,
+        guildId: ctx.guildId ?? "",
+        authorId: ctx.authorId,
+        authorName: ctx.authorName,
+        messageId: ctx.messageId,
+      },
+      timestamp: Date.now(),
+    };
+
+    const runId = randomUUID();
+    // Fire asynchronously — reply to the user immediately with the run ID.
+    this.executeTrigger(trigger, event, runId).catch((err) =>
+      logE(`discord command "/${commandName}" trigger run failed:`, (err as Error).message),
+    );
+
+    return { runId, trigger };
+  }
   // ── Manual fire ────────────────────────────────────────────────────
 
   /**
@@ -648,8 +947,9 @@ export class TriggerEngine extends EventEmitter {
   private async executeTrigger(
     trigger: TriggerDefinition,
     event: TriggerEvent,
+    presetRunId?: string,
   ): Promise<TriggerRun> {
-    const runId = randomUUID();
+    const runId = presetRunId ?? randomUUID();
     const task = renderTemplate(trigger.taskTemplate ?? "", event);
 
     const targetDesc = (trigger as any).targetType === "graph" ? `graph "${(trigger as any).targetId ?? "?"}"` : `agent "${trigger.agentName}"`;
@@ -678,14 +978,20 @@ export class TriggerEngine extends EventEmitter {
         // `triggerInput` on the definition.
         const { runGraphTracked } = await import("../graph/graphRunRegistry.js");
         const graphInput = (event.payload as Record<string, unknown>) ?? trigger.triggerInput ?? {};
-        const { result: graphResult } = await runGraphTracked(
+        const { runId: graphRunId, result: graphResult } = await runGraphTracked(
           (trigger as any).targetId,
-          { input: graphInput, provider: trigger.provider, model: trigger.model },
+          {
+            input: graphInput,
+            provider: trigger.provider,
+            model: trigger.model,
+            agentName: trigger.agentName,
+          },
           { source: "trigger", triggerId: trigger.id, triggerName: trigger.name, triggerType: trigger.type },
         );
 
         run.status = "completed";
         run.result = graphResult as any;
+        run.graphRunId = graphRunId;
         run.completedAt = Date.now();
 
         // Persist run (best-effort)

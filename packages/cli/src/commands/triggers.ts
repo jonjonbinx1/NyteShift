@@ -50,6 +50,10 @@ export function registerTriggerCommands(program: Command): void {
             if (t.discordChannelIds?.length) console.log(`    Channels: ${t.discordChannelIds.join(", ")}`);
             if (t.discordMentionOnly) console.log(`    Mention-only: yes`);
           }
+          if (t.type === "channel") {
+            console.log(`    Channel: ${(t as any).channelName ?? "unknown"}`);
+            console.log(`    Mode: ${(t as any).channelMode ?? "trigger"}`);
+          }
           console.log(`    Task: "${t.taskTemplate.slice(0, 80)}${t.taskTemplate.length > 80 ? "…" : ""}"`);
           console.log();
         }
@@ -66,7 +70,7 @@ export function registerTriggerCommands(program: Command): void {
     .description("Create a new trigger definition")
     .requiredOption("-n, --name <name>", "Trigger name")
     .requiredOption("-a, --agent <agent>", "Agent name")
-    .requiredOption("-t, --type <type>", "Trigger type: cron | webhook | manual | discord | oneoff | monthly")
+    .requiredOption("-t, --type <type>", "Trigger type: cron | webhook | manual | discord | oneoff | monthly | channel")
     .requiredOption("--task <template>", "Task template (supports {{payload}} interpolation)")
     .option("-s, --schedule <schedule>", "Cron expression or interval (e.g. '5m', '*/30 * * * *')")
     .option("--run-at <iso|ms>", "One-off run time (ISO string or milliseconds since epoch)")
@@ -83,6 +87,8 @@ export function registerTriggerCommands(program: Command): void {
     .option("--discord-channels <ids>", "Comma-separated Discord channel IDs to listen on")
     .option("--mention-only", "Only respond when the bot is @mentioned (Discord)")
     .option("--discord-mode <mode>", "Discord mode: trigger | bridge (default: trigger)")
+    .option("--channel-name <name>", "Channel adapter qualified name (e.g. nyteshift/facebook-messenger)")
+    .option("--channel-mode <mode>", "Channel mode: trigger | bridge (default: trigger)")
     .option("-p, --provider <provider>", "Override provider")
     .option("-m, --model <model>", "Override model")
     .option("--max-steps <n>", "Max autonomous steps", "10")
@@ -131,6 +137,8 @@ export function registerTriggerCommands(program: Command): void {
             : undefined,
           discordMentionOnly: opts.mentionOnly ?? false,
           discordMode: (opts.discordMode as "trigger" | "bridge") ?? "trigger",
+          channelName: opts.channelName,
+          channelMode: (opts.channelMode as "trigger" | "bridge") ?? "trigger",
         });
 
         console.log(chalk.green(`✔ Trigger "${trigger.name}" created (${trigger.id})`));

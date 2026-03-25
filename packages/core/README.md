@@ -19,6 +19,7 @@ import {
 
   // Skills & Tools
   listSkills, listTools, getTool,
+  createToolContext,
 
   // Providers
   listProviders, getProvider, callProvider, callDefaultProvider,
@@ -245,6 +246,19 @@ Plans support artifacts (intermediate outputs stored by key) and configurable su
 
 Directed execution graphs with branching, condition-guarded loops, and error policies.
 
+### Graph Run Options (`GraphRunOptions`)
+
+Key options when calling `runGraph` / `runGraphTracked`:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `input` | `Record<string, unknown>` | Seed variables for the graph. |
+| `agentName` | `string` | Agent that owns this run. When set, tool nodes receive agent-scoped secrets and config overrides (same as the autonomous pipeline). |
+| `provider` / `model` | `string` | Override provider/model for all nodes in this run. |
+| `signal` | `AbortSignal` | Cooperative cancellation. |
+| `treatToolOkFalseAsError` | `boolean` | When `true` (default), `{ ok: false }` tool outputs trigger error policies. |
+| `onNodeStart` / `onNodeComplete` | callback | Live-progress hooks for the UI. |
+
 ### Node Types
 
 | Type | Description |
@@ -421,6 +435,46 @@ module.exports = {
 ```
 
 Tools support `config` fields (user-configurable settings), `configAction()` functions (OAuth flows, API key setup), and `dependencies` in a per-tool `package.json` (installed to isolated `node_modules`). The tool loader uses mtime-based caching for hot-reloading without process restart.
+
+### Tool Context (`createToolContext`)
+
+Every execution path (autonomous pipeline, graph runner, triggered pipeline) builds a `context` object and passes it to `tool.run({ input, context })` via the centralised factory:
+
+```ts
+import { createToolContext } from "@nyteshift/core";
+
+const ctx = await createToolContext(
+  "nyteshift/gmail",   // fully-qualified tool name
+  "emaily",            // optional: agent running the tool
+  { bridge }           // optional: base fields (e.g. Discord helpers)
+);
+
+await tool.run({ input, context: ctx });
+```
+
+**What the factory provides:**
+
+| Field | Shape | Description |
+|-------|-------|-------------|
+| `toolConfig[toolName]` | `Record<string, unknown>` | Merged global + agent config for the tool; `type:"secret"` fields are resolved from the encrypted secret store. |
+| `config.toolConfig[toolName]` | same | Legacy shape for tools that read from `context.config.toolConfig`. |
+| `getSecret(ns, field?)` | `async (…) => string \| undefined` | Scoped secret-store lookup — tries agent-scoped name first, then global, so tools never need to know the canonical naming convention. |
+| `agentName` | `string \| undefined` | The agent running the tool (for per-agent storage or logging). |
+
+**Config precedence inside `toolConfig`** (highest wins):
+1. Encrypted secret-store value (fields declared `type:"secret"` in the tool contract)
+2. Agent-level `toolConfig` in `~/.nyteshift/agents/<agent>/config.json`
+3. Global `toolConfig` in `~/.nyteshift/config.json`
+4. Field defaults from the tool contract
+
+**Authoring pattern for secret-backed tools:**
+```js
+const cfg = context?.toolConfig?.["my-contributor/my-tool"] ?? {};
+// cfg.apiKey is already decrypted when declared type:"secret" in the contract.
+if (!cfg.apiKey) return { ok: false, error: "Tool not configured." };
+```
+
+All operations inside `createToolContext` are error-tolerant — a failure to reach the secret store never blocks `tool.run`; the tool's own fallback logic still applies.
 
 ---
 

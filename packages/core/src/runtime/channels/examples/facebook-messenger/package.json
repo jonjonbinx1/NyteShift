@@ -1,0 +1,7 @@
+{
+  "name": "@nyteshift/channel-facebook-messenger",
+  "version": "1.0.0",
+  "description": "Facebook Messenger channel adapter for NyteShift",
+  "type": "module",
+  "main": "channel.js"
+}

@@ -24,6 +24,7 @@ export function GraphRunPage(): React.JSX.Element {
   const runIdRef = useRef<string | null>(null);
   const [graphDef, setGraphDef] = useState<{ nodes: GraphNodeInfo[]; edges: GraphEdgeInfo[] } | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [stopModalOpen, setStopModalOpen] = useState(false);
 
   useEffect(() => {
     if (!runId) return;
@@ -160,10 +161,18 @@ export function GraphRunPage(): React.JSX.Element {
     };
   }, [runId]);
 
-  const handleCancel = async () => {
+  const handleAbort = async () => {
     if (!runId) return;
+    setStopModalOpen(false);
     try { await window.nyteShiftApi?.graphRunCancel(runId); } catch (err) { console.error(err); }
     setRunning(false);
+  };
+
+  const handleStop = async () => {
+    if (!runId) return;
+    setStopModalOpen(false);
+    try { await window.nyteShiftApi?.graphRunStop(runId); } catch (err) { console.error(err); }
+    // run continues to natural completion — do not forcibly set running(false)
   };
 
   const elapsed = runStartedAt && running ? Date.now() - runStartedAt : runResult?.elapsedMs ?? 0;
@@ -174,7 +183,7 @@ export function GraphRunPage(): React.JSX.Element {
         <button onClick={() => navigate(-1)} style={{ background: "none", border: "none", cursor: "pointer", color: C.subtext0 }}>← Back</button>
         <div style={{ fontWeight: 700 }}>{runId}</div>
         <div style={{ flex: 1 }} />
-        {running ? <button onClick={handleCancel} style={{ padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.red}`, background: `${C.red}22`, color: C.red }}>Stop</button>
+        {running ? <button onClick={() => setStopModalOpen(true)} style={{ padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.red}`, background: `${C.red}22`, color: C.red }}>Stop</button>
           : <div style={{ color: runResult ? C.green : runError ? C.red : C.overlay0 }}>{runResult ? "Completed" : runError ? `Error: ${runError}` : "Idle"}</div>}
       </div>
 
@@ -242,6 +251,28 @@ export function GraphRunPage(): React.JSX.Element {
           )}
         </div>
       </div>
+
+      {stopModalOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: C.base, border: `1px solid ${C.surface1}`, borderRadius: 10, padding: "24px 28px", minWidth: 320, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: "1rem" }}>Stop Run?</div>
+            <div style={{ color: C.subtext0, fontSize: "0.85rem" }}>Choose how to stop the current run:</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button onClick={handleAbort} style={{ padding: "10px 16px", borderRadius: 6, border: `1px solid ${C.red}`, background: `${C.red}22`, color: C.red, cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontWeight: 600 }}>⚡ Abort</div>
+                <div style={{ fontSize: "0.78rem", color: C.subtext0, marginTop: 2 }}>Kill immediately. Catch nodes will not run.</div>
+              </button>
+              <button onClick={handleStop} style={{ padding: "10px 16px", borderRadius: 6, border: `1px solid ${C.yellow}`, background: `${C.yellow}22`, color: C.yellow, cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontWeight: 600 }}>⏹ Stop</div>
+                <div style={{ fontSize: "0.78rem", color: C.subtext0, marginTop: 2 }}>Finish the current step, then stop. Catch nodes will run.</div>
+              </button>
+              <button onClick={() => setStopModalOpen(false)} style={{ padding: "8px 16px", borderRadius: 6, border: `1px solid ${C.surface2}`, background: "none", color: C.subtext0, cursor: "pointer" }}>
+                Keep Running
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import {
   nyteShiftHome,
   skillsDir,
   toolsDir,
+  channelsDir,
   agentsDir,
   triggersDir,
 } from "../../utils/index.js";
@@ -16,6 +17,7 @@ export async function ensureNyteShiftDirs(): Promise<void> {
     nyteShiftHome(),
     skillsDir(),
     toolsDir(),
+    channelsDir(),
     agentsDir(),
     triggersDir(),
   ];

@@ -32,7 +32,7 @@ import { validateGraph, tarjanSCC } from "./graphValidator.js";
 import { loadGraph } from "./graphStore.js";
 import { runGraphTracked } from "./graphRunRegistry.js";
 import { resolveConfig } from "../config/configResolver.js";
-import { readSkillToolConfig } from "../config/configResolver.js";
+import { createToolContext } from "../tools/toolContext.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { getTool } from "../tools/toolLoader.js";
 import { getSkill } from "../skills/skillLoader.js";
@@ -110,8 +110,9 @@ export async function runGraph(
     // Seed vars from graph.initVars, then allow options.input to override.
     // This gives graph authors defaults (e.g. page: 1) while still letting
     // callers pass different starting values at run-time.
-    vars: { ...(graph.initVars ?? {}), ...(options.input ?? {}) },
-    nodeOutputs: {},
+    // When resuming a paused run, initialContext.vars supplements the seed.
+    vars: { ...(graph.initVars ?? {}), ...(options.input ?? {}), ...(options.initialContext?.vars ?? {}) },
+    nodeOutputs: { ...(options.initialContext?.nodeOutputs ?? {}) } as Record<string, NodeOutput>,
     traceId,
     startedAt,
     signal: options.signal,
@@ -147,13 +148,33 @@ export async function runGraph(
   const nodeResults: NodeOutput[] = [];
   let finalOutput: unknown = undefined;
   let graphError: string | undefined;
-  let graphStatus: "completed" | "failed" | "aborted" = "completed";
+  let graphStatus: "completed" | "failed" | "aborted" | "paused" = "completed";
+  /** Set when a handled catch node requests manual resume instead of auto-continue. */
+  let manualPauseInfo: { pausedResumeFrom?: string } | null = null;
 
-  for (const group of executionPlan) {
+  // Tracks how many times each catch node (by id) has fired in this run.
+  // Used to enforce catchMaxFires limits (undefined/1 = once, 0 = unlimited).
+  const catchFireCounts = new Map<string, number>();
+
+  // Tracks cumulative iterations per loop SCC (keyed by group entryId).
+  // When a catch node re-enters a loop, the iteration count carries over so
+  // maxIterations is enforced across all passes through the same loop.
+  const loopIterCounts = new Map<string, number>();
+
+  // Use index-based loop so catch nodes can rewind/jump to earlier groups.
+  for (let _planIdx = 0; _planIdx < executionPlan.length; _planIdx++) {
+    const group = executionPlan[_planIdx]!;
+    // Only treat a real AbortSignal as an immediate hard stop here.
+    // Soft-stop requests (`options._softStop?.requested`) are handled inside
+    // loop SCC execution so catch nodes can run; don't break the whole run
+    // at this outer boundary or we'll prevent downstream nodes from running.
     if (options.signal?.aborted) {
       graphStatus = "aborted";
       log(`  AbortSignal fired — stopping graph execution`);
       break;
+    }
+    if (options._softStop?.requested) {
+      log(`  soft-stop requested — will finish current work and run catches`);
     }
 
     if (group.type === "node") {
@@ -162,12 +183,16 @@ export async function runGraph(
 
       // Catch nodes fire via post-SCC logic; skip here to prevent double-execution
       // or spurious skipped-output entries if the catch node never triggered.
+      // We store a sentinel placeholder (metadata.__placeholder === true) so the
+      // post-SCC guard can tell the difference between "never ran" and "already
+      // ran for a previous SCC" — preventing the placeholder from blocking catch
+      // execution when a loop exits with an error.
       if (node.type === "catch") {
         if (!context.nodeOutputs[node.outputKey ?? node.id]) {
-          const skipOut = makeSkippedOutput(node);
-          nodeResults.push(skipOut);
-          context.nodeOutputs[node.outputKey ?? node.id] = skipOut;
-          options.onNodeComplete?.(skipOut);
+          const placeholder = makeCatchPlaceholder(node);
+          nodeResults.push(placeholder);
+          context.nodeOutputs[node.outputKey ?? node.id] = placeholder;
+          options.onNodeComplete?.(placeholder);
         }
         continue;
       }
@@ -196,9 +221,136 @@ export async function runGraph(
       }
 
       if (nodeOutput.status === "error" && policy.type === "halt") {
-        graphError = nodeOutput.error;
-        graphStatus = "failed";
-        break;
+        // Top-level node error: run matching catch nodes (same semantics
+        // as loop SCC exits). This allows graph authors to catch errors
+        // even when the failing node is not part of a loop.
+        context._loopExitReason = "error";
+
+        const matchingCatchNodes = graph.nodes
+          .filter(n => {
+            if (n.type !== "catch") return false;
+            if (!(n.catchTriggers ?? []).some(t => t === "error")) return false;
+            const fireCount = catchFireCounts.get(n.id) ?? 0;
+            const maxFires = (n.catchMaxFires === undefined || n.catchMaxFires === 1) ? 1
+              : n.catchMaxFires <= 0 ? Infinity
+              : n.catchMaxFires;
+            return fireCount < maxFires;
+          })
+          .sort((a, b) => (a.catchOrder ?? Infinity) - (b.catchOrder ?? Infinity));
+
+        const firedCatches: Array<{ catchNode: typeof graph.nodes[0]; catchOut: import("./types.js").NodeOutput; handled: boolean }> = [];
+        let _catchResumeIdx: number | undefined;
+
+        for (const catchNode of matchingCatchNodes) {
+          log(`  catch node "${catchNode.id}" triggered (reason="error", catchOrder=${catchNode.catchOrder ?? "unset"})`);
+          try {
+            const outs = (outgoing.get(catchNode.id) ?? []).map(e => e.target).join(", ");
+            log(`  catch "${catchNode.id}" outgoing edges: ${outs}`);
+          } catch {}
+          options.onNodeStart?.(catchNode.id, catchNode.name, catchNode.type);
+          const catchPolicy = catchNode.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
+          const catchOut = await executeNodeWithPolicy(catchNode, context, globalConfig, graph, options, catchPolicy);
+          catchFireCounts.set(catchNode.id, (catchFireCounts.get(catchNode.id) ?? 0) + 1);
+          try { (catchOut as any).nodeType = catchNode.type; } catch {}
+          nodeResults.push(catchOut);
+          context.nodeOutputs[catchNode.outputKey ?? catchNode.id] = catchOut;
+          options.onNodeComplete?.(catchOut);
+
+          if (catchOut.status === "error") {
+            logW(`  catch node "${catchNode.id}" errored — trying next catch node`);
+            firedCatches.push({ catchNode, catchOut, handled: false });
+            continue;
+          }
+
+          const strategy = catchNode.resumeStrategy ?? "resumeFrom";
+          if (strategy === "rewindTo" && catchNode.resumeTarget) {
+            const targetKey = nodeMap.get(catchNode.resumeTarget)?.outputKey ?? catchNode.resumeTarget;
+            const existingOutput = context.nodeOutputs[targetKey];
+            const alreadyRan = existingOutput &&
+              existingOutput.status !== "skipped" &&
+              !(existingOutput.metadata as any)?.__placeholder;
+            if (!alreadyRan) {
+              log(`  catch "${catchNode.id}" resumeStrategy "rewindTo" — target "${catchNode.resumeTarget}" has NOT run yet, skipping this catch`);
+              firedCatches.push({ catchNode, catchOut, handled: false });
+              continue;
+            }
+          }
+
+          const resumePolicy = catchNode.resumePolicy ?? "never";
+          let thisHandled = false;
+          if (resumePolicy === "always") {
+            thisHandled = true;
+          } else if (resumePolicy === "ifHandled") {
+            if (catchNode.handledOutputPath) {
+              const parts = catchNode.handledOutputPath
+                .replace(/\[(\d+)\]/g, ".$1")
+                .replace(/^output\./, "")
+                .split(".");
+              let val: unknown = catchOut.output;
+              for (const part of parts) {
+                if (val !== null && typeof val === "object") {
+                  val = (val as Record<string, unknown>)[part];
+                } else { val = undefined; break; }
+              }
+              thisHandled = !!val;
+            }
+            if (!thisHandled && catchNode.handledWhen) {
+              thisHandled = evaluateCondition(catchNode.handledWhen, context);
+            }
+          }
+
+          if (catchOut.status === "success" || catchPolicy.type === "fallback") {
+            propagateReachability(catchNode, outgoing.get(catchNode.id) ?? [], context, reachable);
+            if (thisHandled && catchNode.resumeTarget) {
+              if ((catchNode as any).manualResume) {
+                if (!manualPauseInfo) manualPauseInfo = { pausedResumeFrom: catchNode.resumeTarget };
+                log(`  catch "${catchNode.id}" manualResume → "${catchNode.resumeTarget}" (will pause after notification nodes run)`);
+              } else {
+                const resumeGroupIdx = executionPlan.findIndex(g => {
+                  if (g.type === "node") return g.id === catchNode.resumeTarget;
+                  return g.scc.has(catchNode.resumeTarget!);
+                });
+                if (resumeGroupIdx >= 0) {
+                  reachable.add(catchNode.resumeTarget!);
+                  const resumeGroup = executionPlan[resumeGroupIdx]!;
+                  if (resumeGroup.type === "loop") reachable.add(resumeGroup.entryId);
+                  log(`  catch "${catchNode.id}" ${strategy} → "${catchNode.resumeTarget}" (plan index ${resumeGroupIdx}, current ${_planIdx})`);
+                  _catchResumeIdx = resumeGroupIdx;
+                } else {
+                  reachable.add(catchNode.resumeTarget!);
+                  log(`  catch "${catchNode.id}" resumeTarget → "${catchNode.resumeTarget}" added to reachable (group not found — forward-only fallback)`);
+                }
+              }
+            }
+          }
+
+          firedCatches.push({ catchNode, catchOut, handled: thisHandled });
+          if (thisHandled) break;
+        }
+
+        let nodeErrorHandled = false;
+        if (nodeOutput && firedCatches.length > 0) {
+          const successfulCatch = firedCatches.find(fc => fc.catchOut.status !== "error" && fc.handled);
+          if (successfulCatch) {
+            nodeErrorHandled = true;
+            log(`  node error handled by catch "${successfulCatch.catchNode.id}" — continuing execution`);
+          }
+        }
+
+        if (!nodeErrorHandled) {
+          graphError = nodeOutput.error;
+          graphStatus = "failed";
+          break;
+        }
+
+        if (_catchResumeIdx !== undefined) {
+          log(`  catch resume: rewinding plan index from ${_planIdx} to ${_catchResumeIdx}`);
+          _planIdx = _catchResumeIdx - 1; // -1 because the for-loop will increment
+          continue; // resume plan at requested group
+        }
+
+        // If handled and no resume requested, continue normal plan execution.
+        continue;
       }
 
       if (nodeOutput.status === "success" || (policy.type === "fallback" && nodeOutput.status !== "error")) {
@@ -217,8 +369,9 @@ export async function runGraph(
         continue;
       }
 
-      const loopResult = await runLoopSCC(group, graph, context, nodeMap, outgoing, globalConfig, options);
+      const loopResult = await runLoopSCC(group, graph, context, nodeMap, outgoing, globalConfig, options, loopIterCounts.get(group.entryId) ?? 0);
       nodeResults.push(...loopResult.results);
+      loopIterCounts.set(group.entryId, loopResult.totalIterations);
       // onNodeComplete is already called inside runLoopSCC — do not duplicate.
 
       // ── Fire catch nodes ────────────────────────────────────────────────
@@ -226,37 +379,185 @@ export async function runGraph(
       // available to downstream nodes in the remainder of the plan.
       // This runs before the error-halt check so catch nodes with
       // trigger="error" fire even when the loop halted on an error.
+      // Allow user-invoked stop/abort to influence the loop exit reason
+      // and surface a more specific stop kind in catch outputs.
+      // If a soft-stop was requested by the user, prefer "abort" so
+      // catch nodes that listen for "abort" trigger will run.
+      // Also expose `stopKind` on the catch output for UI clarity.
+      if (options._softStop?.requested && options._softStop.kind === "manualStop") {
+        // If the loop naturally ended due to maxIterations but the user
+        // requested a soft stop during the run, report "abort" so catch
+        // nodes with trigger "abort" fire; also mark stopKind so UIs can
+        // display "manual stop" instead of generic "abort".
+        if (loopResult.exitReason === "maxIterations") loopResult.exitReason = "abort";
+        (context as any)._stopKind = "manualStop";
+      }
+      // If the AbortSignal fired and the registry recorded a manual hard
+      // abort for this run, surface that as a manualAbort stopKind.
+      try {
+        // Import registry lazily to avoid circular top-level imports.
+        const { graphRunRegistry } = await import("./graphRunRegistry.js");
+        if (options.signal?.aborted && options._runId && graphRunRegistry.wasHardAborted(options._runId)) {
+          loopResult.exitReason = "abort";
+          (context as any)._stopKind = "manualAbort";
+        }
+      } catch {}
       context._loopExitReason = loopResult.exitReason;
-      let catchHalt = false;
-      for (const catchNode of graph.nodes) {
-        if (catchNode.type !== "catch") continue;
-        if (!(catchNode.catchTriggers ?? []).some(t => t === loopResult.exitReason)) continue;
-        // Guard: don't re-fire if a previous SCC in this run already triggered it.
-        if (context.nodeOutputs[catchNode.outputKey ?? catchNode.id]) continue;
-        log(`  catch node "${catchNode.id}" triggered (reason="${loopResult.exitReason}")`);
+
+      // ── Sort and fire catch nodes in catchOrder priority ──────────────────
+      // Catch nodes are tried in ascending catchOrder (lower = higher priority;
+      // unset = tried last).  If a catch node itself errors, execution continues
+      // to the next candidate.  If a catch node executes without error but does
+      // NOT meet "resume from" criteria (thisHandled is false), execution also
+      // continues to the next candidate.  Only when a catch node executes without
+      // error AND meets "resume from" criteria (thisHandled is true) are remaining
+      // candidates skipped.
+      const matchingCatchNodes = graph.nodes
+        .filter(n => {
+          if (n.type !== "catch") return false;
+          if (!(n.catchTriggers ?? []).some(t => t === loopResult.exitReason)) return false;
+          // Enforce catchMaxFires limit.
+          // undefined and 1 both mean "fire at most once" (default).
+          // 0 means unlimited.  Any other positive integer is the cap.
+          const fireCount = catchFireCounts.get(n.id) ?? 0;
+          const maxFires = (n.catchMaxFires === undefined || n.catchMaxFires === 1) ? 1
+            : n.catchMaxFires <= 0 ? Infinity
+            : n.catchMaxFires;
+          return fireCount < maxFires;
+        })
+        .sort((a, b) => (a.catchOrder ?? Infinity) - (b.catchOrder ?? Infinity));
+
+      const firedCatches: Array<{ catchNode: typeof graph.nodes[0]; catchOut: import("./types.js").NodeOutput; handled: boolean }> = [];
+      /** When set, the plan index is rewound/jumped after catch handling. */
+      let _catchResumeIdx: number | undefined;
+
+      for (const catchNode of matchingCatchNodes) {
+        log(`  catch node "${catchNode.id}" triggered (reason="${loopResult.exitReason}", catchOrder=${catchNode.catchOrder ?? "unset"})`);
+        // Debug: list outgoing edges for the catch so we can trace routing
+        try {
+          const outs = (outgoing.get(catchNode.id) ?? []).map(e => e.target).join(", ");
+          log(`  catch "${catchNode.id}" outgoing edges: ${outs}`);
+        } catch {}
         options.onNodeStart?.(catchNode.id, catchNode.name, catchNode.type);
         const catchPolicy = catchNode.errorPolicy ?? graph.errorPolicy ?? { type: "halt" };
         const catchOut = await executeNodeWithPolicy(catchNode, context, globalConfig, graph, options, catchPolicy);
+        // Count this execution regardless of outcome so catchMaxFires is enforced.
+        catchFireCounts.set(catchNode.id, (catchFireCounts.get(catchNode.id) ?? 0) + 1);
         try { (catchOut as any).nodeType = catchNode.type; } catch {}
         nodeResults.push(catchOut);
         context.nodeOutputs[catchNode.outputKey ?? catchNode.id] = catchOut;
         options.onNodeComplete?.(catchOut);
-        if (catchOut.status === "error" && catchPolicy.type === "halt") {
-          graphError = catchOut.error;
-          graphStatus = "failed";
-          catchHalt = true;
-          break;
+
+        if (catchOut.status === "error") {
+          // This catch node itself failed — record it and continue to the next one.
+          logW(`  catch node "${catchNode.id}" errored — trying next catch node`);
+          firedCatches.push({ catchNode, catchOut, handled: false });
+          continue;
         }
-        if (catchOut.status === "success" || (catchPolicy.type === "fallback" && catchOut.status !== "error")) {
+
+        // ── rewindTo pre-check ──────────────────────────────────────────────
+        // When resumeStrategy is "rewindTo", the target node must have already
+        // executed in this run.  If it hasn't, this catch is NOT considered
+        // handled — skip it and try the next catch candidate.
+        const strategy = catchNode.resumeStrategy ?? "resumeFrom";
+        if (strategy === "rewindTo" && catchNode.resumeTarget) {
+          const targetKey = nodeMap.get(catchNode.resumeTarget)?.outputKey ?? catchNode.resumeTarget;
+          const existingOutput = context.nodeOutputs[targetKey];
+          const alreadyRan = existingOutput &&
+            existingOutput.status !== "skipped" &&
+            !(existingOutput.metadata as any)?.__placeholder;
+          if (!alreadyRan) {
+            log(`  catch "${catchNode.id}" resumeStrategy "rewindTo" — target "${catchNode.resumeTarget}" has NOT run yet, skipping this catch`);
+            firedCatches.push({ catchNode, catchOut, handled: false });
+            continue;
+          }
+        }
+
+        // This catch node executed successfully — determine if it handled the error.
+        const resumePolicy = catchNode.resumePolicy ?? "never";
+        let thisHandled = false;
+        if (resumePolicy === "always") {
+          thisHandled = true;
+        } else if (resumePolicy === "ifHandled") {
+          // Check handledOutputPath first (truthy field in the catch output).
+          if (catchNode.handledOutputPath) {
+            const parts = catchNode.handledOutputPath
+              .replace(/\[(\d+)\]/g, ".$1")
+              .replace(/^output\./, "")
+              .split(".");
+            let val: unknown = catchOut.output;
+            for (const part of parts) {
+              if (val !== null && typeof val === "object") {
+                val = (val as Record<string, unknown>)[part];
+              } else { val = undefined; break; }
+            }
+            thisHandled = !!val;
+          }
+          // Then check handledWhen predicate (overrides if both are present).
+          if (!thisHandled && catchNode.handledWhen) {
+            thisHandled = evaluateCondition(catchNode.handledWhen, context);
+          }
+        }
+        if (catchOut.status === "success" || catchPolicy.type === "fallback") {
           propagateReachability(catchNode, outgoing.get(catchNode.id) ?? [], context, reachable);
+          // Apply resumeTarget — supports jumping to ANY node in the plan.
+          if (thisHandled && catchNode.resumeTarget) {
+            if ((catchNode as any).manualResume) {
+              if (!manualPauseInfo) {
+                manualPauseInfo = { pausedResumeFrom: catchNode.resumeTarget };
+              }
+              log(`  catch "${catchNode.id}" manualResume → "${catchNode.resumeTarget}" (will pause after notification nodes run)`);
+            } else {
+              // Find the execution plan group that contains (or IS) the resume target
+              // and rewind _planIdx so the runner re-enters at that point.
+              const resumeGroupIdx = executionPlan.findIndex(g => {
+                if (g.type === "node") return g.id === catchNode.resumeTarget;
+                return g.scc.has(catchNode.resumeTarget!);
+              });
+              if (resumeGroupIdx >= 0) {
+                reachable.add(catchNode.resumeTarget!);
+                // If the target is inside a loop SCC, mark the entry reachable too
+                const resumeGroup = executionPlan[resumeGroupIdx]!;
+                if (resumeGroup.type === "loop") reachable.add(resumeGroup.entryId);
+                log(`  catch "${catchNode.id}" ${strategy} → "${catchNode.resumeTarget}" (plan index ${resumeGroupIdx}, current ${_planIdx})`);
+                // Set the plan index so the next iteration of the outer loop
+                // picks up from the group containing the target.  Works for
+                // both forward jumps AND backward rewinds.
+                _catchResumeIdx = resumeGroupIdx;
+              } else {
+                reachable.add(catchNode.resumeTarget!);
+                log(`  catch "${catchNode.id}" resumeTarget → "${catchNode.resumeTarget}" added to reachable (group not found — forward-only fallback)`);
+              }
+            }
+          }
+        }
+        firedCatches.push({ catchNode, catchOut, handled: thisHandled });
+        // Only stop trying further catch nodes if this one handled the error.
+        if (thisHandled) break;
+      }
+
+      // ── Evaluate whether the loop error has been handled ──────────────────
+      let loopErrorHandled = false;
+      if (loopResult.error && firedCatches.length > 0) {
+        const successfulCatch = firedCatches.find(fc => fc.catchOut.status !== "error" && fc.handled);
+        if (successfulCatch) {
+          loopErrorHandled = true;
+          log(`  loop error handled by catch "${successfulCatch.catchNode.id}" — continuing execution`);
         }
       }
-      if (catchHalt) break;
 
-      if (loopResult.error) {
+      if (loopResult.error && !loopErrorHandled) {
         graphError = loopResult.error;
         graphStatus = "failed";
         break;
+      }
+
+      // If a catch requested a plan rewind/jump, apply it now.
+      if (_catchResumeIdx !== undefined) {
+        log(`  catch resume: rewinding plan index from ${_planIdx} to ${_catchResumeIdx}`);
+        _planIdx = _catchResumeIdx - 1; // -1 because the for-loop will increment
+        _catchResumeIdx = undefined;
+        continue; // skip the normal post-loop reachability propagation
       }
 
       if (loopResult.exitTarget) reachable.add(loopResult.exitTarget);
@@ -275,6 +576,32 @@ export async function runGraph(
   }
 
   const completedAt = Date.now();
+
+  // Manual pause: save context snapshot and return paused status.
+  // Any notification/cleanup nodes downstream of the catch have already run.
+  if (manualPauseInfo && graphStatus === "completed") {
+    graphStatus = "paused";
+    const pausedContext = { vars: { ...context.vars }, nodeOutputs: { ...context.nodeOutputs } };
+    log(`■ graph paused — trace="${traceId}" resumeFrom="${manualPauseInfo.pausedResumeFrom}" elapsed=${completedAt - startedAt}ms`);
+    return {
+      graphId: graph.id,
+      graphName: graph.name,
+      traceId,
+      nodeResults,
+      finalOutput,
+      status: "paused",
+      elapsedMs: completedAt - startedAt,
+      startedAt,
+      completedAt,
+      pausedContext,
+      pausedResumeFrom: manualPauseInfo.pausedResumeFrom,
+    };
+  }
+
+  // If a soft-stop was requested, mark the run as aborted (user asked to stop).
+  if (options._softStop?.requested && graphStatus === "completed") {
+    graphStatus = "aborted";
+  }
   log(`■ graph complete — trace="${traceId}" status=${graphStatus} elapsed=${completedAt - startedAt}ms`);
 
   return {
@@ -321,11 +648,12 @@ function propagateReachability(
   // Regular outgoing edges (conditional or unconditional)
   for (const edge of edges) {
     if (edge.condition) {
-      if (evaluateCondition(edge.condition, context)) {
-        reachable.add(edge.target);
-      }
+      const ok = evaluateCondition(edge.condition, context);
+      if (ok) reachable.add(edge.target);
+      log(`    propagate: node "${node.id}" -> "${edge.target}" (condition ${ok ? 'passed' : 'failed'})`);
     } else {
       reachable.add(edge.target);
+      log(`    propagate: node "${node.id}" -> "${edge.target}" (unconditional)`);
     }
   }
 }
@@ -394,7 +722,7 @@ async function executeNodeWithPolicy(
     nodeId: node.id,
     nodeName: node.name,
     nodeType: node.type,
-    output: null,
+    output: (lastError as any)?.providerOutput ?? null,
     metadata: { elapsedMs: 0 },
     status: "error",
     error: lastError?.message ?? "Unknown error",
@@ -423,7 +751,7 @@ async function executeNode(
     case "agent":
       return executeAgentNode(node, context, globalConfig, graph, options);
     case "tool":
-      return executeToolNode(node, context);
+      return executeToolNode(node, context, options);
     case "condition":
       return executeConditionNode(node, context);
     case "operation":
@@ -530,16 +858,32 @@ async function executeLlmNode(
 
   log(`    llm call — provider="${provider}" model="${model}"`);
 
-
-  const result = await callProvider(provider, {
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature,
-    maxTokens,
-  });
+  let result: Awaited<ReturnType<typeof callProvider>>;
+  try {
+    result = await callProvider(provider, {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature,
+      maxTokens,
+    });
+  } catch (err) {
+    // Re-throw an enhanced error that carries the raw provider error body so
+    // executeNodeWithPolicy can surface it as the node output rather than null.
+    // Provider error messages typically look like:
+    //   "[openrouter] 400 — {"error":{"message":"...","code":400}}"
+    const errMsg = (err as Error).message ?? String(err);
+    let providerOutput: unknown;
+    try {
+      const jsonMatch = errMsg.match(/\{[\s\S]*\}/);
+      if (jsonMatch) providerOutput = JSON.parse(jsonMatch[0]);
+    } catch { /* leave undefined */ }
+    const enhanced = new Error(errMsg);
+    (enhanced as any).providerOutput = providerOutput ?? errMsg;
+    throw enhanced;
+  }
 
   // Try to parse JSON output for easier downstream referencing
   let parsedOutput: unknown = result.output;
@@ -656,7 +1000,11 @@ async function executeAgentNode(
     model,
     temperature: node.temperature,
     maxTokens: node.maxTokens,
-    maxSteps: node.maxSteps ?? 10,
+    // Pass node.maxSteps only when explicitly set on the graph node so that
+    // autonomous.ts can fall back to agentCfg.maxSteps (the value configured
+    // in Agent Settings).  A hardcoded ?? 10 here would shadow the agent's own
+    // step budget and make the Agent Settings slider ineffective.
+    maxSteps: node.maxSteps,
     signal: context.signal,
   });
 
@@ -704,6 +1052,7 @@ async function executeAgentNode(
 async function executeToolNode(
   node: GraphNode,
   context: GraphExecutionContext,
+  options: GraphRunOptions,
 ): Promise<NodeOutput> {
   const startTime = Date.now();
   const tool = await getTool(node.toolName!);
@@ -775,48 +1124,74 @@ async function executeToolNode(
     (tool as any).spec?.requiresBridge === true ||
     (!!(tool as any).spec?.verify && Array.isArray((tool as any).spec.verify) && (tool as any).spec.verify.some((v: any) => String(v).startsWith("discord.")));
 
-  const toolCtx: Record<string, unknown> = {};
+  // Build a bridge-helper base (only for tools that declare they need it), then
+  // run the centralised factory so all paths receive identical secret-backed config.
+  const bridgeBase: Record<string, unknown> = {};
   if (needsBridge) {
     try {
       const discordMod = await import("../discord/discordBridge.js");
-      toolCtx.getGlobalBridge = (discordMod as any).getGlobalBridge;
-      toolCtx.startGlobalBridge = (discordMod as any).startGlobalBridge;
-      toolCtx.stopGlobalBridge = (discordMod as any).stopGlobalBridge;
-      toolCtx.readGlobalDiscordConfig = (discordMod as any).readGlobalDiscordConfig;
+      bridgeBase.getGlobalBridge = (discordMod as any).getGlobalBridge;
+      bridgeBase.startGlobalBridge = (discordMod as any).startGlobalBridge;
+      bridgeBase.stopGlobalBridge = (discordMod as any).stopGlobalBridge;
+      bridgeBase.readGlobalDiscordConfig = (discordMod as any).readGlobalDiscordConfig;
       // If a global bridge instance is active, expose it directly for convenience.
       try {
         const gb = typeof (discordMod as any).getGlobalBridge === "function" ? (discordMod as any).getGlobalBridge() : null;
-        if (gb) (toolCtx as any).bridge = gb;
+        if (gb) bridgeBase.bridge = gb;
       } catch (_) {}
     } catch (_) {
       // ignore failures to import bridge module — tool will handle missing bridge
     }
   }
 
-  // Inject resolved tool configuration (including secret-backed fields)
-  // so tools can read their settings from `context.toolConfig[...]` or
-  // `context.config.toolConfig[...]` as older tools expect.
-  try {
-    if (node.toolName) {
-      const cfg = await readSkillToolConfig("tool", node.toolName);
-      // attach both shapes to maximize compatibility
-      (toolCtx as any).toolConfig = ((toolCtx as any).toolConfig ?? {});
-      (toolCtx as any).toolConfig[node.toolName] = cfg;
-      (toolCtx as any).config = ((toolCtx as any).config ?? {});
-      (toolCtx as any).config.toolConfig = ((toolCtx as any).config.toolConfig ?? {});
-      (toolCtx as any).config.toolConfig[node.toolName] = cfg;
-    }
-  } catch (err) {
-    // be tolerant — if config resolution fails, don't block tool execution
-  }
+  const toolCtx = await createToolContext(node.toolName!, options.agentName, bridgeBase);
 
-  const result = await tool.run({ input, context: toolCtx });
+  let result: unknown;
+  try {
+    result = await tool.run({ input, context: toolCtx });
+  } catch (err) {
+    // Wrap tool errors to expose any structured payloads (similar to LLM
+    // provider errors). executeNodeWithPolicy looks for `error.providerOutput`
+    // to populate the node output; without this we fall back to `null`.
+    const errMsg = (err as Error)?.message ?? String(err);
+    let providerOutput: unknown;
+    try {
+      const jsonMatch = String(errMsg).match(/\{[\s\S]*\}/);
+      if (jsonMatch) providerOutput = JSON.parse(jsonMatch[0]);
+    } catch {
+      // ignore parse failures
+    }
+    const enhanced = new Error(errMsg);
+    (enhanced as any).providerOutput = (err as any)?.providerOutput ?? providerOutput ?? err;
+    throw enhanced;
+  }
   const elapsed = Date.now() - startTime;
 
   // Try to parse JSON strings so downstream condition nodes can inspect fields.
   let output: unknown = result;
   if (typeof result === "string") {
     try { output = JSON.parse(result); } catch { /* leave as raw string */ }
+  }
+
+  // If the tool returned an object with `ok: false` treat it as an
+  // exceptional/tool failure by default so graph `errorPolicy` / `catch`
+  // semantics apply. This behaviour can be disabled by passing
+  // `options.treatToolOkFalseAsError = false` when running the graph.
+  const treatOkFalse = options?.treatToolOkFalseAsError ?? true;
+  try {
+    if (
+      treatOkFalse &&
+      output !== null &&
+      typeof output === "object" &&
+      (output as any).ok === false
+    ) {
+      const e = new Error(`Tool "${node.toolName}" returned ok=false`);
+      (e as any).providerOutput = output;
+      throw e;
+    }
+  } catch (err) {
+    // Re-throw so executeNodeWithPolicy can apply retry/fallback/skip.
+    throw err;
   }
 
   log(`    tool result in ${elapsed}ms`);
@@ -1008,14 +1383,14 @@ function executeOperationNode(
  */
 function executeCatchNode(node: GraphNode, context: GraphExecutionContext): NodeOutput {
   const exitReason = context._loopExitReason ?? "unknown";
-  log(`    catch node "${node.id}" — exitReason="${exitReason}"`);
+  const stopKind = (context as any)._stopKind as ("manualStop" | "manualAbort" | undefined);
+  log(`    catch node "${node.id}" — exitReason="${exitReason}"${stopKind ? ` stopKind="${stopKind}"` : ""}`);
+  const outputVal: any = { exitReason, vars: { ...context.vars } };
+  if (stopKind) outputVal.stopKind = stopKind;
   return {
     nodeId: node.id,
     nodeName: node.name,
-    output: {
-      exitReason,
-      vars: { ...context.vars },
-    },
+    output: outputVal,
     metadata: { elapsedMs: 0 },
     status: "success",
     timestamp: Date.now(),
@@ -1292,7 +1667,7 @@ function computeAllExternalIncomingCounts(
   graph: GraphDefinition,
   plan: NodeGroup[],
 ): Map<string, number> {
-  const adj = buildAdjacencyForRunner(graph);
+  // Build a mapping from node -> representative (group entry id).
   const nodeToRep = new Map<string, string>();
   for (const group of plan) {
     if (group.type === "node") {
@@ -1308,15 +1683,39 @@ function computeAllExternalIncomingCounts(
     counts.set(rep, 0);
   }
 
-  for (const [src, targets] of adj) {
-    const srcRep = nodeToRep.get(src);
-    for (const tgt of targets) {
-      const tgtRep = nodeToRep.get(tgt);
+  // Count incoming edges using the full graph so that edges originating
+  // from catch nodes (which are intentionally excluded from SCC adjacency)
+  // still count as incoming links.  Without this, targets only reachable
+  // via catch nodes appear to have zero incoming edges and are seeded
+  // as roots, causing them to run at the start of the graph.
+  for (const edge of graph.edges ?? []) {
+    const srcRep = nodeToRep.get(edge.source); // undefined for catch nodes
+    const tgtRep = nodeToRep.get(edge.target);
+    if (!tgtRep) continue;
+    if (srcRep !== tgtRep) {
+      counts.set(tgtRep, (counts.get(tgtRep) ?? 0) + 1);
+    }
+  }
+
+  // Also account for condition branch targets and defaultTarget which may
+  // not be represented in the edges array.
+  for (const node of graph.nodes) {
+    if (node.type !== "condition") continue;
+    const srcRep = nodeToRep.get(node.id);
+    for (const branch of node.branches ?? []) {
+      const tgtRep = nodeToRep.get(branch.target);
+      if (tgtRep && srcRep !== tgtRep) {
+        counts.set(tgtRep, (counts.get(tgtRep) ?? 0) + 1);
+      }
+    }
+    if (node.defaultTarget) {
+      const tgtRep = nodeToRep.get(node.defaultTarget);
       if (tgtRep && srcRep !== tgtRep) {
         counts.set(tgtRep, (counts.get(tgtRep) ?? 0) + 1);
       }
     }
   }
+
   return counts;
 }
 
@@ -1328,7 +1727,8 @@ async function runLoopSCC(
   outgoing: Map<string, GraphEdge[]>,
   globalConfig: import("../../types/index.js").NyteShiftConfig,
   options: GraphRunOptions,
-): Promise<{ results: NodeOutput[]; error?: string; exitTarget?: string; exitReason: LoopExitReason }> {
+  iterOffset = 0,
+): Promise<{ results: NodeOutput[]; error?: string; exitTarget?: string; exitReason: LoopExitReason; totalIterations: number }> {
   const unbounded = graph.unbounded === true;
   const maxIter = graph.maxIterations ?? 100;
   const results: NodeOutput[] = [];
@@ -1339,9 +1739,9 @@ async function runLoopSCC(
     logW(`  unbounded loop SCC — runs until a condition exits, an error occurs, or the run is cancelled.`);
   }
 
-  let iter = 0;
+  let iter = iterOffset;
   while (unbounded || iter < maxIter) {
-    if (options.signal?.aborted) {
+    if (options.signal?.aborted || options._softStop?.requested) {
       exitReason = "abort";
       break;
     }
@@ -1361,7 +1761,7 @@ async function runLoopSCC(
       madeProgress = false;
 
       for (const nodeId of group.withinOrder) {
-        if (options.signal?.aborted) { shouldExit = true; break; }
+        if (options.signal?.aborted || options._softStop?.requested) { shouldExit = true; break; }
         if (!iterReachable.has(nodeId)) continue;
         if (iterExecuted.has(nodeId)) continue;
         iterExecuted.add(nodeId);
@@ -1382,7 +1782,7 @@ async function runLoopSCC(
         options.onNodeComplete?.(nodeOutput);
 
         if (nodeOutput.status === "error" && policy.type === "halt") {
-          return { results, error: nodeOutput.error, exitReason: "error" };
+          return { results, error: nodeOutput.error, exitReason: "error", totalIterations: iter };
         }
 
         if (
@@ -1439,7 +1839,7 @@ async function runLoopSCC(
     iter++;
   }
 
-  return { results, exitTarget, exitReason };
+  return { results, exitTarget, exitReason, totalIterations: iter };
 }
 
 // ── Topological sort ───────────────────────────────────────────────────
@@ -1601,7 +2001,7 @@ async function executeTriggerNode(
           result = await runAgent(targetId, childInput.task as string ?? "", {
             provider,
             model,
-            maxSteps: typeof node.maxSteps === "number" ? node.maxSteps : 10,
+            maxSteps: typeof node.maxSteps === "number" ? node.maxSteps : undefined,
           });
         }
         entry.status = "completed";
@@ -1709,7 +2109,7 @@ async function executeTriggerNode(
       const agentResult = await runAgent(targetId, agentTask, {
         provider,
         model,
-        maxSteps: typeof node.maxSteps === "number" ? node.maxSteps : 10,
+        maxSteps: typeof node.maxSteps === "number" ? node.maxSteps : undefined,
         signal: effectiveSignal,
       });
 
@@ -1753,6 +2153,43 @@ function makeSkippedOutput(node: GraphNode): NodeOutput {
   };
 }
 
+/**
+ * Produce a sentinel placeholder stored for catch nodes at plan-walk time.
+ * Stamping `__placeholder: true` on the metadata lets the post-SCC catch-
+ * firing logic distinguish "never ran yet" from "already ran for an earlier
+ * SCC", preventing the placeholder from silently blocking catch execution.
+ */
+function makeCatchPlaceholder(node: GraphNode): NodeOutput {
+  return {
+    nodeId: node.id,
+    nodeName: node.name,
+    nodeType: node.type,
+    output: null,
+    metadata: { elapsedMs: 0, __placeholder: true },
+    status: "skipped",
+    timestamp: Date.now(),
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ── Advanced options ───────────────────────────────────────────────────
+//
+// Toggle: `GraphRunOptions.treatToolOkFalseAsError` (default: true)
+//   When true, any tool node that returns an object with `ok: false`
+//   will be treated as a runtime/tool failure and re-thrown (the thrown
+//   error carries the original object on `.providerOutput`). This causes
+//   the graph runner to apply the node's `errorPolicy` (retry/fallback/skip)
+//   and enables `catch` nodes to observe and handle the failure.
+//
+//   When false, `{ ok: false }` is treated as a normal node output and
+//   the graph author must explicitly inspect `node.output.ok` via a
+//   `condition` node or other logic.
+//
+// Use-case: prefer `ok:false` as a model-facing structured failure in the
+// ReAct loop (so the model can decide next steps). The graph runner's
+// default semantics treat it as an actual failure so graph-level retry
+// and catch semantics work without additional wiring. Set this flag to
+// `false` to preserve legacy behaviour where `ok:false` is a normal output.

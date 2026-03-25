@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { ThemePalette } from "../theme/themes.js";
 import type { GraphNodeInfo, GraphEdgeInfo, GraphDefinitionInfo, ModelInfo, ToolInfo, OperationActionInfo, CatchTrigger } from "../global.js";
@@ -65,6 +65,55 @@ interface Props {
   onDelete?(): void;
   onDuplicate?(): void;
   onOpenVars?(): void;
+}
+
+/* ── Searchable target picker ─────────────────────────────────────── */
+
+function SearchableTargetSelect({ items, selectedValue, onSelect, placeholder, emptyLabel = "No results", C, inputStyle }: {
+  items: Array<{ value: string; label: string }>;
+  selectedValue: string;
+  onSelect(value: string): void;
+  placeholder: string;
+  emptyLabel?: string;
+  C: ThemePalette;
+  inputStyle: React.CSSProperties;
+}): React.JSX.Element {
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() =>
+    items.filter((it) => it.label.toLowerCase().includes(search.toLowerCase())),
+    [items, search],
+  );
+  return (
+    <div>
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={selectedValue ? `Selected: ${items.find(i => i.value === selectedValue)?.label ?? selectedValue} — type to filter` : placeholder}
+        style={{ ...inputStyle, marginBottom: 4 }}
+      />
+      <div style={{ border: `1px solid ${C.surface2}`, borderRadius: 6, background: C.mantle, maxHeight: 180, overflowY: "auto" }}>
+        {filtered.map((it) => (
+          <div
+            key={it.value}
+            onClick={() => { onSelect(it.value); setSearch(""); }}
+            style={{
+              padding: "5px 8px",
+              cursor: "pointer",
+              background: it.value === selectedValue ? "rgba(203,166,247,0.10)" : "transparent",
+              color: it.value === selectedValue ? C.mauve : C.text,
+              fontWeight: it.value === selectedValue ? 600 : 400,
+              fontSize: "0.78rem",
+            }}
+          >
+            {it.label}
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div style={{ padding: "6px 8px", color: C.overlay0, fontSize: "0.76rem" }}>{emptyLabel}</div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, providers, vars, onChange, onDelete, onDuplicate, onOpenVars }: Props): React.JSX.Element {
@@ -928,15 +977,25 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, 
             <div style={sectionStyle}>
               <label style={labelStyle}>{(node.targetType === "agent") ? "Agent Target" : "Graph Target"}</label>
               {node.targetType === "agent" ? (
-                <select style={selectStyle} value={node.targetId ?? ""} onChange={e => set("targetId", e.target.value || undefined)}>
-                  <option value="">— select agent —</option>
-                  {agents.map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
+                <SearchableTargetSelect
+                  items={agents.map(a => ({ value: a, label: a }))}
+                  selectedValue={node.targetId ?? ""}
+                  onSelect={(v) => set("targetId", v || undefined)}
+                  placeholder="Search agents..."
+                  emptyLabel="No agents found"
+                  C={C}
+                  inputStyle={inputStyle}
+                />
               ) : (
-                <select style={selectStyle} value={node.targetId ?? ""} onChange={e => set("targetId", e.target.value || undefined)}>
-                  <option value="">— select graph —</option>
-                  {graphs.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
+                <SearchableTargetSelect
+                  items={graphs.map(g => ({ value: g.id, label: g.name }))}
+                  selectedValue={node.targetId ?? ""}
+                  onSelect={(v) => set("targetId", v || undefined)}
+                  placeholder="Search graphs..."
+                  emptyLabel="No graphs found"
+                  C={C}
+                  inputStyle={inputStyle}
+                />
               )}
               <div style={{ fontSize: "0.68rem", color: C.overlay0, marginTop: 6 }}>You can also enter an id manually below.</div>
               <input style={{ ...inputStyle, marginTop: 6 }} value={node.targetId ?? ""} onChange={e => set("targetId", e.target.value || undefined)} />
@@ -1235,6 +1294,298 @@ export function NodeConfigPanel({ node, allNodes, agents, tools, skills, edges, 
               <div style={{ fontSize: "0.7rem", color: C.red, marginTop: 4 }}>
                 Select at least one trigger above.
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ---- Catch: Order ---- */}
+        {node.type === "catch" && (() => {
+          const otherCatchNodes = (allNodes ?? []).filter(n => n.type === "catch" && n.id !== node.id);
+          const duplicateOrder = node.catchOrder !== undefined &&
+            otherCatchNodes.some(n => n.catchOrder === node.catchOrder);
+          return (
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Catch Order</label>
+              <input
+                style={inputStyle}
+                type="number"
+                min={0}
+                step={1}
+                value={node.catchOrder ?? ""}
+                placeholder="e.g. 1 (lower = higher priority)"
+                onChange={e => {
+                  const v = e.target.value.trim();
+                  set("catchOrder", v === "" ? undefined : parseInt(v, 10));
+                }}
+              />
+              <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
+                Lower numbers run first. Leave blank to run last.
+                When an earlier catch node errors, execution continues to the next.
+              </div>
+              {duplicateOrder && (
+                <div style={{ fontSize: "0.7rem", color: C.yellow, marginTop: 5, display: "flex", alignItems: "flex-start", gap: 5 }}>
+                  <span>⚠</span>
+                  <span>
+                    Another catch node has the same order value ({node.catchOrder}).
+                    This may result in inconsistent behaviour — the execution order between them is not guaranteed.
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ---- Catch: Advanced ---- */}
+        {node.type === "catch" && (() => {
+          // catchMaxFires: undefined/1 = once, 0 = unlimited, N>1 = custom cap
+          const maxFires = node.catchMaxFires;
+          const mode: "once" | "limited" | "unlimited" =
+            maxFires === undefined || maxFires === 1 ? "once"
+            : maxFires === 0 ? "unlimited"
+            : "limited";
+          return (
+            <div style={{ ...sectionStyle, borderTop: `1px solid ${C.surface1}`, paddingTop: 12 }}>
+              <div style={{ ...labelStyle, marginBottom: 8, fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Advanced
+              </div>
+              <label style={labelStyle}>Max Fires Per Run</label>
+              <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                {(["once", "limited", "unlimited"] as const).map(m => {
+                  const labels = { once: "Once", limited: "Limited", unlimited: "Unlimited" };
+                  const active = mode === m;
+                  const color = m === "unlimited" ? C.peach : m === "limited" ? C.blue : C.surface2;
+                  return (
+                    <button
+                      key={m}
+                      style={{
+                        ...btnSm(C),
+                        background: active ? color : "transparent",
+                        color: active ? C.base : C.text,
+                        border: `1px solid ${active ? color : C.surface2}`,
+                      }}
+                      onClick={() => {
+                        if (m === "once") set("catchMaxFires", undefined as any);
+                        else if (m === "unlimited") set("catchMaxFires", 0);
+                        else set("catchMaxFires", 2);
+                      }}
+                    >
+                      {labels[m]}
+                    </button>
+                  );
+                })}
+              </div>
+              {mode === "limited" && (
+                <input
+                  style={{ ...inputStyle, width: 80, marginTop: 4 }}
+                  type="number"
+                  min={2}
+                  step={1}
+                  value={maxFires ?? 2}
+                  onChange={e => {
+                    const v = parseInt(e.target.value, 10);
+                    set("catchMaxFires", isNaN(v) || v < 2 ? 2 : v);
+                  }}
+                />
+              )}
+              <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
+                {mode === "once"
+                  ? "This catch fires at most once per graph run (default)."
+                  : mode === "unlimited"
+                  ? "This catch fires every time its triggers match, with no limit."
+                  : `This catch fires at most ${maxFires} times per graph run.`}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ---- Catch: Error Recovery ---- */}
+        {node.type === "catch" && (
+          <div style={{ borderTop: `1px solid ${C.surface1}`, paddingTop: 12, marginTop: 4 }}>
+            <div style={{ ...labelStyle, marginBottom: 8, fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Error Recovery
+            </div>
+
+            <div style={sectionStyle}>
+              <label style={labelStyle}>Recovery Policy</label>
+              <select
+                style={selectStyle}
+                value={node.resumePolicy ?? "never"}
+                onChange={e => set("resumePolicy", e.target.value as "never" | "ifHandled" | "always")}
+              >
+                <option value="never">Never — only run catch edges, no resume</option>
+                <option value="ifHandled">If Handled — resume when catch signals it handled the error</option>
+                <option value="always">Always — always resume after catch runs</option>
+              </select>
+            </div>
+
+            {node.resumePolicy === "ifHandled" && (
+              <>
+                <div style={sectionStyle}>
+                  <label style={labelStyle}>Handled Detection — Output Path</label>
+                  <input
+                    style={inputStyle}
+                    value={node.handledOutputPath ?? ""}
+                    placeholder="e.g. output.handled"
+                    onChange={e => set("handledOutputPath", e.target.value || undefined)}
+                  />
+                  <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
+                    Path on this node's output that must be truthy to count as handled.
+                  </div>
+                </div>
+
+                <div style={sectionStyle}>
+                  <label style={labelStyle}>Handled Detection — Predicate (optional)</label>
+                  {(() => {
+                    const hw = node.handledWhen ?? { ref: "", operator: "eq" as const, value: true };
+                    return (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 1fr", gap: 6, alignItems: "center" }}>
+                        <input
+                          style={inputStyle}
+                          value={hw.ref}
+                          placeholder="{{nodeId.output.field}}"
+                          onChange={e => set("handledWhen", { ...hw, ref: e.target.value })}
+                        />
+                        <select
+                          style={selectStyle}
+                          value={hw.operator}
+                          onChange={e => set("handledWhen", { ...hw, operator: e.target.value as any })}
+                        >
+                          {OPERATORS.map(op => <option key={op.value} value={op.value}>{op.label}</option>)}
+                        </select>
+                        {!NO_VALUE_OPS.includes(hw.operator) && (
+                          <input
+                            style={inputStyle}
+                            value={hw.value === undefined ? "" : String(hw.value)}
+                            placeholder="value"
+                            onChange={e => {
+                              let v: unknown = e.target.value;
+                              try { v = JSON.parse(e.target.value); } catch {}
+                              set("handledWhen", { ...hw, value: v });
+                            }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div style={sectionStyle}>
+                  <label style={labelStyle}>When Multiple Catches Match</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {(["any", "all"] as const).map(mode => (
+                      <button
+                        key={mode}
+                        style={{
+                          ...btnSm(C),
+                          background: (node.resumeMode ?? "any") === mode ? C.blue : "transparent",
+                          color: (node.resumeMode ?? "any") === mode ? C.base : C.text,
+                          border: `1px solid ${(node.resumeMode ?? "any") === mode ? C.blue : C.surface2}`,
+                        }}
+                        onClick={() => set("resumeMode", mode)}
+                      >
+                        {mode === "any" ? "Any" : "All"}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
+                    {(node.resumeMode ?? "any") === "any"
+                      ? "At least one matching catch must signal handled."
+                      : "All matching catch nodes must signal handled."}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {(node.resumePolicy === "ifHandled" || node.resumePolicy === "always") && (
+              <>
+                <div style={sectionStyle}>
+                  <label style={labelStyle}>Resume Strategy</label>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                    <button
+                      style={{
+                        ...btnSm(C),
+                        background: (node.resumeStrategy ?? "resumeFrom") === "resumeFrom" ? C.blue : "transparent",
+                        color: (node.resumeStrategy ?? "resumeFrom") === "resumeFrom" ? C.base : C.text,
+                        border: `1px solid ${(node.resumeStrategy ?? "resumeFrom") === "resumeFrom" ? C.blue : C.surface2}`,
+                      }}
+                      onClick={() => set("resumeStrategy", "resumeFrom")}
+                    >
+                      Resume From
+                    </button>
+                    <button
+                      style={{
+                        ...btnSm(C),
+                        background: node.resumeStrategy === "rewindTo" ? C.peach : "transparent",
+                        color: node.resumeStrategy === "rewindTo" ? C.base : C.text,
+                        border: `1px solid ${node.resumeStrategy === "rewindTo" ? C.peach : C.surface2}`,
+                      }}
+                      onClick={() => set("resumeStrategy", "rewindTo")}
+                    >
+                      Rewind To
+                    </button>
+                  </div>
+                  <div style={{ fontSize: "0.65rem", color: C.overlay0, marginTop: 3 }}>
+                    {(node.resumeStrategy ?? "resumeFrom") === "resumeFrom"
+                      ? "Jump to the target node and continue the graph from there."
+                      : "Jump only if the target node already ran in this run. If not, this catch is skipped and the next catch is tried."}
+                  </div>
+                </div>
+
+                <div style={sectionStyle}>
+                  <label style={labelStyle}>Resume Type</label>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                    <button
+                      style={{
+                        ...btnSm(C),
+                        background: !node.manualResume ? C.green : "transparent",
+                        color: !node.manualResume ? C.base : C.text,
+                        border: `1px solid ${!node.manualResume ? C.green : C.surface2}`,
+                      }}
+                      onClick={() => set("manualResume", undefined as any)}
+                    >
+                      ⚡ Auto
+                    </button>
+                    <button
+                      style={{
+                        ...btnSm(C),
+                        background: node.manualResume ? C.mauve : "transparent",
+                        color: node.manualResume ? C.base : C.text,
+                        border: `1px solid ${node.manualResume ? C.mauve : C.surface2}`,
+                      }}
+                      onClick={() => set("manualResume", true)}
+                    >
+                      ⏸ Manual
+                    </button>
+                  </div>
+                  {!node.manualResume && (
+                    <div style={{ fontSize: "0.65rem", color: C.green }}>
+                      Execution continues automatically from the resume node.
+                    </div>
+                  )}
+                  {node.manualResume && (
+                    <div style={{ fontSize: "0.65rem", color: C.mauve }}>
+                      Run pauses and state is saved to disk. Resume via Run History — even after a restart.
+                    </div>
+                  )}
+                </div>
+
+                <div style={sectionStyle}>
+                  <label style={labelStyle}>{(node.resumeStrategy ?? "resumeFrom") === "rewindTo" ? "Rewind To Node" : "Resume From Node"}</label>
+                  <SearchableSelect
+                    value={node.resumeTarget ?? ""}
+                    onChange={v => set("resumeTarget", v || undefined)}
+                    options={(allNodes ?? [])
+                      .filter(n => n.id !== node.id && n.type !== "catch")
+                      .map(n => ({ value: n.id, label: `${n.name} (${n.type})` }))}
+                    placeholder="Select node to resume from…"
+                  />
+                  {!node.resumeTarget && (
+                    <div style={{ fontSize: "0.65rem", color: C.red, marginTop: 3 }}>
+                      A resume node is required when recovery policy is set.
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         )}

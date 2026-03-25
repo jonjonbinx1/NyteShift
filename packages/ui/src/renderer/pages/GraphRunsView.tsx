@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { GraphRunRecordInfo } from "../global.js";
 
-type StatusFilter = "all" | "running" | "done" | "error";
+type StatusFilter = "all" | "running" | "done" | "error" | "paused";
 type SourceFilter = "all" | "manual" | "trigger" | "trigger-node";
 
 function relTime(ts: number): string {
@@ -86,10 +86,10 @@ export function GraphRunsView(): React.JSX.Element {
     running: runs.filter((r) => r.status === "running").length,
     done: runs.filter((r) => r.status === "done").length,
     error: runs.filter((r) => r.status === "error").length,
+    paused: runs.filter((r) => r.status === "paused").length,
   };
 
-  // ── Filtered + sorted list ────────────────────────────────────────────────
-  // Running runs are always sorted to the top so they are never buried.
+  // ── Running runs are always sorted to the top so they are never buried.
   const visible = runs
     .filter((r) => {
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
@@ -99,8 +99,19 @@ export function GraphRunsView(): React.JSX.Element {
     .sort((a, b) => {
       if (a.status === "running" && b.status !== "running") return -1;
       if (b.status === "running" && a.status !== "running") return 1;
+      if (a.status === "paused" && b.status !== "paused") return -1;
+      if (b.status === "paused" && a.status !== "paused") return 1;
       return b.startedAt - a.startedAt;
     });
+
+  const handleResume = async (runId: string) => {
+    try {
+      await window.nyteShiftApi?.graphRunResume(runId);
+      void refresh();
+    } catch (err) {
+      console.error("graphRunResume error:", err);
+    }
+  };
 
   // ── Style helpers ─────────────────────────────────────────────────────────
   const SOURCE_COLORS: Record<string, string> = {
@@ -161,11 +172,11 @@ export function GraphRunsView(): React.JSX.Element {
 
       {/* ── Status tabs ── */}
       <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-        {(["all", "running", "done", "error"] as StatusFilter[]).map((s) => {
-          const accent = s === "running" ? C.yellow : s === "done" ? C.green : s === "error" ? C.red : undefined;
+        {(["all", "running", "done", "error", "paused"] as StatusFilter[]).map((s) => {
+          const accent = s === "running" ? C.yellow : s === "done" ? C.green : s === "error" ? C.red : s === "paused" ? C.mauve : undefined;
           return (
             <button key={s} onClick={() => setStatusFilter(s)} style={tabBtn(statusFilter === s, accent)}>
-              {s === "all" ? "All" : s === "running" ? "Running" : s === "done" ? "Completed" : "Error"}
+              {s === "all" ? "All" : s === "running" ? "Running" : s === "done" ? "Completed" : s === "error" ? "Error" : "Paused"}
               <span style={badge(countByStatus[s], statusFilter === s, accent)}>
                 {countByStatus[s]}
               </span>
@@ -227,16 +238,17 @@ export function GraphRunsView(): React.JSX.Element {
 
         {visible.map((r) => {
           const isRunning = r.status === "running";
-          const statusColor = isRunning ? C.yellow : r.status === "done" ? C.green : C.red;
-          const statusIcon = isRunning ? "⏳" : r.status === "done" ? "✓" : "✗";
+          const isPaused = r.status === "paused";
+          const statusColor = isRunning ? C.yellow : isPaused ? C.mauve : r.status === "done" ? C.green : C.red;
+          const statusIcon = isRunning ? "⏳" : isPaused ? "⏸" : r.status === "done" ? "✓" : "✗";
           const srcColor = SOURCE_COLORS[r.source] ?? C.overlay0;
 
           return (
             <div key={r.runId} style={{
               padding: "12px 14px",
               borderRadius: 8,
-              border: `1px solid ${isRunning ? `${C.yellow}50` : C.surface1}`,
-              background: isRunning ? `${C.yellow}07` : C.surface0,
+              border: `1px solid ${isRunning ? `${C.yellow}50` : isPaused ? `${C.mauve}50` : C.surface1}`,
+              background: isRunning ? `${C.yellow}07` : isPaused ? `${C.mauve}07` : C.surface0,
               display: "flex",
               alignItems: "center",
               gap: 14,
@@ -290,13 +302,25 @@ export function GraphRunsView(): React.JSX.Element {
                       animation: "nsRunPulse 1.4s ease-in-out infinite",
                     }} />
                   )}
-                  {isRunning ? "Running…" : r.status === "done" ? "Done" : "Error"}
+                  {isRunning ? "Running…" : isPaused ? "Paused" : r.status === "done" ? "Done" : "Error"}
                 </div>
                 <div style={{ display: "flex", gap: 5 }}>
                   {!graphId && (
                     <button onClick={() => navigate(`/graphs/${r.graphId}`)}
                       style={{ padding: "4px 9px", borderRadius: 6, border: `1px solid ${C.surface1}`, background: C.mantle, color: C.subtext0, cursor: "pointer", fontSize: "0.74rem" }}>
                       Graph
+                    </button>
+                  )}
+                  {isPaused && (
+                    <button onClick={() => void handleResume(r.runId)}
+                      style={{
+                        padding: "4px 12px", borderRadius: 6, fontSize: "0.77rem", cursor: "pointer",
+                        border: `1px solid ${C.mauve}`,
+                        background: `${C.mauve}20`,
+                        color: C.mauve,
+                        fontWeight: 600,
+                      }}>
+                      ▶ Resume
                     </button>
                   )}
                   <button onClick={() => navigate(`/graph-run/${encodeURIComponent(r.runId)}`)}

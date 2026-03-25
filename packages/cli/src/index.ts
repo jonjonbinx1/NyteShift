@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { registerAgentCommands } from "./commands/agent.js";
+import { registerChannelCommands } from "./commands/channels.js";
 import { registerConfigCommands } from "./commands/config.js";
 import { registerMarketplaceCommands } from "./commands/marketplace.js";
 import { registerSecretCommands } from "./commands/secret.js";
@@ -14,6 +15,7 @@ program
   .version("0.1.0");
 
 registerAgentCommands(program);
+registerChannelCommands(program);
 registerConfigCommands(program);
 registerMarketplaceCommands(program);
 registerSecretCommands(program);

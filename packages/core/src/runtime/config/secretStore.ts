@@ -36,6 +36,8 @@ export const SECRET_KEYS = {
   ANTHROPIC_API_KEY:   "provider:anthropic:apiKey",
   OPENROUTER_API_KEY:  "provider:openrouter:apiKey",
   DISCORD_BOT_TOKEN:   "discord:global:botToken",
+  /** Bot token stored per-trigger (replaces the plaintext discordBotToken field). */
+  discordTriggerBotToken: (triggerId: string) => `trigger:${triggerId}:discordBotToken` as const,
 } as const;
 
 /**
@@ -52,6 +54,30 @@ export const CONFIG_SECRET_PATHS: ReadonlyArray<{
   { configPath: "providers.openrouter.apiKey", secretKey: SECRET_KEYS.OPENROUTER_API_KEY },
   { configPath: "globalDiscord.botToken",      secretKey: SECRET_KEYS.DISCORD_BOT_TOKEN },
 ];
+
+/**
+ * Field names that are treated as secrets inside any `toolConfig` or
+ * `skillConfig` entry.  Used by the generic toolConfig migration and strip
+ * helpers so that plaintext values written directly into config.json (e.g.
+ * via manual editing) are migrated to the secret store on first read.
+ *
+ * Note: well-behaved tools use `writeSkillToolConfig` which already routes
+ * `type:"secret"` fields to the secret store automatically.  This list is a
+ * belt-and-suspenders guard for values that bypassed that path.
+ */
+export const TOOL_CONFIG_SECRET_FIELD_NAMES: ReadonlySet<string> = new Set([
+  "apiKey",
+  "token",
+  "clientSecret",
+  "refreshToken",
+  "accessToken",
+  "botToken",
+  "apiToken",
+  "bearerToken",
+  "secret",
+  "password",
+  "privateKey",
+]);
 
 // ── File paths ─────────────────────────────────────────────────────────
 
@@ -234,7 +260,7 @@ export async function listSecretKeys(): Promise<string[]> {
  *   secretNameFor("skill", "foo/bar", "apiKey", "agent007") -> "agent:agent007:skill:foo/bar:apiKey"
  */
 export function secretNameFor(
-  kind: "skill" | "tool",
+  kind: "skill" | "tool" | "channel",
   qualifiedName: string,
   key: string,
   agentName?: string,
@@ -262,12 +288,36 @@ export async function migrateSecretsFromConfig(
   const sanitized = deepClone(config);
   const migrated: string[] = [];
 
+  // ── Known top-level provider / discord secrets ─────────────────────
   for (const { configPath, secretKey } of CONFIG_SECRET_PATHS) {
     const value = getNestedValue(sanitized, configPath);
     if (typeof value === "string" && value.trim() !== "") {
       await setSecret(secretKey, value.trim());
       deleteNestedValue(sanitized, configPath);
       migrated.push(secretKey);
+    }
+  }
+
+  // ── toolConfig / skillConfig generic secret fields ─────────────────
+  // Migrate any field whose name is in TOOL_CONFIG_SECRET_FIELD_NAMES that
+  // has been stored in plaintext inside toolConfig or skillConfig entries.
+  for (const ns of ["toolConfig", "skillConfig"] as const) {
+    const bucket = (sanitized as Record<string, unknown>)[ns];
+    if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) continue;
+
+    for (const [qualifiedName, toolCfg] of Object.entries(bucket as Record<string, unknown>)) {
+      if (!toolCfg || typeof toolCfg !== "object" || Array.isArray(toolCfg)) continue;
+      const kind = ns === "toolConfig" ? "tool" : "skill";
+
+      for (const [field, value] of Object.entries(toolCfg as Record<string, unknown>)) {
+        if (!TOOL_CONFIG_SECRET_FIELD_NAMES.has(field)) continue;
+        if (typeof value !== "string" || value.trim() === "") continue;
+
+        const secretKey = secretNameFor(kind as "tool" | "skill", qualifiedName, field);
+        await setSecret(secretKey, value.trim());
+        delete (toolCfg as Record<string, unknown>)[field];
+        migrated.push(secretKey);
+      }
     }
   }
 
@@ -283,9 +333,25 @@ export function stripSecretsFromConfig(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   const sanitized = deepClone(config);
+
+  // ── Known top-level paths ─────────────────────────────────────────
   for (const { configPath } of CONFIG_SECRET_PATHS) {
     deleteNestedValue(sanitized, configPath);
   }
+
+  // ── toolConfig / skillConfig generic strip ────────────────────────
+  for (const ns of ["toolConfig", "skillConfig"]) {
+    const bucket = (sanitized as Record<string, unknown>)[ns];
+    if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) continue;
+
+    for (const toolCfg of Object.values(bucket as Record<string, unknown>)) {
+      if (!toolCfg || typeof toolCfg !== "object" || Array.isArray(toolCfg)) continue;
+      for (const field of TOOL_CONFIG_SECRET_FIELD_NAMES) {
+        delete (toolCfg as Record<string, unknown>)[field];
+      }
+    }
+  }
+
   return sanitized;
 }
 

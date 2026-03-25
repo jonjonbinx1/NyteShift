@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
   getSkill: (qualifiedName: string) => ipcRenderer.invoke("skills:get", qualifiedName),
   listTools: () => ipcRenderer.invoke("tools:list"),
 
+  // Channels
+  listChannels: () => ipcRenderer.invoke("channels:list"),
+
   // Providers
   listProviders: () => ipcRenderer.invoke("providers:list"),
   listProviderModels: (providerId: string) => ipcRenderer.invoke("providers:listModels", providerId),
@@ -157,6 +160,8 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
     discordChannelIds?: string[];
     discordMentionOnly?: boolean;
     discordMode?: "trigger" | "bridge";
+    discordCommand?: string;
+    discordCommandInput?: "none" | "text" | "json";
   }) => ipcRenderer.invoke("triggers:create", params),
   triggersUpdate: (triggerId: string, updates: Record<string, unknown>) =>
     ipcRenderer.invoke("triggers:update", triggerId, updates),
@@ -187,9 +192,9 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
   discordGlobalConfigWrite: (config: any) => ipcRenderer.invoke("discord:global:config:write", config),
 
   // ── Skill / Tool Config ────────────────────────────────────────────
-  skillToolConfigRead: (kind: "skill" | "tool", qualifiedName: string, agentName?: string) =>
+  skillToolConfigRead: (kind: "skill" | "tool" | "channel", qualifiedName: string, agentName?: string) =>
     ipcRenderer.invoke("skillToolConfig:read", kind, qualifiedName, agentName),
-  skillToolConfigWrite: (kind: "skill" | "tool", qualifiedName: string, values: Record<string, unknown>, agentName?: string) =>
+  skillToolConfigWrite: (kind: "skill" | "tool" | "channel", qualifiedName: string, values: Record<string, unknown>, agentName?: string) =>
     ipcRenderer.invoke("skillToolConfig:write", kind, qualifiedName, values, agentName),
   // ── Secret Store ───────────────────────────────────────────────────
   secretGet: (name: string): Promise<string | undefined> =>
@@ -225,8 +230,9 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
   graphRuns: () => ipcRenderer.invoke("graph:runs"),
   graphRunsForGraph: (graphId: string) => ipcRenderer.invoke("graph:runs:forGraph", graphId),
   graphRunCancel: (runId: string) => ipcRenderer.invoke("graph:run:cancel", runId),
-  onGraphRunRegistered: (cb: (data: unknown) => void): (() => void) => {
-    const listener = (_e: any, data: unknown) => cb(data);
+  graphRunStop: (runId: string) => ipcRenderer.invoke("graph:run:stop", runId),
+  graphRunResume: (runId: string) => ipcRenderer.invoke("graph:run:resume", runId),
+  onGraphRunRegistered: (cb: (data: unknown) => void): (() => void) => {    const listener = (_e: any, data: unknown) => cb(data);
     ipcRenderer.on("graph:runRegistered", listener);
     return () => ipcRenderer.removeListener("graph:runRegistered", listener);
   },
@@ -245,4 +251,14 @@ contextBridge.exposeInMainWorld("nyteShiftApi", {
     ipcRenderer.on("graph:runComplete", listener);
     return () => ipcRenderer.removeListener("graph:runComplete", listener);
   },
+
+  // ── Graph marketplace helpers ────────────────────────────────────────────
+  /** Fetch the graph.json for a marketplace graph item before installing. */
+  marketplaceFetchGraphDef: (item: { remotePath: string; source?: string }) =>
+    ipcRenderer.invoke("marketplace:fetchGraphDef", item),
+  /** Check whether a graph's tool/skill/agent dependencies are installed. */
+  graphCheckDeps: (graph: unknown) => ipcRenderer.invoke("graph:checkDeps", graph),
+  /** Save a marketplace graph into the local graph store. */
+  marketplaceInstallGraph: (graph: unknown, item: { category: string; contributor: string; name: string; remotePath?: string; source?: string }) =>
+    ipcRenderer.invoke("marketplace:installGraph", graph, item),
 });

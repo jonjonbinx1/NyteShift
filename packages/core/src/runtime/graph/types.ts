@@ -75,6 +75,39 @@ export interface ErrorPolicy {
 export type CatchTrigger = "maxIterations" | "error" | "abort";
 
 /**
+ * Controls whether the runner resumes plan execution after a catch node fires.
+ *
+ * - "never"     — (default) the graph stops after the catch; downstream nodes do not run.
+ * - "ifHandled" — resume only when the catch's `handledWhen` predicate or
+ *                 `handledOutputPath` value evaluates to truthy.
+ * - "always"    — always resume; downstream nodes run regardless of outcome.
+ */
+export type CatchResumePolicy = "never" | "ifHandled" | "always";
+
+/**
+ * When multiple `catch` nodes match the same loop exit reason, controls how
+ * "handled" is evaluated across all of them.
+ *
+ * - "any" — (default) at least one catch must indicate handled.
+ * - "all" — every matching catch must indicate handled.
+ */
+export type CatchResumeMode = "any" | "all";
+
+/**
+ * Strategy for how a catch node's `resumeTarget` is applied.
+ *
+ * - "resumeFrom" — (default) jump to the target node and continue the graph
+ *                  from there, regardless of whether it has already run.
+ *                  The execution plan restarts from the group containing the
+ *                  target so nodes before it are NOT re-run.
+ * - "rewindTo"   — similar to resumeFrom, but the target node must have
+ *                  already executed in this run.  If it hasn't, this catch
+ *                  is NOT considered handled and the next catch candidate
+ *                  (by catchOrder) is tried instead.
+ */
+export type CatchResumeStrategy = "resumeFrom" | "rewindTo";
+
+/**
  * A single mutation performed by an `operation` node against the
  * mutable `vars` store in the execution context.
  */
@@ -196,6 +229,106 @@ export interface GraphNode {
    * users to wire cleanup / notification subgraphs.
    */
   catchTriggers?: CatchTrigger[];
+
+  /**
+   * Determines the order in which this catch node is tried relative to other
+   * catch nodes that match the same exit reason.  Lower numbers run first.
+   *
+   * If two catch nodes share the same `catchOrder`, the execution order is
+   * non-deterministic between runs and should be avoided.
+   *
+   * Undefined (unset) nodes are treated as lowest priority (tried last).
+   */
+  catchOrder?: number;
+
+  /**
+   * Maximum number of times this catch node may fire within a single graph run.
+   *
+   * - `undefined` / `1` — fires at most once per run (default).
+   * - `0`               — unlimited; fires every time its triggers match.
+   * - `N > 1`           — fires at most N times, then is excluded from
+   *                       subsequent catch evaluation for the same run.
+   */
+  catchMaxFires?: number;
+
+  /**
+   * Controls whether the runner resumes plan execution after this catch fires.
+   *
+   * - "never"     — (default) stop the graph after the catch runs.
+   * - "ifHandled" — resume when `handledWhen` predicate or `handledOutputPath`
+   *                 value evaluates to truthy.
+   * - "always"    — resume unconditionally after the catch succeeds.
+   *
+   * Only applies when `type` is "catch".
+   */
+  resumePolicy?: CatchResumePolicy;
+
+  /**
+   * Predicate evaluated against the execution context after the catch runs.
+   * When it passes, this catch is considered to have "handled" the error.
+   * Used when `resumePolicy` is "ifHandled".
+   *
+   * Example — resume only when the exit was due to max iterations:
+   *   { ref: "myCatch.output.exitReason", operator: "eq", value: "maxIterations" }
+   *
+   * Example — resume when a custom var signals recovery:
+   *   { ref: "vars.isRecovered", operator: "eq", value: true }
+   */
+  handledWhen?: ConditionPredicate;
+
+  /**
+   * Dot-path into the catch node's output (e.g. `"output.handled"`).  When
+   * the value at this path is truthy, the catch is considered to have handled
+   * the error.  Used when `resumePolicy` is "ifHandled".
+   *
+   * Example: `"output.handled"` — your catch node's tool/LLM returns
+   * `{ handled: true }` when it successfully dealt with the failure.
+   */
+  handledOutputPath?: string;
+
+  /**
+   * When multiple catch nodes match the same exit reason, controls how
+   * "handled" is evaluated across all of them.
+   *
+   * - "any" — (default) at least one catch must indicate handled.
+   * - "all" — every matching catch must indicate handled.
+   *
+   * Only the first catch node's `resumeMode` is consulted.
+   */
+  resumeMode?: CatchResumeMode;
+
+  /**
+   * Optional node ID to jump to when this catch handles the error.
+   *
+   * The runner restarts the execution plan from the group containing
+   * this node, so it works for targets both before AND after the current
+   * position in the plan.
+   */
+  resumeTarget?: string;
+
+  /**
+   * How the `resumeTarget` is applied.
+   *
+   * - "resumeFrom" — (default) always jump to the target and continue.
+   * - "rewindTo"   — only jump if the target already ran in this run.
+   *                   If it hasn't, this catch is skipped and the next
+   *                   catch candidate is tried.
+   *
+   * Only meaningful when `resumeTarget` is set.
+   */
+  resumeStrategy?: CatchResumeStrategy;
+
+  /**
+   * When `true` (and `resumePolicy` is "ifHandled" or "always"), the runner
+   * pauses instead of automatically resuming after the catch handles the error.
+   *
+   * The complete execution context (vars + node outputs) is persisted to disk
+   * so the user can click "Resume" from the Run History view at any time —
+   * even after an application restart.
+   *
+   * Requires a `resumeTarget` to specify the node to continue from.
+   */
+  manualResume?: boolean;
 
   // ── Trigger node ─────────────────────────────────────────────────────
   /**
@@ -389,6 +522,13 @@ export interface NodeOutput {
     childStatus?: string;
     /** Trigger node: traceId of the child graph run. */
     childTraceId?: string;
+    /**
+     * Internal sentinel: `true` only on outputs pre-populated by the runner
+     * for catch nodes that have not actually executed yet.  Allows post-SCC
+     * catch-firing logic to overwrite the placeholder instead of skipping the
+     * catch entirely when a loop exits due to an error.
+     */
+    __placeholder?: boolean;
   };
   status: "success" | "error" | "skipped";
   error?: string;
@@ -442,10 +582,27 @@ export interface GraphRunOptions {
   onNodeStart?: (nodeId: string, nodeName: string, nodeType?: GraphNode["type"]) => void;
   /** Callback fired after each node completes (for progress tracking). */
   onNodeComplete?: (output: NodeOutput) => void;
+  /**
+   * Name of the agent that owns this graph run.
+   * When provided, tool nodes receive agent-scoped secrets and config overrides
+   * in addition to global settings via {@link createToolContext}.  This enables
+   * per-agent Gmail (or any configured tool) credentials to flow through
+   * graph-run tool nodes identically to how they flow through the autonomous
+   * and triggered pipeline paths.
+   */
+  agentName?: string;
   /** Override default provider for all nodes. */
   provider?: string;
   /** Override default model for all nodes. */
   model?: string;
+  /**
+   * Advanced: When true (default), treat tool node outputs of the shape
+   * `{ ok: false, ... }` as runtime/tool failures that should be handled by
+   * the graph `errorPolicy` (retry/fallback/skip) and `catch` nodes. When
+   * set to `false`, `{ ok: false }` is treated as a normal successful node
+   * output and the graph must explicitly branch on `output.ok`.
+   */
+  treatToolOkFalseAsError?: boolean;
   /**
    * @internal
    * Current trigger-invocation nesting depth.  Incremented each time a
@@ -455,6 +612,36 @@ export interface GraphRunOptions {
    * Depth 0 = top-level run.  Default max is 8.
    */
   _triggerDepth?: number;
+  /**
+   * @internal
+   * When resuming a paused run, start execution from this specific node
+   * rather than from the graph entry point.  The `initialContext` option
+   * should accompany this to restore previously computed node outputs.
+   */
+  startFromNodeId?: string;
+  /**
+   * @internal
+   * Pre-populated execution context from a previous (paused) run.
+   * `vars` overrides `graph.initVars`, and `nodeOutputs` pre-seeds the
+   * node-output map so template references to earlier nodes still resolve.
+   */
+  initialContext?: {
+    vars: Record<string, unknown>;
+    nodeOutputs: Record<string, unknown>;
+  };
+  /**
+   * @internal
+   * Mutable flag set by `graphRunRegistry.requestStop()` to request a
+   * graceful stop.  Unlike hard-aborting the signal, this causes the
+   * runner to exit the current loop with exitReason "abort" so catch
+   * nodes can still fire before the graph finishes.
+   */
+  _softStop?: { requested: boolean; kind?: "manualStop" };
+  /**
+   * @internal Run identifier injected by `runGraphTracked` so the runner
+   * can correlate AbortSignals with registry-originated hard aborts.
+   */
+  _runId?: string;
 }
 
 /**
@@ -469,9 +656,13 @@ export interface GraphExecutionResult {
   nodeResults: NodeOutput[];
   /** Output from the output node (or last completed node). */
   finalOutput: unknown;
-  status: "completed" | "failed" | "aborted";
+  status: "completed" | "failed" | "aborted" | "paused";
   error?: string;
   elapsedMs: number;
   startedAt: number;
   completedAt: number;
+  /** Present when `status === "paused"` — captured context for manual resume. */
+  pausedContext?: { vars: Record<string, unknown>; nodeOutputs: Record<string, unknown> };
+  /** Present when `status === "paused"` — the node ID to resume from. */
+  pausedResumeFrom?: string;
 }

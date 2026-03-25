@@ -18,6 +18,11 @@ export function toolsDir(): string {
   return join(nyteShiftHome(), "tools");
 }
 
+/** ~/.nyteshift/channels */
+export function channelsDir(): string {
+  return join(nyteShiftHome(), "channels");
+}
+
 /** ~/.nyteshift/agents */
 export function agentsDir(): string {
   return join(nyteShiftHome(), "agents");

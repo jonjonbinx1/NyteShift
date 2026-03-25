@@ -86,7 +86,7 @@ export async function prunePersistedRuns(): Promise<void> {
     const graphs = await listPersistedGraphRuns();
     const maxAgeMs = (graphCfg.maxAgeDays ?? 30) * 24 * 60 * 60 * 1000;
     for (const g of graphs) {
-      if (g.status === "running") continue; // never prune an in-progress run
+      if (g.status === "running" || (g as any).status === "paused") continue; // never prune an in-progress or paused run
       const ts = g.completedAt ?? g.startedAt;
       if (ts && now - ts > maxAgeMs) {
         try { await unlink(join(gDir, filenameForId(g.runId))); } catch {}
@@ -108,7 +108,7 @@ export async function prunePersistedRuns(): Promise<void> {
     const triggers = await listPersistedTriggerRuns();
     const maxAgeMs = (triggerCfg.maxAgeDays ?? 30) * 24 * 60 * 60 * 1000;
     for (const t of triggers) {
-      if ((t as any).status === "running") continue; // never prune an in-progress run
+      if ((t as any).status === "running" || (t as any).status === "paused") continue; // never prune an in-progress or paused run
       const ts = t.completedAt ?? t.startedAt;
       if (ts && now - ts > maxAgeMs) {
         try { await unlink(join(tDir, filenameForId((t as any).id ?? String((t as any).id)))); } catch {}

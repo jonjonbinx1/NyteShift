@@ -21,6 +21,7 @@ import {
 } from "./secretStore.js";
 import { getTool } from "../tools/toolLoader.js";
 import { getSkill } from "../skills/skillLoader.js";
+import { getChannel } from "../channels/channelLoader.js";
 
 // ── One-time migration guard ───────────────────────────────────────────
 
@@ -142,11 +143,11 @@ export async function writeAgentConfig(agentName: string, config: AgentConfig): 
  * @param agentName Optional — when provided, agent-level values override global.
  */
 export async function readSkillToolConfig(
-  kind: "skill" | "tool",
+  kind: "skill" | "tool" | "channel",
   qualifiedName: string,
   agentName?: string,
 ): Promise<Record<string, unknown>> {
-  const ns = kind === "skill" ? "skillConfig" : "toolConfig";
+  const ns = kind === "skill" ? "skillConfig" : kind === "channel" ? "channelConfig" : "toolConfig";
 
   // Global layer
   const globalCfg = await readGlobalConfig();
@@ -171,6 +172,9 @@ export async function readSkillToolConfig(
     if (kind === "skill") {
       const skill = await getSkill(qualifiedName);
       configDefs = (skill?.frontmatter?.config ?? []) as Array<{ key: string; type?: string }>;
+    } else if (kind === "channel") {
+      const ch = await getChannel(qualifiedName);
+      configDefs = (ch?.config ?? []) as Array<{ key: string; type?: string }>;
     } else {
       const tool = await getTool(qualifiedName);
       configDefs = (tool?.config ?? []) as Array<{ key: string; type?: string }>;
@@ -206,12 +210,12 @@ export async function readSkillToolConfig(
  * @param agentName When provided, writes at the agent level; otherwise global.
  */
 export async function writeSkillToolConfig(
-  kind: "skill" | "tool",
+  kind: "skill" | "tool" | "channel",
   qualifiedName: string,
   values: Record<string, unknown>,
   agentName?: string,
 ): Promise<void> {
-  const ns = kind === "skill" ? "skillConfig" : "toolConfig";
+  const ns = kind === "skill" ? "skillConfig" : kind === "channel" ? "channelConfig" : "toolConfig";
 
   // If the tool/skill declares `secret` fields, persist those into the
   // secret store and remove them from the JSON config before writing.
@@ -221,6 +225,9 @@ export async function writeSkillToolConfig(
     if (kind === "skill") {
       const skill = await getSkill(qualifiedName);
       configDefs = (skill?.frontmatter?.config ?? []) as Array<{ key: string; type?: string }>;
+    } else if (kind === "channel") {
+      const ch = await getChannel(qualifiedName);
+      configDefs = (ch?.config ?? []) as Array<{ key: string; type?: string }>;
     } else {
       const tool = await getTool(qualifiedName);
       configDefs = (tool?.config ?? []) as Array<{ key: string; type?: string }>;

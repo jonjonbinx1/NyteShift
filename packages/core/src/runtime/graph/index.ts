@@ -20,6 +20,7 @@ export { runGraph, asyncTriggerRegistry } from "./graphRunner.js";
 export {
   graphRunRegistry,
   runGraphTracked,
+  resumePausedRun,
 } from "./graphRunRegistry.js";
 export type { GraphRunRecord, GraphRunMeta, GraphRunSource, GraphRunStatus } from "./graphRunRegistry.js";
 
@@ -29,3 +30,6 @@ export {
   saveGraph,
   deleteGraph,
 } from "./graphStore.js";
+
+export { checkGraphDeps } from "./graphDeps.js";
+export type { GraphDepsResult } from "./graphDeps.js";

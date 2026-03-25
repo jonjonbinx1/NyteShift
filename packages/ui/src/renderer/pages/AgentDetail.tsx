@@ -1146,7 +1146,15 @@ export function AgentDetail(): React.JSX.Element {
 
       {/* Agent configuration modal */}
       {agentSettingsOpen && name && (
-        <AgentSettingsModal agentName={name} onClose={() => setAgentSettingsOpen(false)} />
+        <AgentSettingsModal agentName={name} onClose={() => {
+          setAgentSettingsOpen(false);
+          // Re-fetch config so changes made in the modal (e.g. maxSteps, unbounded)
+          // are reflected immediately — without this, stale values override the
+          // saved config on the next run.
+          window.nyteShiftApi?.getAgentConfig(name).then((cfg) => {
+            if (cfg) setConfig(cfg as Record<string, any>);
+          }).catch(console.error);
+        }} />
       )}
     </>
   );

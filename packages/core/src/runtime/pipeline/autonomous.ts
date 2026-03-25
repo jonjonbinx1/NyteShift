@@ -11,6 +11,7 @@ import { readSoul } from "../soul/soulInjector.js";
 import { callProvider } from "../providers/providerRouter.js";
 import { loadSkills } from "../skills/skillLoader.js";
 import { loadTools } from "../tools/toolLoader.js";
+import { createToolContext } from "../tools/toolContext.js";
 import { createMemoryTools } from "../memory/memoryTools.js";
 import { createPlanTools } from "../memory/planTools.js";
 import { createSubAgentTools } from "../subagent/subagentTools.js";
@@ -673,7 +674,13 @@ export async function runAutonomousTask(
           log(`  executing tool "${toolDef.name}"…`);
           let rawResultCapture: unknown = null;
           try {
-            const rawResult = await toolDef.run({ input: toolCall.input, context: {} });
+            const rawResult = await toolDef.run({
+              input: toolCall.input,
+              context: await createToolContext(
+                `${toolDef.contributor}/${toolDef.name}`,
+                agentName,
+              ),
+            });
             rawResultCapture = rawResult;
 
             const resultObj =
@@ -710,7 +717,13 @@ export async function runAutonomousTask(
                     continue;
                   }
                   try {
-                    const vResult = await verifyTool.run({ input: toolCall.input, context: {} });
+                    const vResult = await verifyTool.run({
+                      input: toolCall.input,
+                      context: await createToolContext(
+                        `${verifyTool.contributor}/${verifyTool.name}`,
+                        agentName,
+                      ),
+                    });
                     const vStr =
                       typeof vResult === "string" ? vResult : JSON.stringify(vResult, null, 2);
                     const vObj =

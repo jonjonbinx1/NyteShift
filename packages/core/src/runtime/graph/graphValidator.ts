@@ -97,6 +97,16 @@ export function validateGraph(graph: GraphDefinition): GraphValidationError[] {
   // ── Per-node validation ───────────────────────────────────────────────
   for (const node of graph.nodes) {
     errors.push(...validateNode(node));
+    // Validate catch-node resumeTarget references a real node.
+    if (node.type === "catch" && node.resumeTarget !== undefined) {
+      if (!nodeIds.has(node.resumeTarget)) {
+        errors.push({
+          nodeId: node.id,
+          field: "resumeTarget",
+          message: `Catch node resumeTarget "${node.resumeTarget}" references a non-existent node.`,
+        });
+      }
+    }
   }
 
   return errors;
@@ -194,7 +204,7 @@ function validateNode(n: GraphNode): GraphValidationError[] {
     case "input":
     case "output":
       break;
-    case "catch":
+    case "catch": {
       if (!n.catchTriggers?.length) {
         errors.push({
           nodeId: n.id,
@@ -202,7 +212,32 @@ function validateNode(n: GraphNode): GraphValidationError[] {
           message: "Catch node must specify at least one trigger (maxIterations, error, or abort).",
         });
       }
+      const validResumePolicies = ["never", "ifHandled", "always"];
+      if (n.resumePolicy !== undefined && !validResumePolicies.includes(n.resumePolicy)) {
+        errors.push({
+          nodeId: n.id,
+          field: "resumePolicy",
+          message: `Catch node resumePolicy must be one of: ${validResumePolicies.join(", ")}.`,
+        });
+      }
+      if (n.resumePolicy === "ifHandled" && !n.handledWhen && !n.handledOutputPath) {
+        errors.push({
+          nodeId: n.id,
+          field: "handledWhen",
+          message:
+            'Catch node with resumePolicy="ifHandled" must specify handledWhen (predicate) or handledOutputPath.',
+        });
+      }
+      const validResumeModes = ["any", "all"];
+      if (n.resumeMode !== undefined && !validResumeModes.includes(n.resumeMode)) {
+        errors.push({
+          nodeId: n.id,
+          field: "resumeMode",
+          message: `Catch node resumeMode must be one of: ${validResumeModes.join(", ")}.`,
+        });
+      }
       break;
+    }
     case "trigger": {
       if (!n.targetType) {
         errors.push({

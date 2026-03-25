@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import type {
+  DiscordAccessConfig,
   DiscordBridgeConfig,
   GlobalDiscordConfig,
   TriggerDefinition,
@@ -55,13 +56,59 @@ import {
 } from "../../utils/index.js";
 import { readGlobalConfig, writeGlobalConfig } from "../config/configResolver.js";
 import { getSecret, setSecret, SECRET_KEYS } from "../config/secretStore.js";
-import { listAgents } from "../agents/agentManager.js";
+import { listAgents, loadAgentConfig } from "../agents/agentManager.js";
 
 // ── Logging ────────────────────────────────────────────────────────────
 
 const log  = (...args: unknown[]) => console.log("[discord-bridge]", ...args);
 const logW = (...args: unknown[]) => console.warn("[discord-bridge]", ...args);
 const logE = (...args: unknown[]) => console.error("[discord-bridge]", ...args);
+
+// ── Discord access guard ───────────────────────────────────────────────
+
+/**
+ * Returns `true` if a Discord message should be processed by the given agent
+ * according to its `discordAccess` configuration, `false` to skip it.
+ *
+ * Logic:
+ *  - "disabled" (default when unset) → always reject.
+ *  - "global" → always allow.
+ *  - "restricted" → check serverIds first (if set), then channelIds / channelNames
+ *    (OR semantics between the two channel lists).
+ */
+function checkDiscordAccess(
+  access: DiscordAccessConfig | undefined,
+  guildId: string | undefined,
+  channelId: string,
+  channelName: string,
+): boolean {
+  const mode = access?.mode ?? "disabled";
+  if (mode === "disabled") return false;
+  if (mode === "global") return true;
+
+  // mode === "restricted"
+  const serverIds    = access?.serverIds   ?? [];
+  const channelIds   = access?.channelIds  ?? [];
+  const channelNames = access?.channelNames ?? [];
+
+  // Server filter: if serverIds is set, the message must come from one of those servers.
+  if (serverIds.length > 0) {
+    if (!guildId || !serverIds.includes(guildId)) return false;
+  }
+
+  // No channel restrictions → allow any channel (within the valid servers).
+  if (channelIds.length === 0 && channelNames.length === 0) return true;
+
+  // Check channel ID (more secure — stable, globally unique snowflake).
+  if (channelIds.includes(channelId)) return true;
+
+  // Check channel name (less secure — case-insensitive, strip leading "#").
+  const norm = (s: string) => s.toLowerCase().replace(/^#/, "").trim();
+  const normalizedChannelName = norm(channelName);
+  if (channelNames.some((n) => norm(n) === normalizedChannelName)) return true;
+
+  return false;
+}
 
 // ── Config persistence ─────────────────────────────────────────────────
 
@@ -260,6 +307,16 @@ export class DiscordBridge extends EventEmitter {
 
     // Channel filter.
     if (this.channelIds.size > 0 && !this.channelIds.has(message.channel.id)) return;
+
+    // When the agent has explicit channel restrictions, enforce them as an
+    // additional layer on top of the bridge-level guildId/channelIds filter.
+    // Only applied for "restricted" mode; "global" and unset leave the
+    // existing per-agent bridge behaviour intact.
+    const agentCfg = await loadAgentConfig(this.agentName);
+    const agentAccess = agentCfg.discordAccess;
+    if (agentAccess?.mode === "restricted") {
+      if (!checkDiscordAccess(agentAccess, message.guild?.id, message.channel.id, message.channel.name || "")) return;
+    }
 
     // Mention filter.
     if (this.mentionOnly) {
@@ -831,6 +888,18 @@ export class GlobalDiscordBridge extends EventEmitter {
     const raw = message.content.trim();
     if (!raw) return;
 
+    // ── Slash command routing (all modes) ────────────────────────────
+    // /newchat and /cancel are bridge-mode control commands — let them
+    // fall through to the existing handler below.
+    if (raw.startsWith("/")) {
+      const cmdToken = raw.slice(1).split(/\s/)[0].toLowerCase();
+      const reserved = ["newchat", "cancel"];
+      if (!reserved.includes(cmdToken)) {
+        await this.handleSlashCommand(message, raw);
+        return;
+      }
+    }
+
     // ── Discord control commands (bridge mode only) ────────────────────
     if (this.mode === "bridge") {
       const rawLower = raw.toLowerCase();
@@ -847,6 +916,13 @@ export class GlobalDiscordBridge extends EventEmitter {
     // If this channel has a direct agent mapping, route straight to that agent
     // with no name prefix required.
     if (mappedAgent) {
+      // Verify the mapped agent allows Discord access before routing to it.
+      const mappedCfg = await loadAgentConfig(mappedAgent);
+      const mappedAccess = mappedCfg.discordAccess;
+      if (!checkDiscordAccess(mappedAccess, message.guild?.id, message.channel.id, message.channel.name || "")) {
+        log(`[global] channel-mapped agent "${mappedAgent}" rejected message (discordAccess: ${mappedAccess?.mode ?? "disabled"})`);
+        return;
+      }
       log(
         `[global] channel-mapped message from ${message.author.username} in #${message.channel.name || message.channel.id} → agent "${mappedAgent}":`,
         `"${raw.slice(0, 80)}"`,
@@ -870,13 +946,19 @@ export class GlobalDiscordBridge extends EventEmitter {
     // Load known agents and find those WITHOUT their own dedicated bridge.
     const allAgents = await listAgents();
 
-    // Build list of agents that should be served by the global bridge
-    // (i.e. those that have NO per-agent discord-bridge.json).
+    // Build list of agents that should be served by the global bridge:
+    // those with NO per-agent discord-bridge.json AND with discordAccess
+    // mode !== "disabled" (the default is "disabled", so agents must
+    // explicitly opt in to be addressable via the global bridge).
     const globalAgents: string[] = [];
     for (const name of allAgents) {
       const cfg = await readBridgeConfig(name);
       if (!cfg || !cfg.botToken) {
-        globalAgents.push(name);
+        const agentCfg = await loadAgentConfig(name);
+        const mode = agentCfg.discordAccess?.mode ?? "disabled";
+        if (mode !== "disabled") {
+          globalAgents.push(name);
+        }
       }
     }
 
@@ -884,6 +966,16 @@ export class GlobalDiscordBridge extends EventEmitter {
     if (!parsed) return; // No matching agent name prefix found.
 
     const { agentName, task } = parsed;
+
+    // For restricted agents, also verify the channel passes the access filters.
+    const routedCfg = await loadAgentConfig(agentName);
+    const routedAccess = routedCfg.discordAccess;
+    if (routedAccess?.mode === "restricted") {
+      if (!checkDiscordAccess(routedAccess, message.guild?.id, message.channel.id, message.channel.name || "")) {
+        logW(`[global] agent "${agentName}" rejected message from #${message.channel.name || message.channel.id} (restricted access)`);
+        return;
+      }
+    }
 
     log(
       `[global] routing message from ${message.author.username} → agent "${agentName}":`,
@@ -1067,6 +1159,189 @@ export class GlobalDiscordBridge extends EventEmitter {
         cancelled,
         requestedBy: message.author.id,
       });
+    }
+  }
+
+  // ── Slash command routing ──────────────────────────────────────
+
+  /**
+   * Route a `/command [args]` message.  Dispatches to the TriggerEngine
+   * for registered commands or handles the built-in `/help` family.
+   */
+  private async handleSlashCommand(message: any, raw: string): Promise<void> {
+    const spaceIdx = raw.indexOf(" ");
+    const commandName = (spaceIdx === -1 ? raw.slice(1) : raw.slice(1, spaceIdx)).toLowerCase().trim();
+    const args = spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1).trim();
+
+    // Built-in help command.
+    if (commandName === "help") {
+      await this.handleHelpCommand(message, args);
+      return;
+    }
+
+    // Delegate to the TriggerEngine command registry.
+    try {
+      // Lazy import avoids circular dependency (triggerEngine → discordBridge → triggerEngine).
+      const { getTriggerEngine } = await import("../triggers/triggerEngine.js");
+      const engine = getTriggerEngine();
+
+      const dispatch = await engine.handleDiscordCommand(commandName, args, {
+        guildId: message.guild?.id,
+        channelId: message.channel.id,
+        channelName: message.channel.name || "",
+        authorId: message.author.id,
+        authorName: message.author.username,
+        messageId: message.id,
+      });
+
+      if (!dispatch) {
+        await message.channel.send(
+          `❓ Unknown command \`/${commandName}\`. Type \`/help\` to see available commands.`,
+        );
+        return;
+      }
+
+      const { runId } = dispatch;
+      const trigger = dispatch.trigger as any;
+      const targetType = trigger.targetType ?? "agent";
+      const targetLabel = targetType === "graph"
+        ? `graph \`${trigger.targetId ?? "unknown"}\``
+        : `agent \`${trigger.agentName}\``;
+
+      if (!trigger.discordSilentStart) {
+        await this.sendReply(
+          message.channel,
+          `🚀 Command \`/${commandName}\` started — dispatching to ${targetLabel}\n` +
+          `🆔 Run ID: \`${runId}\`  _(check the NyteShift Runs panel for progress)_`,
+          message.id,
+        );
+      }
+    } catch (err) {
+      logE("[global slash-cmd] error handling /" + commandName + ":", (err as Error).message);
+      try {
+        await message.channel.send(`⚠️ Error running \`/${commandName}\`: ${(err as Error).message}`);
+      } catch {}
+    }
+  }
+
+  /**
+   * Handle `/help`, `/help agents`, and `/help graphs`.
+   *
+   * `/help`          — general overview + any registered graph commands.
+   * `/help agents`   — lists agents routable from this channel.
+   * `/help graphs`   — lists slash-command graph/agent triggers for this channel.
+   */
+  private async handleHelpCommand(message: any, args: string): Promise<void> {
+    const guildId = message.guild?.id as string | undefined;
+    const channelId = message.channel.id as string;
+    const channelName = (message.channel.name || channelId) as string;
+    const sub = args.toLowerCase().trim();
+
+    try {
+      const { getTriggerEngine } = await import("../triggers/triggerEngine.js");
+      const engine = getTriggerEngine();
+
+      // ── /help graphs ────────────────────────────────────────────
+      if (sub === "graphs" || sub === "graph") {
+        const cmds = engine.getDiscordCommandHelp(guildId, channelId);
+        if (cmds.length === 0) {
+          await this.sendReply(
+            message.channel,
+            `📋 **No graph commands in #${channelName}**\n\n` +
+            `Ask an admin to create a Discord command trigger targeting a graph.`,
+          );
+          return;
+        }
+        const lines = [
+          `📋 **Graph / agent commands in #${channelName}**\n`,
+          ...cmds.map((c) =>
+            c.targetType === "graph"
+              ? `\`/${c.command}\` → graph \`${c.targetId ?? c.triggerName}\`  _(${c.triggerName})_`
+              : `\`/${c.command}\` → agent \`${c.agentName}\`  _(${c.triggerName})_`,
+          ),
+          "",
+          "Usage: `/<command>` or `/<command> <args>`",
+        ];
+        await this.sendReply(message.channel, lines.join("\n"), message.id);
+        return;
+      }
+
+      // ── /help agents ────────────────────────────────────────────
+      if (sub === "agents" || sub === "agent") {
+        const blocks: string[] = [`🤖 **Agents available in this server**\n`];
+
+        // Channel-mapped agent (direct routing, no prefix needed).
+        // Only show if the mapped agent's discordAccess permits this channel.
+        const rawMappedAgent =
+          this.channelAgentMap.get(channelId) ??
+          [...this.channelAgentMap.entries()].find(
+            ([k]) => k.toLowerCase().replace(/^#/, "") === channelName.toLowerCase(),
+          )?.[1];
+
+        let mappedAgent: string | undefined;
+        if (rawMappedAgent) {
+          const mCfg = await loadAgentConfig(rawMappedAgent);
+          if (checkDiscordAccess(mCfg.discordAccess, guildId, channelId, channelName)) {
+            mappedAgent = rawMappedAgent;
+            blocks.push(`• \`${mappedAgent}\` — mapped to #${channelName}. Just type your message.`);
+          }
+        }
+
+        // Global agents reachable via name prefix — only those whose
+        // discordAccess permits the current guild + channel.
+        const allAgents = await listAgents();
+        const globalAgents: string[] = [];
+        for (const name of allAgents) {
+          if (mappedAgent && name === mappedAgent) continue;
+          const cfg = await readBridgeConfig(name);
+          if (!cfg || !cfg.botToken) {
+            const agentCfg = await loadAgentConfig(name);
+            if (checkDiscordAccess(agentCfg.discordAccess, guildId, channelId, channelName)) {
+              globalAgents.push(name);
+            }
+          }
+        }
+
+        if (globalAgents.length > 0) {
+          blocks.push("", "Reachable by name prefix (in allowed channels):");
+          globalAgents.forEach((a) =>
+            blocks.push(`  \`${a}: your message\`  or  \`@${a} your message\``),
+          );
+        }
+
+        if (!mappedAgent && globalAgents.length === 0) {
+          blocks.push("No agents are currently available in this channel.");
+        }
+
+        await this.sendReply(message.channel, blocks.join("\n"), message.id);
+        return;
+      }
+
+      // ── /help (general) ──────────────────────────────────────────
+      const cmds = engine.getDiscordCommandHelp(guildId, channelId);
+      const lines: string[] = [
+        "**NyteShift Bot** 🤖",
+        "",
+        "**Built-in commands:**",
+        "  `/help`          — this message",
+        "  `/help agents`   — list agents you can chat with",
+        "  `/help graphs`   — list graph/trigger commands you can run",
+        "  `/newchat`       — start a fresh conversation (bridge mode)",
+        "  `/cancel`        — cancel the in-progress task (bridge mode)",
+      ];
+      if (cmds.length > 0) {
+        lines.push("", "**Graph / agent commands:**");
+        cmds.forEach((c) => lines.push(`  \`/${c.command}\` — ${c.triggerName}`));
+      }
+      lines.push(
+        "",
+        "**Chat with an agent:**",
+        "  `AgentName: your message`  or  `@AgentName your message`",
+      );
+      await this.sendReply(message.channel, lines.join("\n"), message.id);
+    } catch (err) {
+      logE("[global /help] error:", (err as Error).message);
+      try { await message.channel.send("⚠️ Could not retrieve help information."); } catch {}
     }
   }
 

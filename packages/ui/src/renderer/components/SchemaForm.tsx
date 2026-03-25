@@ -2,6 +2,16 @@ import React from "react";
 import { useTheme } from "../theme/ThemeContext.js";
 import type { GraphNodeInfo } from "../global.js";
 
+// Decode literal backslash-u escapes (e.g. "\\u2026") into real unicode
+function unescapeUnicodeLiteral(s: unknown): string {
+  if (s === undefined || s === null) return "";
+  const str = String(s);
+  return str.replace(/\\u\{?([0-9A-Fa-f]{4,6})\}?/g, (_m, g1) => {
+    const cp = parseInt(g1, 16);
+    try { return String.fromCodePoint(cp); } catch { return String.fromCharCode(cp); }
+  });
+}
+
 export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: any; value?: any; onChange(v: any): void; vars?: Record<string, unknown>; nodes?: GraphNodeInfo[] }) {
   const { palette: C } = useTheme();
 
@@ -24,13 +34,16 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
   const isTemplateString = (v: any) => (typeof v === 'string') && v.trim().startsWith('{{') && v.trim().endsWith('}}');
   const nodeOutputOptions = (nodes ?? []).filter((n: GraphNodeInfo) => n.type !== 'input').map((n: GraphNodeInfo) => ({ k: n.outputKey ?? n.id, label: n.name ?? n.id }));
   const tplFromRefValue = (v: string) => v.startsWith('vars:') ? `{{vars.${v.slice(5)}}}` : v.startsWith('node:') ? `{{${v.slice(5)}.output}}` : `{{${v}}}`;
-  const RefSelect = ({ onPick, label = 'Use ref\u2026' }: { onPick: (tpl: string) => void; label?: string }) => (
-    <select style={btnStyle as any} onChange={e => { const v = e.target.value; if (v) { onPick(tplFromRefValue(v)); } (e.target as HTMLSelectElement).value = ''; }}>
-      <option value=''>{label}</option>
-      {varOptions.length > 0 && <optgroup label="Vars">{varOptions.map(v => <option key={`vars:${v}`} value={`vars:${v}`}>{`vars.${v}`}</option>)}</optgroup>}
-      {nodeOutputOptions.length > 0 && <optgroup label="Node outputs">{nodeOutputOptions.map(o => <option key={`node:${o.k}`} value={`node:${o.k}`}>{o.label}</option>)}</optgroup>}
-    </select>
-  );
+  const RefSelect = ({ onPick, label = 'Use ref\u2026' }: { onPick: (tpl: string) => void; label?: string }) => {
+    const shown = unescapeUnicodeLiteral(label);
+    return (
+      <select style={btnStyle as any} onChange={e => { const v = e.target.value; if (v) { onPick(tplFromRefValue(v)); } (e.target as HTMLSelectElement).value = ''; }}>
+        <option value=''>{shown}</option>
+        {varOptions.length > 0 && <optgroup label="Vars">{varOptions.map(v => <option key={`vars:${v}`} value={`vars:${v}`}>{`vars.${v}`}</option>)}</optgroup>}
+        {nodeOutputOptions.length > 0 && <optgroup label="Node outputs">{nodeOutputOptions.map(o => <option key={`node:${o.k}`} value={`node:${o.k}`}>{o.label}</option>)}</optgroup>}
+      </select>
+    );
+  };
 
   function ArrayEditor({ value: arrVal, itemsSchema, onChange: onArrChange }: { value: any; itemsSchema: any; onChange(v: any): void }) {
     const arr = Array.isArray(arrVal) ? arrVal : (itemsSchema?.default ?? []);
@@ -92,7 +105,7 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
             ) : (
               <>
                 {itemsSchema?.type === 'object' || itemsSchema?.type === 'array' ? (
-                  <input style={inputStyle} value={JSON.stringify(it)} onChange={e => {
+                  <input style={inputStyle} value={unescapeUnicodeLiteral(JSON.stringify(it))} onChange={e => {
                     try { const p = JSON.parse(e.target.value); const n = [...arr]; n[idx] = p; onArrChange(n); } catch { const n = [...arr]; n[idx] = e.target.value; onArrChange(n); }
                   }} />
                 ) : itemsSchema?.type === 'number' || itemsSchema?.type === 'integer' ? (
@@ -103,7 +116,7 @@ export function SchemaForm({ schema, value, onChange, vars, nodes }: { schema: a
                     <div style={{ width: 8 }} />
                   </>
                 ) : (
-                  <input style={inputStyle} value={String(it)} onChange={e => { const n = [...arr]; n[idx] = e.target.value; onArrChange(n); }} />
+                  <input style={inputStyle} value={unescapeUnicodeLiteral(String(it))} onChange={e => { const n = [...arr]; n[idx] = e.target.value; onArrChange(n); }} />
                 )}
                 <button onClick={() => startEditItem(idx)} style={btnStyle}>JSON</button>
                 <button onClick={() => removeItem(idx)} style={{ ...btnStyle, color: C.red }}>✕</button>
